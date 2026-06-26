@@ -52,7 +52,7 @@ ppo:
   vf_coef: 0.5
   max_grad_norm: 0.5
   target_kl: 0.03
-  hidden_sizes: [64, 64]
+  hidden_sizes: [128, 128]   # hop-6 (square-cake successor): capacity unlocked ~12% lap-time (3.29->2.91s); ~19k actor params, still MCU-deployable
   activation: tanh
   init_log_std: -0.5
   ckpt_interval_updates: 100
