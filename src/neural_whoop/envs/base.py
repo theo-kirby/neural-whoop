@@ -47,6 +47,7 @@ class MultiAgentDroneEnv:
         dr_cfg: DomainRandomizationConfig | None = None,
         whoop_params: WhoopParams | None = None,
         action_limits: ActionLimits | None = None,
+        obs_stack: int = 1,
     ):
         self.task = task
         self.n_envs = n_envs
@@ -54,7 +55,13 @@ class MultiAgentDroneEnv:
         self.n_drones = n_envs * self.n_agents
         self.device = torch.device(device)
         self.act_dim = ACT_DIM
-        self.obs_dim = task.obs_dim
+        # Frame stacking (latency-aware policy): the policy sees the last ``obs_stack`` observation
+        # frames concatenated, so it can infer the velocity/latency a single frame hides. ``1`` is a
+        # no-op (the deployed obs is one frame). A larger stack grows obs_dim -> MCU deploy-size flag.
+        self.obs_stack = max(1, int(obs_stack))
+        self.base_obs_dim = task.obs_dim
+        self.obs_dim = self.base_obs_dim * self.obs_stack
+        self._frames: Tensor | None = None  # (obs_stack, n_drones, base_obs_dim), oldest->newest
         self.episode_len = task.episode_len
         self.limits = action_limits or ActionLimits()
 
@@ -119,11 +126,22 @@ class MultiAgentDroneEnv:
         """
         self.dr.scale = float(min(1.0, max(0.0, scale)))
 
+    # --- observation (with optional frame stacking) ---
+    def _raw_obs(self) -> Tensor:
+        """One noisy observation frame ``(n_drones, base_obs_dim)``."""
+        return self.dr.add_obs_noise(self.task.observe(self))
+
+    def _flat_frames(self) -> Tensor:
+        """Concatenate the frame stack into the policy obs ``(n_drones, obs_dim)`` (oldest->newest)."""
+        return self._frames.permute(1, 0, 2).reshape(self.n_drones, self.obs_dim)
+
     # --- reset / step ---
     def reset_all(self) -> Tensor:
         """Reset every env and return the initial observation ``(n_drones, obs_dim)``."""
         self.reset_idx(torch.arange(self.n_envs, device=self.device))
-        return self.dr.add_obs_noise(self.task.observe(self))
+        raw = self._raw_obs()
+        self._frames = raw.unsqueeze(0).expand(self.obs_stack, -1, -1).contiguous()
+        return self._flat_frames()
 
     def reset_idx(self, env_idx: Tensor) -> None:
         """Reset the given environments (all their agents)."""
@@ -169,15 +187,21 @@ class MultiAgentDroneEnv:
         trunc = truncated_env.repeat_interleave(self.n_agents)
         done = done_env.repeat_interleave(self.n_agents)
 
-        obs_term = self.dr.add_obs_noise(self.task.observe(self))
+        # Terminal frame (post-dynamics, pre-reset): push it onto the stack for bootstrapping.
+        raw_term = self._raw_obs()
+        self._frames = torch.cat([self._frames[1:], raw_term.unsqueeze(0)], dim=0)
+        obs_term = self._flat_frames()
         info["terminal_obs"] = obs_term
         info["time_outs"] = trunc
 
         self.prev_action = a
         if bool(done_env.any()):
             self.reset_idx(done_env.nonzero(as_tuple=False).flatten())
-            obs_next = self.dr.add_obs_noise(self.task.observe(self))
-            obs_next = torch.where(done.unsqueeze(-1), obs_next, obs_term)
+            raw_next = self._raw_obs()  # post-reset for done drones
+            # Done drones start a fresh history (all frames = the post-reset frame); others continue.
+            done_b = done.view(1, -1, 1)
+            self._frames = torch.where(done_b, raw_next.unsqueeze(0).expand_as(self._frames), self._frames)
+            obs_next = self._flat_frames()
         else:
             obs_next = obs_term
 

@@ -89,4 +89,5 @@ def build_env(
         seed=seed if seed is not None else int(env_cfg.get("seed", 0)),
         dr_cfg=dr,
         whoop_params=whoop,
+        obs_stack=int(env_cfg.get("obs_stack", 1)),
     )
