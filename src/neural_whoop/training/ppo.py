@@ -44,6 +44,9 @@ class PPOConfig:
     target_kl: float | None = 0.03
     norm_adv: bool = True
     clip_vloss: bool = True
+    # Seam-DR curriculum: 0.0 = full DR from step 0 (default / current behavior); >0 ramps the
+    # seam DR magnitudes 0->full over this fraction of training (reliability hardening, hop-10).
+    dr_curriculum_frac: float = 0.0
     # Policy/critic shape.
     hidden_sizes: tuple[int, ...] = (64, 64)
     activation: str = "tanh"
@@ -147,6 +150,7 @@ def train_ppo(
 
     next_obs = env.reset_all()
     global_step = 0
+    dr_scale = 1.0
     t_start = time.time()
 
     for update in range(1, num_updates + 1):
@@ -154,6 +158,9 @@ def train_ppo(
             frac = 1.0 - (update - 1.0) / num_updates
             for g in opt.param_groups:
                 g["lr"] = frac * cfg.lr
+        if cfg.dr_curriculum_frac > 0.0:
+            dr_scale = min(1.0, global_step / max(1.0, cfg.dr_curriculum_frac * cfg.total_steps))
+            env.set_dr_scale(dr_scale)
 
         for step in range(cfg.num_steps):
             obs_buf[step] = next_obs
@@ -273,6 +280,7 @@ def train_ppo(
                 writer.add_scalar("charts/episodic_length", ep_len_mean, global_step)
                 writer.add_scalar("charts/SPS", sps, global_step)
                 writer.add_scalar("charts/learning_rate", opt.param_groups[0]["lr"], global_step)
+                writer.add_scalar("charts/dr_scale", dr_scale, global_step)
                 writer.add_scalar("losses/policy", float(pg_loss), global_step)
                 writer.add_scalar("losses/value", float(v_loss), global_step)
                 writer.add_scalar("losses/entropy", float(ent_loss), global_step)

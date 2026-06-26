@@ -94,6 +94,10 @@ class DomainRandomizer:
         self.gen = generator
         self.act_dim = act_dim
         self._max_lat = max(0, int(cfg.action_latency_steps)) if cfg.enabled else 0
+        # Curriculum scale in [0, 1]: multiplies every seam-DR magnitude (1.0 = full configured
+        # strength). The trainer can ramp this 0->1 over training (reliability curriculum); it is
+        # applied per-drone at reset (wind/rate/thrust/latency incidence) and per-step for obs noise.
+        self.scale = 1.0
 
         self.wind = torch.zeros(n_drones, 3, device=self.dev)
         self.rate_gain = torch.ones(n_drones, 1, device=self.dev)
@@ -113,17 +117,19 @@ class DomainRandomizer:
             return
         c = self.cfg
         n = idx.numel()
+        s = self.scale  # curriculum scale: shrinks every magnitude toward 0 early in training
         # Steady wind: random horizontal direction + small vertical component.
         ang = self._rand(n, lo=0.0, hi=2 * math.pi)
-        mag = self._rand(n, lo=0.0, hi=c.wind_accel_mps2)
-        vert = self._rand(n, lo=-0.15, hi=0.15) * c.wind_accel_mps2
+        mag = self._rand(n, lo=0.0, hi=c.wind_accel_mps2 * s)
+        vert = self._rand(n, lo=-0.15, hi=0.15) * c.wind_accel_mps2 * s
         self.wind[idx] = torch.stack([mag * ang.cos(), mag * ang.sin(), vert], dim=-1)
-        self.rate_gain[idx, 0] = self._rand(n, lo=1 - c.rate_gain_frac, hi=1 + c.rate_gain_frac)
-        self.thrust_scale[idx, 0] = self._rand(n, lo=1 - c.thrust_scale_frac, hi=1 + c.thrust_scale_frac)
+        self.rate_gain[idx, 0] = self._rand(n, lo=1 - c.rate_gain_frac * s, hi=1 + c.rate_gain_frac * s)
+        self.thrust_scale[idx, 0] = self._rand(n, lo=1 - c.thrust_scale_frac * s, hi=1 + c.thrust_scale_frac * s)
         if self._max_lat > 0:
-            self.latency[idx] = torch.randint(
-                0, self._max_lat + 1, (n,), device=self.dev, generator=self.gen
-            )
+            lat = torch.randint(0, self._max_lat + 1, (n,), device=self.dev, generator=self.gen)
+            if s < 1.0:  # ramp latency *incidence* with the curriculum (latency is integer-valued)
+                lat = lat * (self._rand(n) < s).long()
+            self.latency[idx] = lat
         self._buf[:, idx, :] = 0.0
 
     def delay_action(self, action: Tensor) -> Tensor:
@@ -154,7 +160,8 @@ class DomainRandomizer:
         return self.wind * self.dt
 
     def add_obs_noise(self, obs: Tensor) -> Tensor:
-        """Add Gaussian observation noise (no-op if disabled / std==0)."""
-        if not self.cfg.enabled or self.cfg.obs_noise_std <= 0.0:
+        """Add Gaussian observation noise (no-op if disabled / std==0 / curriculum scale==0)."""
+        std = self.cfg.obs_noise_std * self.scale
+        if not self.cfg.enabled or std <= 0.0:
             return obs
-        return obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * self.cfg.obs_noise_std
+        return obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * std

@@ -110,6 +110,15 @@ class MultiAgentDroneEnv:
         quat = euler_to_quaternion(z, z, yaw)  # (k, 4) xyzw
         self.dyn.set_state(drone_idx, pos, vel, quat, ang_vel)
 
+    # --- DR curriculum ---
+    def set_dr_scale(self, scale: float) -> None:
+        """Set the seam-DR curriculum scale in ``[0, 1]`` (1.0 = full configured magnitudes).
+
+        The trainer ramps this 0->1 over training to harden DR-on reliability without crippling
+        early learning. Takes effect per-drone on the next reset (and immediately for obs noise).
+        """
+        self.dr.scale = float(min(1.0, max(0.0, scale)))
+
     # --- reset / step ---
     def reset_all(self) -> Tensor:
         """Reset every env and return the initial observation ``(n_drones, obs_dim)``."""
