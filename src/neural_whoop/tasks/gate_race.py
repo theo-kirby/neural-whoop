@@ -31,7 +31,7 @@ from neural_whoop import oracle as oracle_mod
 from neural_whoop.contract import OBS_DIM, world_to_body
 from neural_whoop.envs.registry import DroneTask, register_task
 from neural_whoop.perception.estimator import OracleEstimator, apply_detector_noise
-from neural_whoop.reward import Bounds, is_crashed, smoothness_penalty
+from neural_whoop.reward import Bounds, boundary_proximity_penalty, is_crashed, smoothness_penalty
 
 
 @dataclass
@@ -57,6 +57,10 @@ class GateRaceConfig:
     time_penalty: float = 0.02
     smoothness_penalty: float = 0.001
     alive_bonus: float = 0.01
+    # Reliability shaping (Flywheel hop-11): per-step near-miss penalty that ramps 0->weight as the
+    # drone enters the last `boundary_margin` m before any crash bound. Default off (weight 0.0).
+    boundary_penalty: float = 0.0
+    boundary_margin: float = 0.4    # band sits below the lowest gate (z_min 0.7) -> normal flight untouched
     # Arena / course geometry.
     arena_radius: float = 4.5
     gate_radius: float = 0.45
@@ -198,6 +202,12 @@ class GateRaceTask(DroneTask):
         # Update progress distance to the (possibly new) target gate.
         cur2, _ = self._gate(self.target)
         self.prev_dist = (cur2 - pos).norm(dim=-1)
+
+        # Reliability: near-miss penalty for entering the danger band before a crash bound.
+        if c.boundary_penalty > 0.0:
+            reward = reward - boundary_proximity_penalty(
+                pos, self._bounds, c.boundary_margin, c.boundary_penalty
+            )
 
         crashed = is_crashed(pos, self._bounds)
         reward = reward - c.crash_penalty * crashed.float()

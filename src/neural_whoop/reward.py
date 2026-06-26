@@ -55,6 +55,37 @@ class Bounds:
     z_max: float = 4.0
 
 
+def boundary_proximity_penalty(
+    pos: Tensor, bounds: Bounds, margin: float, weight: float
+) -> Tensor:
+    """Per-step *near-miss* penalty: ramps 0 -> ``weight`` per axis as ``pos`` enters the last
+    ``margin`` meters before any crash bound.
+
+    A reliability-shaping term (Flywheel hop-11): under domain randomization, wind/latency push
+    the drone toward the walls/floor/ceiling, and those excursions become crashes. Penalizing the
+    approach teaches the policy to keep margin and survive disturbances. ``margin`` is chosen below
+    the operating region (the lowest gate) so normal flight is untouched; only genuine danger-zone
+    excursions are taxed. ``weight <= 0`` or ``margin <= 0`` short-circuits to zeros (default-off).
+
+    Args:
+        pos: Positions, shape ``(..., 3)``.
+        bounds: Arena crash :class:`Bounds`.
+        margin: Danger-zone thickness in meters (the band just inside each bound).
+        weight: Max per-axis penalty (reached at the bound).
+
+    Returns:
+        Non-negative penalty of shape ``(...)`` (summed over the 3 axes).
+    """
+    if weight <= 0.0 or margin <= 0.0:
+        return torch.zeros(pos.shape[:-1], device=pos.device, dtype=pos.dtype)
+    mx = bounds.xy - pos[..., 0].abs()
+    my = bounds.xy - pos[..., 1].abs()
+    mz = torch.minimum(pos[..., 2] - bounds.z_min, bounds.z_max - pos[..., 2])
+    m = torch.stack([mx, my, mz], dim=-1).clamp_min(0.0)  # remaining margin to each bound
+    near = (1.0 - m / margin).clamp(0.0, 1.0)             # 0 outside the band, 1 at the bound
+    return weight * near.sum(dim=-1)
+
+
 def is_crashed(pos: Tensor, bounds: Bounds | None = None) -> Tensor:
     """Batched crash test: True where the drone left the arena or hit the ground/ceiling.
 
