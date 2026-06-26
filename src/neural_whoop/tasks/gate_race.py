@@ -27,6 +27,7 @@ import torch
 from torch import Tensor
 
 from neural_whoop import course as course_mod
+from neural_whoop import oracle as oracle_mod
 from neural_whoop.contract import OBS_DIM, world_to_body
 from neural_whoop.envs.registry import DroneTask, register_task
 from neural_whoop.perception.estimator import OracleEstimator, apply_detector_noise
@@ -40,6 +41,14 @@ class GateRaceConfig:
     n_gates: int = 5
     episode_len: int = 600          # steps; at dt=0.02 -> 12 s, room for several laps
     v_ref: float = 4.0              # m/s reference cruise speed for the timing oracle
+    # Timing oracle (lap-time yardstick + lap-bonus speed_factor). "pathlen" = original
+    # geometry-blind path-length/v_ref (default; baseline-reproducing). "feasible" = honest
+    # accel + corner limited reference (oracle_v_max/a_max/a_lat), calibrated from flown
+    # telemetry — flywheel node bd57f350.
+    oracle_model: str = "pathlen"
+    oracle_v_max: float = 7.0
+    oracle_a_max: float = 25.0
+    oracle_a_lat: float = 23.0
     # Reward weights.
     progress_scale: float = 1.0
     gate_bonus: float = 5.0
@@ -76,6 +85,10 @@ class GateRaceTask(DroneTask):
             gate_radius=self.cfg.gate_radius,
         )
         self._bounds = Bounds(xy=self.cfg.bound_xy, z_min=self.cfg.bound_z_min, z_max=self.cfg.bound_z_max)
+        self._feasible_oracle = oracle_mod.FeasibleOracle(
+            v_max=self.cfg.oracle_v_max, a_max=self.cfg.oracle_a_max,
+            a_lat=self.cfg.oracle_a_lat, corner_dev=self.cfg.gate_radius,
+        )
 
     # --- lifecycle ---
     def setup(self, env) -> None:
@@ -109,10 +122,11 @@ class GateRaceTask(DroneTask):
         self.last_lap[env_idx] = float("nan")
         self.best_lap[env_idx] = float("inf")
 
-        # Speed oracle: closed-loop path length / v_ref -> target lap time.
-        loop = torch.cat([pos, pos[:, :1]], dim=1)                   # g0..g_{n-1}, back to g0
-        seg = (loop[:, 1:] - loop[:, :-1]).norm(dim=-1).sum(dim=-1)  # (k,)
-        self.oracle_lap[env_idx] = seg / max(self.cfg.v_ref, 1e-3)
+        # Timing oracle over the closed gate loop -> target lap time (the yardstick).
+        if self.cfg.oracle_model == "feasible":
+            self.oracle_lap[env_idx] = oracle_mod.feasible_lap_time(pos, self._feasible_oracle)
+        else:
+            self.oracle_lap[env_idx] = oracle_mod.pathlen_lap_time(pos, self.cfg.v_ref)
 
         # Spawn near origin facing gate 0.
         d_idx = env.drone_idx(env_idx)
