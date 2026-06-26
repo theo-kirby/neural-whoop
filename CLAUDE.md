@@ -35,9 +35,22 @@ MultiAgentDroneEnv  (src/neural_whoop/envs/base.py)
    └─ DroneTask (envs/registry.py)        -> obs / reward / termination / curriculum / metrics
         └─ gate_race (tasks/gate_race.py)
 training/ppo.py  -> torch-native PPO over the batched env
-eval/rollout.py  -> deterministic rollout + lap-time metrics
+eval/rollout.py  -> deterministic rollout + lap-time metrics (+ evaluate_and_record hero capture)
+eval/pack.py     -> standard visual pack assembler (rollout -> replay -> artifacts)
 training/export.py -> TorchScript / ONNX deploy policy
+viz/replay.py    -> versioned self-describing replay schema + recorder (the "visual contract")
+viz/render.py    -> lazy renderer: trajectory / synthetic FPV / training curves / comparison
 ```
+
+**Visual observability seam (`viz/`).** A versioned replay schema
+(`format="neural-whoop-replay"`, `docs/VISUAL_CONTRACT.md`) is the durable record of what a policy
+actually did: per-step hero telemetry + the contract metadata to interpret it. `viz/replay.py` is
+pure stdlib+numpy (imports without the sim/viz extras); `viz/render.py` is lazily-imported (the
+`viz` extra: matplotlib + Pillow + tbparse) and turns a replay into Flywheel-native PNG/CSV
+artifacts. Recording is **hero-subset** (full frames for a few drones; aggregate metrics over the
+full population) and the training path stays render-free. The same JSON shape feeds the lab's
+`web/replay-viewer/` Three.js viewer unchanged. `render_depth` is a documented stub for the future
+DiffAero Taichi renderer (deferred — Blackwell camera path).
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).
@@ -88,11 +101,23 @@ uv run python scripts/env_check.py                 # Milestone-0 gate (run first
 uv run pytest -q                                   # tests
 uv run python scripts/train.py --config configs/gate_race.yaml --tensorboard
 python scripts/eval.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --export
+
+# Visual observability (the "visual contract" — see docs/VISUAL_CONTRACT.md):
+uv pip install -e '.[viz]'                          # renderer deps (matplotlib/Pillow/tbparse); replay itself is core
+uv run python scripts/eval.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --record
+uv run python scripts/viz.py  --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr \
+    --baseline runs/<parent>/replay.json.gz --out runs/<run>/viz   # full standard pack
 ```
 
 `scripts/train.py` flags: `--config`, `--task`, `--steps`, `--n-envs`, `--seed`, `--name`,
 `--tensorboard`, `--export`, `--algo {ppo,shac}` (shac reserved for DiffAero's differentiable RL).
 Experiments are configured by YAML (`configs/`); `experiment.py` wires config → env + task + PPO.
+
+`scripts/viz.py` builds the **standard visual pack** (`replay.json.gz`, `trajectory.png`,
+`fpv_*.png`, `training_curves.png`, `comparison.png` + `table.csv`) — exactly what the autonomous
+loop attaches to each empirical node. `scripts/eval.py --record` writes just the portable replay
+(no viz extra needed); `--viz` additionally builds the pack. Renderers degrade gracefully (no TB
+events → no curves; no `--baseline` → no comparison).
 
 ## Adding a task (the main extension point)
 

@@ -29,8 +29,13 @@ export = [
     "onnxruntime>=1.18",
     "onnxscript>=0.1",  # required by torch's ONNX exporter on recent torch versions
 ]
-# Rollout videos (depth-render eval). imageio-ffmpeg pulls an ffmpeg binary.
+# Visual observability: replay rendering (trajectory/FPV/curves/comparison). The replay
+# schema + recorder are core (json+gzip+numpy); only the renderer needs these. imageio
+# (optional GIF stitch) pulls an ffmpeg binary via imageio-ffmpeg.
 viz = [
+    "matplotlib>=3.8",
+    "pillow>=10.0",
+    "tbparse>=0.0.8",
     "imageio>=2.34",
     "imageio-ffmpeg>=0.5",
 ]

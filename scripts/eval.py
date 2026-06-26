@@ -30,9 +30,15 @@ def main() -> int:
     p.add_argument("--stochastic", action="store_true", help="Sample actions instead of the mean.")
     p.add_argument("--json", action="store_true", help="Print metrics as JSON only.")
     p.add_argument("--export", action="store_true", help="Export TorchScript+ONNX from this ckpt.")
+    p.add_argument("--record", nargs="?", const="", default=None, metavar="PATH",
+                   help="Record a hero replay to PATH (default: <ckpt dir>/replay.json.gz). "
+                        "Portable JSON; works without the viz extra.")
+    p.add_argument("--viz", action="store_true",
+                   help="Build the standard visual pack (implies --record; needs the viz extra).")
+    p.add_argument("--n-heroes", type=int, default=4, help="Drones to record full telemetry for.")
+    p.add_argument("--baseline", type=str, default=None, help="Baseline replay to compare in the pack.")
     args = p.parse_args()
 
-    from neural_whoop.eval.rollout import evaluate
     from neural_whoop.experiment import build_env, load_config
     from neural_whoop.training.ppo import load_agent
 
@@ -48,7 +54,30 @@ def main() -> int:
         dr_enabled=(False if args.no_dr else None),
     )
     agent = load_agent(args.ckpt, device=args.device)
-    metrics = evaluate(env, agent, steps=args.steps, deterministic=not args.stochastic)
+
+    do_record = args.viz or (args.record is not None)
+    ckpt_dir = Path(args.ckpt).parent
+    if do_record:
+        from neural_whoop.eval.pack import build_pack, record_rollout
+
+        config_name = cfg.get("run", {}).get("name", cfg["task"]["name"])
+        replay_path = Path(args.record) if args.record else (ckpt_dir / "replay.json.gz")
+        replay_path, metrics = record_rollout(
+            env, agent, replay_path,
+            config=config_name, ckpt=args.ckpt, n_heroes=args.n_heroes,
+            steps=args.steps, deterministic=not args.stochastic,
+        )
+        print(f"[record] replay -> {replay_path}")
+        if args.viz:
+            artifacts = build_pack(
+                replay_path, ckpt_dir / "viz",
+                run_dir=ckpt_dir, baseline=args.baseline, eval_metrics=metrics,
+            )
+            print(f"[viz] {len(artifacts)} artifacts -> {ckpt_dir / 'viz'}")
+    else:
+        from neural_whoop.eval.rollout import evaluate
+
+        metrics = evaluate(env, agent, steps=args.steps, deterministic=not args.stochastic)
 
     if args.json:
         print(json.dumps(metrics, indent=2))

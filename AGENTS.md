@@ -33,9 +33,14 @@ Each task defines its own metric; you optimize it and record it on every empiric
    empirical node with the hypothesis and the parent it builds on.
 2. **Run.** Make the change on a branch; run `scripts/train.py` on the 5090 within the budget. Keep
    `scripts/env_check.py` green first if you touched the substrate.
-3. **Artifacts.** Attach to the node: the TensorBoard curve(s), the eval JSON (lap time / success),
-   a rollout artifact, and the exported `policy.onnx` when relevant. Record the exact config + git
-   SHA.
+3. **Artifacts.** Attach to the node the **standard visual pack** + a parent-baseline comparison
+   (all public) — this is mandatory, not optional. Build it with
+   `scripts/viz.py --config <cfg> --from <ckpt> --no-dr --baseline <parent>/replay.json.gz --out
+   runs/<run>/viz`, then upload: `replay.json.gz` + `eval.json` → `json`, every `*.png`
+   (`trajectory`, `fpv_*`, `training_curves`, `comparison`) → `image`, `table.csv` → `table`. Also
+   attach the exported `policy.onnx` when relevant. Record the exact config + git SHA. (Schema +
+   pack + artifact-type mapping: `docs/VISUAL_CONTRACT.md`.) The replay is portable — the lab's
+   `web/replay-viewer/` Three.js viewer and other repos consume the same `replay.json.gz`.
 4. **Verdict.** Compare to the parent on the decision metric. Mark the node terminal with a
    `stop_reason` (improved / no-effect / regressed / diverged). **Commit only after a terminal
    verdict**, with the node id in the message.

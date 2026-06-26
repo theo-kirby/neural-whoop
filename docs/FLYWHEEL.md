@@ -66,10 +66,15 @@ Commit code only after a terminal verdict, with the node id in the message.
 Local hardware only. The agent runs `scripts/train.py` on the 5090 and attaches **artifacts** to
 the empirical node:
 
-- training curve(s) — TensorBoard scalars under `runs/<name>/` (episodic return, lap-time metrics);
-- eval JSON — `scripts/eval.py` lap-time / success report;
-- rollout artifact — a depth-render rollout (later, via the eval render hook);
+- the **standard visual pack** (`scripts/viz.py`) — `replay.json.gz` (portable telemetry),
+  `trajectory.png` (flown path + gate-loop reference), `fpv_*.png` (synthetic onboard view),
+  `training_curves.png`, `eval.json`, and a parent `comparison.png` + leaderboard `table.csv`. This
+  is auto-attached to every empirical node, public (see `AGENTS.md` step 3 and
+  `docs/VISUAL_CONTRACT.md` for the artifact-type mapping);
 - exported `policy.onnx` — the deployable tiny policy.
+
+The honest depth-render rollout (real pixels) remains a later hook via the `render_depth` seam; the
+analytic synthetic FPV in the pack covers the FPV artifact until then.
 
 **Explicitly:** do **not** request budget approval or acquire managed compute. The budget is the
 local training-step / wall-clock ceiling on the control node.
