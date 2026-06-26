@@ -40,7 +40,8 @@ dr:
 whoop: {}
 
 ppo:
-  total_steps: 80_000_000   # hop-7 (sparkling-limit successor): 80M multi-seed 2.91->2.72s + completion 0.83->0.93; 120M trends to 2.50 (0.93 of feasible)
+  total_steps: 120_000_000  # hop-8 (cold-pond successor): 120M is the confirmed training-budget KNEE. multi-seed 2.715->2.600s
+                            # (~4.2%) + tighter variance; 160/200M flat (no gain). Flywheel shrill-limit-5398. Budget lever now exhausted.
   num_steps: 24
   lr: 0.0003
   gamma: 0.99
