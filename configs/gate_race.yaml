@@ -1,0 +1,57 @@
+# Baseline experiment: single-drone time-optimal gate racing on the RTX 5090.
+# This is the "green" handoff config for the first autonomous agent. The agent is free to
+# fork this (reward weights, curriculum, PPO hypers, course difficulty) — that's the point.
+
+run:
+  name: gate_race_baseline
+
+task:
+  name: gate_race
+  n_gates: 5
+  episode_len: 600        # steps; dt=0.02s -> 12s episodes, room for several laps
+  v_ref: 4.0              # m/s reference cruise for the timing oracle (lap time to beat)
+  gate_radius: 0.45
+  progress_scale: 1.0
+  gate_bonus: 5.0
+  lap_bonus: 20.0
+  crash_penalty: 10.0
+  time_penalty: 0.02
+  smoothness_penalty: 0.001
+
+env:
+  n_envs: 4096            # parallel envs on the 5090 (raise toward VRAM limit to taste)
+  seed: 0
+
+# Seam-level domain randomization (airframe DR is always on inside the dynamics).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  # Detector noise off for the state-based baseline (first beachhead avoids the camera path).
+  detector_bearing_deg: 0.0
+  detector_dropout_prob: 0.0
+  detector_fov_deg: 360.0
+
+# Airframe overrides (empty -> whoop-scale WhoopParams defaults: a ~32 g tiny-whoop).
+whoop: {}
+
+ppo:
+  total_steps: 40_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

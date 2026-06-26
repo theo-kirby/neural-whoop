@@ -1,0 +1,318 @@
+"""Torch-native PPO over the batched :class:`MultiAgentDroneEnv` — GPU-resident.
+
+Replaces the lab's SB3-PPO/CPU loop. The whole rollout (obs, actions, advantages) lives on the
+GPU and never round-trips to numpy; each of the ``n_drones`` parallel drones is an independent
+sample. The actor is the ported :class:`~neural_whoop.policies.tiny_policy.TinyPolicy` (so the
+exact tiny network that trains is what deploys to a whoop); a separate small critic estimates
+value. GAE handles **time-limit truncation** correctly (bootstrap from the stashed terminal
+obs) while **not** bootstrapping crashes — important for a lap-time objective where running out
+of clock is not the same as hitting a wall.
+
+This is deliberately a compact, hackable single-file loop (cleanrl-style), not a framework:
+the autonomous agent is expected to fork reward/curriculum/algorithm here.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import asdict, dataclass
+
+import torch
+from torch import Tensor, nn
+
+from neural_whoop.envs.base import MultiAgentDroneEnv
+from neural_whoop.policies.tiny_policy import TinyPolicy, TinyPolicyConfig
+
+
+@dataclass
+class PPOConfig:
+    """PPO + rollout hyperparameters."""
+
+    num_steps: int = 24            # rollout horizon per update (per drone)
+    total_steps: int = 30_000_000  # total environment steps (across all drones)
+    lr: float = 3e-4
+    anneal_lr: bool = True
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    update_epochs: int = 4
+    num_minibatches: int = 8
+    clip_coef: float = 0.2
+    ent_coef: float = 0.0
+    vf_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    target_kl: float | None = 0.03
+    norm_adv: bool = True
+    clip_vloss: bool = True
+    # Policy/critic shape.
+    hidden_sizes: tuple[int, ...] = (64, 64)
+    activation: str = "tanh"
+    init_log_std: float = -0.5
+    # Logging / checkpoints (in env steps).
+    log_interval: int = 1
+    ckpt_interval_updates: int = 50
+
+
+class ActorCritic(nn.Module):
+    """TinyPolicy actor (Gaussian mean) + a small separate critic.
+
+    The actor outputs an unbounded mean; actions are sampled from ``Normal(mean, exp(log_std))``
+    and clamped to ``[-1, 1]`` by the env (the deterministic export uses ``clip(mean)``). The
+    log-std is state-independent (a learned per-dim scalar), standard for on-policy locomotion.
+    """
+
+    def __init__(self, obs_dim: int, act_dim: int, cfg: PPOConfig):
+        super().__init__()
+        self.actor = TinyPolicy(
+            TinyPolicyConfig(obs_dim, act_dim, tuple(cfg.hidden_sizes), cfg.activation, output="none")
+        )
+        self.log_std = nn.Parameter(torch.ones(act_dim) * cfg.init_log_std)
+        act = nn.Tanh if cfg.activation == "tanh" else nn.ReLU
+        layers: list[nn.Module] = []
+        d = obs_dim
+        for h in cfg.hidden_sizes:
+            layers += [nn.Linear(d, h), act()]
+            d = h
+        layers += [nn.Linear(d, 1)]
+        self.critic = nn.Sequential(*layers)
+
+    def get_value(self, obs: Tensor) -> Tensor:
+        return self.critic(obs).squeeze(-1)
+
+    def get_action_and_value(self, obs: Tensor, action: Tensor | None = None):
+        mean = self.actor(obs)
+        std = self.log_std.exp().expand_as(mean)
+        dist = torch.distributions.Normal(mean, std)
+        if action is None:
+            action = dist.sample()
+        logp = dist.log_prob(action).sum(-1)
+        entropy = dist.entropy().sum(-1)
+        value = self.critic(obs).squeeze(-1)
+        return action, logp, entropy, value
+
+
+def _layer_init(model: nn.Module) -> None:
+    """Orthogonal init (gain sqrt(2) hidden, small final) — the standard PPO init."""
+    linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    for i, m in enumerate(linears):
+        gain = 0.01 if i == len(linears) - 1 else (2.0 ** 0.5)
+        nn.init.orthogonal_(m.weight, gain)
+        nn.init.zeros_(m.bias)
+
+
+def train_ppo(
+    env: MultiAgentDroneEnv,
+    cfg: PPOConfig,
+    run_dir: str,
+    device: torch.device | str = "cuda",
+    writer=None,
+    log=print,
+) -> ActorCritic:
+    """Train an :class:`ActorCritic` on ``env`` with PPO; return the trained agent.
+
+    Writes TensorBoard scalars (if ``writer`` given) and periodic checkpoints to ``run_dir``.
+    """
+    import os
+
+    os.makedirs(run_dir, exist_ok=True)
+    dev = torch.device(device)
+    N = env.n_drones
+    obs_dim, act_dim = env.obs_dim, env.act_dim
+
+    agent = ActorCritic(obs_dim, act_dim, cfg).to(dev)
+    _layer_init(agent.actor)
+    _layer_init(agent.critic)
+    opt = torch.optim.Adam(agent.parameters(), lr=cfg.lr, eps=1e-5)
+
+    batch = N * cfg.num_steps
+    mb_size = max(1, batch // cfg.num_minibatches)
+    num_updates = max(1, cfg.total_steps // batch)
+
+    # Rollout storage (GPU).
+    obs_buf = torch.zeros(cfg.num_steps, N, obs_dim, device=dev)
+    act_buf = torch.zeros(cfg.num_steps, N, act_dim, device=dev)
+    logp_buf = torch.zeros(cfg.num_steps, N, device=dev)
+    rew_buf = torch.zeros(cfg.num_steps, N, device=dev)
+    val_buf = torch.zeros(cfg.num_steps, N, device=dev)
+    term_buf = torch.zeros(cfg.num_steps, N, device=dev)
+    trunc_buf = torch.zeros(cfg.num_steps, N, device=dev)
+    boot_val = torch.zeros(cfg.num_steps, N, device=dev)  # terminal value for truncated steps
+
+    # Episode-return tracking (GPU; materialized only at log time).
+    ep_ret = torch.zeros(N, device=dev)
+    ep_len = torch.zeros(N, device=dev)
+    done_ret_sum = torch.zeros((), device=dev)
+    done_len_sum = torch.zeros((), device=dev)
+    done_count = torch.zeros((), device=dev)
+
+    next_obs = env.reset_all()
+    global_step = 0
+    t_start = time.time()
+
+    for update in range(1, num_updates + 1):
+        if cfg.anneal_lr:
+            frac = 1.0 - (update - 1.0) / num_updates
+            for g in opt.param_groups:
+                g["lr"] = frac * cfg.lr
+
+        for step in range(cfg.num_steps):
+            obs_buf[step] = next_obs
+            with torch.no_grad():
+                action, logp, _, value = agent.get_action_and_value(next_obs)
+            act_buf[step] = action
+            logp_buf[step] = logp
+            val_buf[step] = value
+
+            next_obs, reward, term, trunc, info = env.step(action)
+            global_step += N
+
+            rew_buf[step] = reward
+            term_buf[step] = term.float()
+            trunc_buf[step] = trunc.float()
+            # Bootstrap value for truncated episodes from the true terminal obs.
+            if bool(trunc.any()):
+                with torch.no_grad():
+                    tv = agent.get_value(info["terminal_obs"])
+                boot_val[step] = torch.where(trunc, tv, torch.zeros_like(tv))
+            else:
+                boot_val[step] = 0.0
+
+            # Episode bookkeeping.
+            ep_ret += reward
+            ep_len += 1.0
+            done = term | trunc
+            if bool(done.any()):
+                done_ret_sum += ep_ret[done].sum()
+                done_len_sum += ep_len[done].sum()
+                done_count += done.sum()
+                ep_ret = torch.where(done, torch.zeros_like(ep_ret), ep_ret)
+                ep_len = torch.where(done, torch.zeros_like(ep_len), ep_len)
+
+        # --- GAE (with timeout bootstrap; reset accumulation at any episode boundary) ---
+        with torch.no_grad():
+            next_value = agent.get_value(next_obs)
+            adv = torch.zeros_like(rew_buf)
+            lastgae = torch.zeros(N, device=dev)
+            for t in reversed(range(cfg.num_steps)):
+                nextval = next_value if t == cfg.num_steps - 1 else val_buf[t + 1]
+                # boot: 0 on crash, terminal value on truncation, else next-step value.
+                boot = torch.where(
+                    term_buf[t].bool(), torch.zeros_like(nextval),
+                    torch.where(trunc_buf[t].bool(), boot_val[t], nextval),
+                )
+                done_t = (term_buf[t] + trunc_buf[t]).clamp(max=1.0)
+                delta = rew_buf[t] + cfg.gamma * boot - val_buf[t]
+                lastgae = delta + cfg.gamma * cfg.gae_lambda * (1.0 - done_t) * lastgae
+                adv[t] = lastgae
+            returns = adv + val_buf
+
+        # --- flatten + PPO update ---
+        b_obs = obs_buf.reshape(-1, obs_dim)
+        b_act = act_buf.reshape(-1, act_dim)
+        b_logp = logp_buf.reshape(-1)
+        b_adv = adv.reshape(-1)
+        b_ret = returns.reshape(-1)
+        b_val = val_buf.reshape(-1)
+
+        idx = torch.randperm(batch, device=dev)
+        approx_kl = torch.zeros((), device=dev)
+        pg_loss = v_loss = ent_loss = torch.zeros((), device=dev)
+        stop = False
+        for _epoch in range(cfg.update_epochs):
+            for start in range(0, batch, mb_size):
+                mb = idx[start:start + mb_size]
+                _, newlogp, entropy, newval = agent.get_action_and_value(b_obs[mb], b_act[mb])
+                logratio = newlogp - b_logp[mb]
+                ratio = logratio.exp()
+                with torch.no_grad():
+                    approx_kl = ((ratio - 1) - logratio).mean()
+
+                mb_adv = b_adv[mb]
+                if cfg.norm_adv:
+                    mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                pg1 = -mb_adv * ratio
+                pg2 = -mb_adv * ratio.clamp(1 - cfg.clip_coef, 1 + cfg.clip_coef)
+                pg_loss = torch.max(pg1, pg2).mean()
+
+                if cfg.clip_vloss:
+                    v_unclipped = (newval - b_ret[mb]) ** 2
+                    v_clipped = b_val[mb] + (newval - b_val[mb]).clamp(-cfg.clip_coef, cfg.clip_coef)
+                    v_clipped = (v_clipped - b_ret[mb]) ** 2
+                    v_loss = 0.5 * torch.max(v_unclipped, v_clipped).mean()
+                else:
+                    v_loss = 0.5 * ((newval - b_ret[mb]) ** 2).mean()
+
+                ent_loss = entropy.mean()
+                loss = pg_loss - cfg.ent_coef * ent_loss + cfg.vf_coef * v_loss
+
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                nn.utils.clip_grad_norm_(agent.parameters(), cfg.max_grad_norm)
+                opt.step()
+
+            if cfg.target_kl is not None and float(approx_kl) > cfg.target_kl:
+                stop = True
+                break
+
+        # --- logging ---
+        if update % cfg.log_interval == 0:
+            sps = int(global_step / (time.time() - t_start))
+            ep_ret_mean = float(done_ret_sum / done_count) if float(done_count) > 0 else float("nan")
+            ep_len_mean = float(done_len_sum / done_count) if float(done_count) > 0 else float("nan")
+            m = env.task.metrics(env)
+            best_lap = m.get("best_lap_time", float("nan"))
+            log(
+                f"upd {update}/{num_updates} step {global_step:,} | sps {sps:,} | "
+                f"ep_ret {ep_ret_mean:7.2f} | best_lap {best_lap:6.3f}s "
+                f"(oracle {m.get('oracle_lap_time', float('nan')):.3f}s) | "
+                f"laps {m.get('laps_completed_mean', 0):.2f} | "
+                f"compl {m.get('lap_completion_rate', 0):.2f} | kl {float(approx_kl):.3f}"
+            )
+            if writer is not None:
+                writer.add_scalar("charts/episodic_return", ep_ret_mean, global_step)
+                writer.add_scalar("charts/episodic_length", ep_len_mean, global_step)
+                writer.add_scalar("charts/SPS", sps, global_step)
+                writer.add_scalar("charts/learning_rate", opt.param_groups[0]["lr"], global_step)
+                writer.add_scalar("losses/policy", float(pg_loss), global_step)
+                writer.add_scalar("losses/value", float(v_loss), global_step)
+                writer.add_scalar("losses/entropy", float(ent_loss), global_step)
+                writer.add_scalar("losses/approx_kl", float(approx_kl), global_step)
+                for k, v in m.items():
+                    writer.add_scalar(f"metrics/{k}", v, global_step)
+            done_ret_sum.zero_()
+            done_len_sum.zero_()
+            done_count.zero_()
+
+        if update % cfg.ckpt_interval_updates == 0 or update == num_updates:
+            save_checkpoint(agent, cfg, env, f"{run_dir}/ckpt_{global_step}.pt", global_step)
+        if stop and cfg.target_kl is not None:
+            pass  # KL early-stop is per-update; continue collecting next rollout
+
+    save_checkpoint(agent, cfg, env, f"{run_dir}/ckpt_final.pt", global_step)
+    return agent
+
+
+def save_checkpoint(agent: ActorCritic, cfg: PPOConfig, env: MultiAgentDroneEnv, path: str, step: int) -> None:
+    """Save agent weights + the shapes/config needed to rebuild and evaluate it."""
+    torch.save(
+        {
+            "model": agent.state_dict(),
+            "ppo_cfg": asdict(cfg),
+            "obs_dim": env.obs_dim,
+            "act_dim": env.act_dim,
+            "task": env.task.name,
+            "global_step": step,
+        },
+        path,
+    )
+    with open(path + ".meta.json", "w") as f:
+        json.dump({"task": env.task.name, "obs_dim": env.obs_dim, "act_dim": env.act_dim, "step": step}, f)
+
+
+def load_agent(path: str, device: torch.device | str = "cuda") -> ActorCritic:
+    """Rebuild an :class:`ActorCritic` from a checkpoint."""
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    cfg = PPOConfig(**ckpt["ppo_cfg"])
+    agent = ActorCritic(ckpt["obs_dim"], ckpt["act_dim"], cfg).to(device)
+    agent.load_state_dict(ckpt["model"])
+    return agent.eval()

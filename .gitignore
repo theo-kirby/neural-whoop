@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- neural-whoop ---
+# Training outputs (checkpoints, TensorBoard, exported policies, eval JSON). These are
+# experiment artifacts attached to Flywheel nodes, not source — keep them out of git.
+runs/
+*.pt
+*.onnx
+# Vendored DiffAero bytecode (the source fork itself is committed and pinned).
+third_party/**/__pycache__/
+.ruff_cache/

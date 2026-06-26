@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neural-whoop"
+version = "0.1.0"
+description = "GPU-parallel, swarm-capable whoop RL lab on DiffAero, developed autonomously on Flywheel."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "neural-whoop" }]
+keywords = ["drone", "quadrotor", "reinforcement-learning", "diffaero", "sim2real", "swarm", "gpu"]
+
+# Core runtime. torch MUST come from the cu128 index for sm_120 (Blackwell / RTX 5090)
+# kernels — see [tool.uv.sources] below and scripts/env_check.py.
+dependencies = [
+    "torch>=2.7",
+    "numpy>=1.26",
+    "pyyaml>=6.0",
+    "tensorboard>=2.18",
+    "omegaconf>=2.3",   # DiffAero dynamics config objects (DictConfig); pure-python, light
+]
+
+[project.optional-dependencies]
+# Policy export to ONNX (TorchScript ships with torch).
+export = [
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+    "onnxscript>=0.1",  # required by torch's ONNX exporter on recent torch versions
+]
+# Rollout videos (depth-render eval). imageio-ffmpeg pulls an ffmpeg binary.
+viz = [
+    "imageio>=2.34",
+    "imageio-ffmpeg>=0.5",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# --- torch from the CUDA 12.8 wheel index (sm_120 / Blackwell kernels) -------------------
+# The default PyPI wheels lack sm_120 kernels and throw "no kernel image available" on the
+# 5090. This is the #1 install gotcha; pinning the index here makes it reproducible.
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+ignore = ["E741"]  # diffaero math uses l/I-like names; keep ports faithful
