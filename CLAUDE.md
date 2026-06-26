@@ -20,7 +20,29 @@ racing and expanding toward swarms. The autonomous-development loop runs on Flyw
    it never touches the Blackwell-broken camera path. Metric = **lap time**.
 3. **Autonomy = full, local-only.** The agent edits code, adds tasks, runs/tunes experiments on the
    5090; **no managed cloud compute**; bounded by a training-step / wall-clock budget. The Flywheel
-   graph is the post-hoc audit trail.
+   graph is the audit trail. Everything lives on this machine; both repos
+   (`theo-kirby/neural-whoop`, `theo-kirby/nw-viz`) push to GitHub.
+
+## Autonomy & the Flywheel record
+
+Capture work **as you go, on your own** — don't wait to be asked. After each meaningful unit (a
+feature, an experiment result, a tooling addition, a fixed bug, a visualization checkpoint): commit
+with a clear message, **push** the affected repo(s), update any docs/this file that drifted, and
+write a **Flywheel node** referencing the commit SHA(s). Commit at natural seams, not one big
+end-of-session dump.
+
+The Flywheel graph is the point of the project's record: a **very connected, very exploratory, very
+honest** account of the R&D process — **not a linear chain** (if it were a chain there'd be no
+reason for it to be a graph). So:
+
+- Give each node its **true parents** — multiple parents when work builds on several prior
+  results/methods; branch off a shared baseline when probing alternatives; link back to the
+  idea/hypothesis a node tests or refutes. Parent on what the work genuinely descends from, not just
+  "whatever was latest."
+- Use varied node kinds liberally: experiments, results, methods/tooling, **ideas**, **hypotheses**,
+  **viz/checkpoint** moments, refutations (RED) and confirmations (GREEN). Cross-link related nodes
+  across branches.
+- Be **honest**: record negative/refuted results too, not just wins.
 
 ## Architecture
 
@@ -49,8 +71,13 @@ pure stdlib+numpy (imports without the sim/viz extras); `viz/render.py` is lazil
 `viz` extra: matplotlib + Pillow + tbparse) and turns a replay into Flywheel-native PNG/CSV
 artifacts. Recording is **hero-subset** (full frames for a few drones; aggregate metrics over the
 full population) and the training path stays render-free. The same JSON shape feeds the lab's
-`web/replay-viewer/` Three.js viewer unchanged. `render_depth` is a documented stub for the future
-DiffAero Taichi renderer (deferred — Blackwell camera path).
+`web/replay-viewer/` Three.js viewer **and** the sibling **`../nw-viz/`** project
+(`theo-kirby/nw-viz`) — a standalone pure-JS/Three.js tool (no Node in this repo) that renders a
+replay into a composited **hero MP4**: a fixed wide 3D course shot plus synced onboard-FPV and
+top-down picture-in-picture insets, captured headlessly (Playwright + SwiftShader → ffmpeg). It
+consumes the locked replay contract unchanged; `scripts/viz.py --video` optionally shells out to it
+(non-fatal if absent). `render_depth` is a documented stub for the future DiffAero Taichi renderer
+(deferred — Blackwell camera path).
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).
@@ -118,6 +145,12 @@ Experiments are configured by YAML (`configs/`); `experiment.py` wires config �
 loop attaches to each empirical node. `scripts/eval.py --record` writes just the portable replay
 (no viz extra needed); `--viz` additionally builds the pack. Renderers degrade gracefully (no TB
 events → no curves; no `--baseline` → no comparison).
+
+```bash
+# Hero MP4 (3D wide shot + FPV/top-down PiP) via the sibling nw-viz project (one-time: cd ../nw-viz && npm install):
+uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
+cd ../nw-viz && node capture.mjs --replay ../neural-whoop/runs/<run>/replay.json.gz --out out/<run>.mp4  # or directly
+```
 
 ## Adding a task (the main extension point)
 
