@@ -62,6 +62,12 @@ class TargetFollowConfig:
     # permits. This linear penalty on excess distance (d > d*) makes back-off cost; pair it with a
     # tighter track_sigma so standoff accuracy survives detector training. Default 0.0 (off).
     over_distance_penalty: float = 0.0
+    # Precision-filtering of the detector estimate (Flywheel nameless-bar-9184). The detector-regime
+    # sweep showed the standoff back-off is set by per-fix bearing/range PRECISION (not dropout/FOV):
+    # the policy sits far because every fresh fix is noisy. An EMA on the body-frame estimate
+    # (in-place, so obs-v4 stays length 11 / MCU-clean) trades a little lag for lower per-fix variance,
+    # which should let the policy hold closer safely. alpha = weight on history; 0.0 = off (raw fix).
+    estimate_ema_alpha: float = 0.0
     alive_bonus: float = 0.0
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -104,6 +110,7 @@ class TargetFollowTask(DroneTask):
             device=dev, generator=env.gen,
         )
         self.last_valid = torch.zeros(n, 3, device=dev)   # detector stale-hold (body frame)
+        self._est_ema = torch.zeros(n, 3, device=dev)     # EMA precision filter state (body frame)
         # Episode accumulators (GPU-resident; reset per env, read at log cadence by metrics()).
         self.steps = torch.zeros(n, device=dev, dtype=torch.long)
         self.in_view = torch.zeros(n, device=dev, dtype=torch.long)
@@ -142,6 +149,7 @@ class TargetFollowTask(DroneTask):
         seed[:, 0] = c.d_desired
         seed[:, 2] = tgt0[:, 2] - spawn[:, 2]
         self.last_valid[d_idx] = seed
+        self._est_ema[d_idx] = seed   # seed the precision filter with the spawn estimate
 
         self.steps[d_idx] = 0
         self.in_view[d_idx] = 0
@@ -161,6 +169,12 @@ class TargetFollowTask(DroneTask):
         if env.dr.cfg.enabled and not det.is_identity:
             rel_body, _ = apply_detector_noise(rel_body, det, self.last_valid, env.gen)
             self.last_valid = rel_body
+        # EMA precision filter: smooth successive noisy fixes (Flywheel nameless-bar-9184). In-place,
+        # so obs-v4 stays length 11. A real onboard estimator would do the same temporal smoothing.
+        a = self.cfg.estimate_ema_alpha
+        if a > 0.0:
+            self._est_ema = a * self._est_ema + (1.0 - a) * rel_body
+            rel_body = self._est_ema
         vel_b = world_to_body(vel, R)
         obs = torch.cat([rel_body, vel_b, rpy[..., 0:1], rpy[..., 1:2], w], dim=-1)
         return obs.to(torch.float32)
