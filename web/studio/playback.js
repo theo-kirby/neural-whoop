@@ -73,7 +73,7 @@ export class Playback {
     const tracks = episodeTracks(episode);
     const multi = tracks.length > 1;
     this.actors = tracks.map((t, k) => {
-      const tint = multi ? DRONE_TINTS[k % DRONE_TINTS.length] : 0xffe14a;
+      const tint = multi ? DRONE_TINTS[k % DRONE_TINTS.length] : 0xf2f2f2;
       const glyph = makeDrone(tint);
       this.view.world.add(glyph);
       const frames = t.frames || [];

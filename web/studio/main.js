@@ -22,7 +22,7 @@ function toast(msg, isErr = false) {
 // ---- scene + playback ---------------------------------------------------------------
 const view = createScene(document.querySelector(".view3d"));
 const playback = new Playback(view);
-let fpvOn = false, topOn = false;
+let fpvOn = true, topOn = true;   // FPV + top-down insets shown by default
 
 function insetRect(frame) {
   const cr = view.renderer.domElement.getBoundingClientRect();
@@ -48,8 +48,8 @@ $("play").addEventListener("click", () => playback.setPlaying(!playback.playing)
 $("scrub").addEventListener("input", (e) => playback.seek(Number(e.target.value)));
 $("speed").addEventListener("change", (e) => { playback.speed = Number(e.target.value); });
 $("follow").addEventListener("change", (e) => { playback.follow = e.target.checked; });
-$("fpv").addEventListener("change", (e) => { fpvOn = e.target.checked; $("fpvframe").hidden = !fpvOn; });
-$("top").addEventListener("change", (e) => { topOn = e.target.checked; $("topframe").hidden = !topOn; });
+$("fpv").addEventListener("change", (e) => { fpvOn = e.target.checked; $("fpvframe").classList.toggle("hidden", !fpvOn); });
+$("top").addEventListener("change", (e) => { topOn = e.target.checked; $("topframe").classList.toggle("hidden", !topOn); });
 $("trail").addEventListener("change", (e) => playback.setTrailVisible(e.target.checked));
 
 // ---- selectors ----------------------------------------------------------------------
@@ -95,14 +95,14 @@ async function loadSelectors() {
   }
 }
 
-// ---- fly (rollout) ------------------------------------------------------------------
-let flying = false;
-$("fly").addEventListener("click", async () => {
-  if (flying) return;
-  flying = true;
-  const btn = $("fly");
+// ---- run (rollout) ------------------------------------------------------------------
+let running = false;
+$("run").addEventListener("click", async () => {
+  if (running) return;
+  running = true;
+  const btn = $("run");
   btn.disabled = true;
-  $("status").innerHTML = `<span class="spin">⟳</span> flying…`;
+  $("status").innerHTML = `<span class="spin">⟳</span> running…`;
   try {
     const req = {
       policy: $("policy").value,
@@ -122,7 +122,7 @@ $("fly").addEventListener("click", async () => {
     $("status").textContent = "";
     toast(`rollout failed: ${err.message}`, true);
   } finally {
-    flying = false;
+    running = false;
     btn.disabled = false;
   }
 });
@@ -130,8 +130,6 @@ $("fly").addEventListener("click", async () => {
 function showRun(doc, summary) {
   const meta = doc.meta || {};
   $("title").textContent = `${summary.course} · ${meta.policy ?? ""}`;
-  document.querySelector(".hud").hidden = false;
-  $("bar").classList.remove("hidden");
   $("ndrones").textContent = String(summary.drone_count);
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
   const ep = doc.episodes[0];

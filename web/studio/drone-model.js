@@ -5,11 +5,11 @@
 
 import * as THREE from "three";
 
-export function makeDrone(centerColor = 0xffe14a) {
+export function makeDrone(centerColor = 0xf2f2f2) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(0.18, 0.18, 0.06),
-    new THREE.MeshStandardMaterial({ color: 0x2a3340, metalness: 0.3, roughness: 0.6 })
+    new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.3, roughness: 0.6 })
   );
   body.castShadow = true;
   g.add(body);
@@ -22,11 +22,11 @@ export function makeDrone(centerColor = 0xffe14a) {
   );
   g.add(center);
 
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x1a2028, roughness: 0.8 });
+  const armMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
   const rotorGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.02, 20);
   const offsets = [
-    [0.16, 0.16, 0x4ea1ff], [0.16, -0.16, 0x4ea1ff],   // front (+X): blue
-    [-0.16, 0.16, 0xff5d5d], [-0.16, -0.16, 0xff5d5d],  // rear (-X): red
+    [0.16, 0.16, 0xf0f0f0], [0.16, -0.16, 0xf0f0f0],   // front (+X): white (heading)
+    [-0.16, 0.16, 0x4a4a4a], [-0.16, -0.16, 0x4a4a4a],  // rear (-X): dark grey
   ];
   for (const [x, y, color] of offsets) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(x, y) * 1.0, 0.025, 0.025), armMat);

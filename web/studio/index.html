@@ -6,63 +6,76 @@
   <title>neural-whoop · studio</title>
   <style>
     :root {
-      --bg: #0c0f14; --panel: #151b24cc; --panel-solid: #151b24; --line: #243040;
-      --fg: #e7edf3; --muted: #8a98a8; --accent: #4ea1ff;
-      --passed: #39d98a; --next: #ffd23f; --error: #ff5d5d;
+      /* Greyscale only — blacks / whites / tones of grey, no colour tint. */
+      --bg: #141414; --panel: #1c1c1c; --panel-2: #232323; --line: #383838;
+      --fg: #ececec; --muted: #9a9a9a; --accent: #d6d6d6; --accent-dim: #8c8c8c;
+      --on: #f2f2f2; --error: #c8c8c8;
+      --font: Calibri, "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden;
-      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      background: var(--bg); color: var(--fg); }
+      font: 14px/1.45 var(--font); background: var(--bg); color: var(--fg); }
     canvas { display: block; }
     button, select, input { font: inherit; }
-    .btn { background: #1b2433; color: var(--fg); border: 1px solid var(--line);
-      border-radius: 7px; padding: 7px 13px; cursor: pointer; }
+    input[type=checkbox], input[type=range] { accent-color: var(--accent-dim); }
+    .btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
+      border-radius: 6px; padding: 7px 13px; cursor: pointer; }
     .btn:hover { border-color: var(--accent); }
     .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn.primary { background: #1d3a5f; border-color: var(--accent); }
-    select, input[type=number] { background: #1b2433; color: var(--fg);
-      border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+    .btn.primary { background: #2e2e2e; border-color: var(--accent); color: var(--on); font-weight: 600; }
+    .btn.block { width: 100%; padding: 9px; }
+    select, input[type=number] { width: 100%; background: var(--panel-2); color: var(--fg);
+      border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+    input[type=number] { width: 100%; }
 
-    #shell { position: fixed; inset: 0; display: flex; flex-direction: column; }
-    #topbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap;
-      background: var(--panel-solid); border-bottom: 1px solid var(--line); z-index: 10; }
-    #topbar .brand { color: var(--accent); font-weight: 600; margin-right: 8px; letter-spacing: .3px; }
-    #topbar label { color: var(--muted); display: inline-flex; gap: 5px; align-items: center; }
-    #topbar .spacer { flex: 1; }
-    #view { position: relative; flex: 1; min-height: 0; }
+    #shell { position: fixed; inset: 0; display: flex; }
+    #view { position: relative; flex: 1; min-width: 0; }
     .view3d { position: absolute; inset: 0; }
 
-    .hud { position: absolute; top: 12px; left: 12px; padding: 10px 12px;
-      background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
-      backdrop-filter: blur(6px); min-width: 210px; pointer-events: none; }
-    .hud .row { display: flex; justify-content: space-between; gap: 16px; }
-    .hud .k { color: var(--muted); } .hud .v { color: var(--fg); }
-    .hud .title { color: var(--accent); margin-bottom: 6px; font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+    /* Right control sidebar (replaces the old top + bottom bars). */
+    #sidebar { width: 340px; flex: none; height: 100%; overflow-y: auto;
+      background: var(--panel); border-left: 1px solid var(--line);
+      display: flex; flex-direction: column; }
+    #sidebar .brand { padding: 14px 16px; font-weight: 700; letter-spacing: .2px;
+      color: var(--fg); border-bottom: 1px solid var(--line); }
+    #sidebar .brand small { color: var(--muted); font-weight: 400; }
+    .section { padding: 14px 16px; border-bottom: 1px solid var(--line);
+      display: flex; flex-direction: column; gap: 10px; }
+    .section h4 { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
+      color: var(--muted); font-weight: 600; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field > span { color: var(--muted); font-size: 12px; }
+    .row2 { display: flex; gap: 10px; }
+    .row2 > * { flex: 1; }
+    .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .chk input { width: auto; }
+    .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+    .status { color: var(--muted); font-size: 12px; min-height: 16px; }
 
-    .bar { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px 12px;
-      background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
-      backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 8px; }
+    /* Transport. */
     .scrub { width: 100%; accent-color: var(--accent); }
-    .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .transport { display: flex; align-items: center; gap: 10px; }
+    .time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
     .spacer { flex: 1; }
-    .time { color: var(--muted); font-variant-numeric: tabular-nums; }
-    .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 
-    /* PiP camera frames (FPV + top-down). pointer-events:none so they don't steal orbit. */
-    .cam-frame { position: absolute; top: 168px; left: 12px; width: 300px; height: 169px;
-      border: 1px solid var(--accent); border-radius: 8px; pointer-events: none;
-      box-shadow: 0 0 0 1px #0008, 0 6px 20px #0006; overflow: hidden; }
-    .cam-frame.top { top: 168px; left: 324px; width: 200px; height: 200px; border-color: var(--next); }
+    /* Telemetry readout. */
+    .hud .row { display: flex; justify-content: space-between; gap: 16px; padding: 1px 0; }
+    .hud .k { color: var(--muted); } .hud .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+    .hud .title { color: var(--fg); margin-bottom: 6px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* PiP camera frames (FPV + top-down), overlaid on the 3D view, on by default. */
+    .cam-frame { position: absolute; top: 12px; left: 12px; width: 300px; height: 169px;
+      border: 1px solid var(--line); border-radius: 7px; pointer-events: none;
+      box-shadow: 0 6px 20px #0007; overflow: hidden; }
+    .cam-frame.top { top: 193px; left: 12px; width: 200px; height: 200px; }
     .cam-label { position: absolute; top: 4px; left: 8px; z-index: 2; color: var(--accent);
       font-size: 11px; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
-    .cam-frame.top .cam-label { color: var(--next); }
 
     .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-      background: var(--panel-solid); border: 1px solid var(--line); border-radius: 8px;
-      padding: 9px 14px; z-index: 50; max-width: 70vw; }
-    .toast.err { border-color: var(--error); color: #ffd6d6; }
+      background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
+      padding: 9px 14px; z-index: 50; max-width: 70vw; color: var(--fg); }
+    .toast.err { border-color: var(--accent); }
     .spin { display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .hidden { display: none !important; }
@@ -70,47 +83,59 @@
 </head>
 <body>
   <div id="shell">
-    <div id="topbar">
-      <span class="brand">neural-whoop · studio</span>
-      <label>policy <select data-h="policy"></select></label>
-      <label>course <select data-h="course"></select></label>
-      <label>drones <input data-h="drones" type="number" min="1" max="16" value="3" style="width:54px" /></label>
-      <label>gates <input data-h="gates" type="number" min="1" max="24" value="6" style="width:54px" /></label>
-      <label class="chk"><input data-h="dr" type="checkbox" /> DR</label>
-      <button class="btn primary" data-h="fly">▶ Fly</button>
-      <span class="spacer"></span>
-      <span class="time" data-h="status"></span>
-    </div>
     <div id="view">
       <div class="view3d"></div>
-      <div class="cam-frame" data-h="fpvframe" hidden><span class="cam-label">FPV · onboard</span></div>
-      <div class="cam-frame top" data-h="topframe" hidden><span class="cam-label">top-down</span></div>
-      <div class="hud" hidden>
+      <div class="cam-frame" data-h="fpvframe"><span class="cam-label">FPV · onboard</span></div>
+      <div class="cam-frame top" data-h="topframe"><span class="cam-label">top-down</span></div>
+    </div>
+
+    <div id="sidebar">
+      <div class="brand">neural-whoop <small>· studio</small></div>
+
+      <div class="section">
+        <h4>setup</h4>
+        <label class="field"><span>policy</span><select data-h="policy"></select></label>
+        <label class="field"><span>course</span><select data-h="course"></select></label>
+        <div class="row2">
+          <label class="field"><span>drones</span><input data-h="drones" type="number" min="1" max="16" value="3" /></label>
+          <label class="field"><span>gates (preset)</span><input data-h="gates" type="number" min="1" max="24" value="6" /></label>
+        </div>
+        <label class="chk"><input data-h="dr" type="checkbox" /> domain randomization</label>
+        <button class="btn primary block" data-h="run">▶ Run</button>
+        <div class="status" data-h="status"></div>
+      </div>
+
+      <div class="section">
+        <h4>playback</h4>
+        <input class="scrub" data-h="scrub" type="range" min="0" max="0" value="0" step="1" />
+        <div class="transport">
+          <button class="btn" data-h="play">▶ Play</button>
+          <span class="spacer"></span>
+          <span class="time"><span data-h="tcur">0.00</span> / <span data-h="tend">0.00</span>s ·
+            <span data-h="fcur">0</span>/<span data-h="fend">0</span></span>
+        </div>
+        <label class="field"><span>speed</span>
+          <select data-h="speed">
+            <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+          </select>
+        </label>
+        <div class="toggles">
+          <label class="chk"><input type="checkbox" data-h="follow" /> follow cam</label>
+          <label class="chk"><input type="checkbox" data-h="fpv" checked /> FPV</label>
+          <label class="chk"><input type="checkbox" data-h="top" checked /> top-down</label>
+          <label class="chk"><input type="checkbox" data-h="trail" checked /> trail</label>
+        </div>
+      </div>
+
+      <div class="section hud">
+        <h4>telemetry</h4>
         <div class="title" data-h="title">—</div>
         <div class="row"><span class="k">drones</span><span class="v" data-h="ndrones">—</span></div>
         <div class="row"><span class="k">step</span><span class="v" data-h="step">—</span></div>
         <div class="row"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
         <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
         <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
-      </div>
-      <div class="bar hidden" data-h="bar">
-        <input class="scrub" data-h="scrub" type="range" min="0" max="0" value="0" step="1" />
-        <div class="controls">
-          <button class="btn" data-h="play">▶ Play</button>
-          <span class="time"><span data-h="tcur">0.00</span>s / <span data-h="tend">0.00</span>s ·
-            <span data-h="fcur">0</span>/<span data-h="fend">0</span></span>
-          <span class="spacer"></span>
-          <label>speed
-            <select data-h="speed">
-              <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
-              <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
-            </select>
-          </label>
-          <label class="chk"><input type="checkbox" data-h="follow" /> follow cam</label>
-          <label class="chk"><input type="checkbox" data-h="fpv" /> FPV</label>
-          <label class="chk"><input type="checkbox" data-h="top" /> top-down</label>
-          <label class="chk"><input type="checkbox" data-h="trail" checked /> trail</label>
-        </div>
       </div>
     </div>
   </div>

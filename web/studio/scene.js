@@ -16,8 +16,8 @@ export function createScene(mount, { grid = true } = {}) {
   mount.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0c0f14);
-  scene.fog = new THREE.Fog(0x0c0f14, 40, 130);
+  scene.background = new THREE.Color(0x141414);
+  scene.fog = new THREE.Fog(0x141414, 40, 130);
 
   const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 800);
   camera.position.set(8, 7, 11);
@@ -26,7 +26,7 @@ export function createScene(mount, { grid = true } = {}) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.HemisphereLight(0xbcd2ff, 0x202832, 0.9));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2a2a, 0.9));
   const sun = new THREE.DirectionalLight(0xffffff, 1.4);
   sun.position.set(10, 18, 7);
   sun.castShadow = true;
@@ -39,13 +39,13 @@ export function createScene(mount, { grid = true } = {}) {
   // Ground (three-frame XZ plane = sim XY ground) + grid, sized for the giant arena.
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(160, 160),
-    new THREE.MeshStandardMaterial({ color: 0x10151d, roughness: 1 })
+    new THREE.MeshStandardMaterial({ color: 0x191919, roughness: 1 })
   );
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.001;
   ground.receiveShadow = true;
   scene.add(ground);
-  if (grid) scene.add(new THREE.GridHelper(160, 160, 0x223044, 0x1a2230));
+  if (grid) scene.add(new THREE.GridHelper(160, 160, 0x3a3a3a, 0x262626));
 
   // `world` holds every sim-frame object; rotating it maps sim Z-up -> three Y-up.
   const world = new THREE.Group();

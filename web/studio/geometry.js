@@ -4,16 +4,19 @@
 
 import * as THREE from "three";
 
-export const GATE_COLORS = { passed: 0x39d98a, next: 0xffd23f, upcoming: 0x6b7888 };
+// Greyscale gate states: the active "next" gate is bright white; passed/upcoming fade to grey
+// (pass state is also conveyed by opacity/scale in playback, so it stays legible without colour).
+export const GATE_COLORS = { passed: 0x6e6e6e, next: 0xffffff, upcoming: 0x454545 };
 
-// Per-drone identity tints for group episodes (matches ../nw-viz/src/palette.js).
+// Per-drone identity tints for group episodes — greyscale tones (white -> dark grey) so multiple
+// racers are tellable apart without any colour.
 export const DRONE_TINTS = [
-  0x4ea1ff, // blue
-  0xff5d5d, // red
-  0xffe14a, // yellow
-  0x53e0a0, // green
-  0xc77dff, // violet
-  0xff9d3c, // orange
+  0xf2f2f2, // white
+  0x9a9a9a, // mid grey
+  0x6a6a6a, // dark grey
+  0xcccccc, // light grey
+  0x808080, // grey
+  0x565656, // charcoal
 ];
 
 export function disposeGroup(arr, parent) {
@@ -46,10 +49,10 @@ export function buildGates(world, gates) {
 
 // Dim full path + a bright "traveled" overlay revealed via drawRange. `color` tints both (a
 // drone's identity hue for multi-drone, or the default blue). Returns {full, done}.
-export function buildTrail(world, frames, color = 0x4ea1ff) {
+export function buildTrail(world, frames, color = 0xbfbfbf) {
   const pathPts = frames.map((f) => new THREE.Vector3(f.pos[0], f.pos[1], f.pos[2]));
   const geo = new THREE.BufferGeometry().setFromPoints(pathPts);
-  const full = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x33425a }));
+  const full = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x3a3a3a }));
   const done = new THREE.Line(geo.clone(), new THREE.LineBasicMaterial({ color }));
   world.add(full);
   world.add(done);
