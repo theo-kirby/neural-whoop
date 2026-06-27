@@ -1,4 +1,5 @@
 # Scale-IMPORTANCE-weighted generalist (weight=4.0): stronger small-course bias than simp2
+# VERDICT: REFUTED (hypothesis cool-grass-4001) — lands ON the tight<->big Pareto frontier, does NOT beat it; biasing small gives back big/giant (giant 0.34 vs general_s1 0.50). Retained as the reproducible recipe.
 # (radius = lo+(hi-lo)*U**4). Same tight->big range, big still reachable. Hypothesis cool-grass-4001.
 run:
   name: gate_race_simp4

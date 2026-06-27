@@ -1,4 +1,5 @@
 # Scale-IMPORTANCE-weighted generalist (weight=2.0): same tight->big range as gate_race_general but
+# VERDICT: REFUTED (hypothesis cool-grass-4001) — lands ON the tight<->big Pareto frontier, does NOT beat it; biasing small gives back big/giant (giant 0.34 vs general_s1 0.50). Retained as the reproducible recipe.
 # the per-episode radius draw is biased toward SMALL courses (radius = lo+(hi-lo)*U**2), keeping big
 # present from step 0. Tests whether emphasising tight reps (without withdrawing big, unlike the
 # curriculum) beats the tight<->big Pareto frontier. Hypothesis node cool-grass-4001.
