@@ -1,5 +1,5 @@
 # Scale-generalist gate racing WITH A CURRICULUM: same as gate_race_general, but the course-size
-# range grows tight->big over the first 50% of training (scale_curriculum_frac), so the policy masters
+# range grows tight->big over the first 15% of training (scale_curriculum_frac, tuned), so the policy masters
 # tight courses first. Aims to recover the ~0.07 tight-completion tax the full-range generalist paid.
 # Base (no curriculum):
 # via per-episode scale randomization, so it flies far-apart "cruise-and-brake" courses as well as
@@ -31,7 +31,7 @@ task:
   scale_step_ratio_max: 0.62
   scale_z_max_min: 2.3
   scale_z_max_max: 3.5
-  scale_curriculum_frac: 0.5   # ramp tight->big over the first 50% of training (trim the tight tax)
+  scale_curriculum_frac: 0.15  # short tight warmup (tuned: 0.15 > 0.3 > 0.5) — recovers tight to ~0.94
   bound_xy: 14.0
   bound_z_min: 0.15
   bound_z_max: 5.0
