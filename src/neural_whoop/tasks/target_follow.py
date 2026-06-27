@@ -57,6 +57,11 @@ class TargetFollowConfig:
     track_scale: float = 1.0        # weight on the standoff bell exp(-((d-d*)/σ)²)
     in_view_bonus: float = 0.5      # per-step bonus when the target is inside the FOV cone
     center_scale: float = 0.3       # bonus for centering (cos of the bearing off the +x axis)
+    # Anti-back-off penalty (Flywheel old-leaf-3989). The detector-hardened policy bought robustness
+    # by sitting FAR (d >> d*), where the target rarely exits the FOV — cheap insurance the wide bell
+    # permits. This linear penalty on excess distance (d > d*) makes back-off cost; pair it with a
+    # tighter track_sigma so standoff accuracy survives detector training. Default 0.0 (off).
+    over_distance_penalty: float = 0.0
     alive_bonus: float = 0.0
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -177,6 +182,8 @@ class TargetFollowTask(DroneTask):
         reward = c.track_scale * track + c.alive_bonus
         reward = reward + c.in_view_bonus * in_fov.float()
         reward = reward + c.center_scale * cos_ang.clamp_min(0.0)
+        if c.over_distance_penalty > 0.0:
+            reward = reward - c.over_distance_penalty * (dist - c.d_desired).clamp_min(0.0)
         reward = reward - smoothness_penalty(action, env.prev_action, c.smoothness_penalty)
 
         crashed = is_crashed(pos, self._bounds)

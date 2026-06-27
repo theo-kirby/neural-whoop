@@ -1,0 +1,63 @@
+# Perception follow-up (Flywheel old-leaf-3989): detector-ON target_follow with a TIGHTER standoff
+# reward, to stop detector-hardening from buying robustness by backing off (the cool-resonance-0983
+# finding: the detector policy sat at 2.17m vs d*=1.5m). Two levers vs target_follow.yaml:
+#   - track_sigma 0.6 -> 0.35 (sharper standoff peak),
+#   - over_distance_penalty 0.5 (linear cost for d > d*).
+# Everything else (detector seam, net, budget, DR) identical to target_follow.yaml.
+# Goal: a policy BOTH robust (crash ~= the detector policy) AND accurate (track_err ~= the clean policy).
+
+run:
+  name: target_follow_tight
+
+task:
+  name: target_follow
+  episode_len: 600
+  motion: mixed
+  target_speed: 1.5
+  target_radius: 1.5
+  d_desired: 1.5
+  track_sigma: 0.35           # tightened from 0.6 — sharper standoff peak
+  fov_deg: 110.0
+  track_scale: 1.0
+  in_view_bonus: 0.5
+  center_scale: 0.3
+  over_distance_penalty: 0.5  # NEW: linear penalty on excess distance (d > d*) — kills the cheap back-off
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Same detector-ON seam DR as target_follow.yaml.
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 3.0
+  detector_range_frac: 0.10
+  detector_dropout_prob: 0.05
+  detector_fov_deg: 110.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100
