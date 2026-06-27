@@ -116,8 +116,9 @@ $("run").addEventListener("click", async () => {
     const doc = await loadRunByPath(summary.run_path);
     showRun(doc, summary);
     const m = summary.metrics || {};
-    const lap = m.best_lap_time != null ? `, best lap ${m.best_lap_time.toFixed(2)}s` : "";
-    $("status").textContent = `${summary.task} · ${summary.drone_count} drones · ${summary.course}${lap}`;
+    const lap = m.best_lap_time != null ? `, best ${m.best_lap_time.toFixed(2)}s` : "";
+    const laps = m.laps_per_drone != null ? `, ${m.laps_per_drone.toFixed(1)} laps/drone` : "";
+    $("status").textContent = `${summary.task} · ${summary.drone_count} drones · ${summary.course}${lap}${laps}`;
   } catch (err) {
     $("status").textContent = "";
     toast(`rollout failed: ${err.message}`, true);

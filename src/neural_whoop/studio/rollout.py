@@ -144,6 +144,21 @@ def studio_rollout(
     out_path = runs_dir / "studio" / f"{stem}.json.gz"
     recorder.save(out_path)
     rel = out_path.resolve().relative_to(runs_dir.resolve()).as_posix()
+
+    # Report only metrics that are MEANINGFUL for a single watched rollout. We run one long episode
+    # per drone (episode_len == max_steps) so the hero clip is continuous, but that makes the task's
+    # snapshot `lap_completion_rate`/`laps_completed_mean` (laps since the last crash) phase-sensitive
+    # and unfair — so we drop them and report episode_len-independent throughput instead:
+    # best_lap (a min), total gates passed, and laps-per-drone (= gate passes / gates / drones).
+    total_drones = n_envs * n_agents
+    gates_total = float(metrics.get("gates_passed_total", 0.0) or 0.0)
+    studio_metrics = {
+        "best_lap_time": metrics.get("best_lap_time"),
+        "oracle_lap_time": metrics.get("oracle_lap_time"),
+        "gates_passed_total": int(gates_total),
+        "laps_per_drone": gates_total / max(1, course_gates * total_drones),
+        "crash_rate_per_step": metrics.get("crash_rate_per_step"),
+    }
     summary = {
         "run_path": rel,
         "task": task_name,
@@ -151,6 +166,6 @@ def studio_rollout(
         "course": course_label,
         "num_gates": course_gates,
         "dr": bool(dr),
-        "metrics": {k: (None if v != v else v) for k, v in metrics.items()},  # NaN -> null
+        "metrics": {k: (None if isinstance(v, float) and v != v else v) for k, v in studio_metrics.items()},
     }
     return out_path, summary
