@@ -112,12 +112,15 @@ Taichi renderer (deferred — Blackwell camera path).
 `scripts/serve.py` (the `studio` extra: FastAPI + uvicorn) lists saved policies and courses, runs a
 **fixed-course** rollout on demand (`studio/rollout.py` → `evaluate_and_record(group=True)`, the
 same v2 group-episode path), and serves the replay to a static Three.js frontend that plays it back
-(3D wide + FPV/top-down, play/pause/scrub). You pick a **policy**, a **course** (a seeded
+(3D wide + **per-drone** FPV/top-down insets in movable/resizable PiP frames, play/pause/scrub, plus
+a policy-metadata panel and TensorBoard training charts parsed via the dependency-free
+`studio/tbscalars.py`). You pick a **policy**, a **course** (a seeded
 `assets/courses/*.yaml` or an arena **preset**), and a **drone count**. Drone-count maps to the
 substrate per the policy's task: `gate_race` → `n_envs = drone_count, n_agents = 1` (N independent
 racers sharing one fixed track); `swarm_race` → `n_envs = 1, n_agents = drone_count` (collision-aware
 shared-track swarm). The frontend loads three.js from a CDN importmap (no Node toolchain in this
-repo). The gate Editor + Metrics tabs from the lab studio are deferred. See `docs/STUDIO.md`.
+repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab from
+the lab studio is deferred. See `docs/STUDIO.md`.
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).

@@ -1,10 +1,16 @@
 # neural-whoop Studio
 
-An interactive browser viewer: pick a saved policy, a course, and a drone count, hit **Fly**, and
-watch the policy fly that course with playback controls (3D wide shot + FPV/top-down insets,
-play/pause/scrub). The successor to `neural-whoop-lab`'s studio, ported onto this repo's DiffAero
-env and the v2 group-replay contract. The first cut is the **Runs viewer + selectors**; the
-drag-to-place gate Editor and Metrics charts are deferred.
+An interactive browser viewer: pick a saved policy, a course, and a drone count, hit **Run**, and
+watch the policy fly that course with playback controls (3D wide shot + **per-drone onboard-FPV**
+and top-down insets, play/pause/scrub). The successor to `neural-whoop-lab`'s studio, ported onto
+this repo's DiffAero env and the v2 group-replay contract. The UI is a flat 2D style (custom-styled
+selects, rounded panels); the drag-to-place gate Editor is deferred.
+
+The sidebar surfaces a **policy** panel (task, creation date, training steps, obs/act dims, eval
+metrics) and a collapsible **training charts** panel (2D line plots parsed straight from the run's
+TensorBoard event file). The PiP camera frames are **movable** (drag the header) and **resizable**
+(drag the corner); FPV is split into **one box per drone** so multi-drone runs show every onboard
+view at once.
 
 ## Run it
 
@@ -18,14 +24,15 @@ Flags: `--host`, `--port`, `--device` (`cuda` default; `cpu` works for small rol
 
 Open the URL, choose:
 - **policy** — any `runs/*/ckpt_final.pt` (labelled with its task + best lap if an `eval.json` is
-  present);
+  present; picking one fills the policy metadata panel and loads its training charts);
 - **course** — a seeded `assets/courses/*.yaml` track, or an arena **preset** (`preset:tight` /
   `spread` / `big` / `giant`) that generates a fresh random course of that geometry;
 - **drones** — how many to fly (1–16); **gates** — gate count for preset courses; **DR** — toggle
   seam domain randomization.
 
-Hit **Fly**: the server runs the rollout on the GPU and streams back a replay the viewer plays.
-Transport: play/pause, scrub, speed, follow-cam, FPV inset, top-down inset, trail toggle.
+Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays.
+Transport: play/pause, scrub, speed, follow-cam, per-drone FPV insets, top-down inset, trail toggle.
+The FPV/top-down frames can be dragged (by their header) and resized (corner grip).
 
 ## Drone-count semantics
 
@@ -45,22 +52,27 @@ viewer renders them coexisting on the same gates, tinted per drone.
 
 | route                    | method | returns                                                            |
 |--------------------------|--------|--------------------------------------------------------------------|
-| `/api/policies`          | GET    | `[{path, name, task, obs_dim, step, best_lap}]` from `runs/*/ckpt_final.pt` |
+| `/api/policies`          | GET    | `[{path, name, run, task, obs_dim, act_dim, step, created, best_lap, eval, has_scalars}]` from `runs/*/ckpt_final.pt` (`created` = ckpt mtime epoch; `eval` = full `eval.json` when present) |
+| `/api/policies/{run}/scalars` | GET | `{run, tags: {tag: {steps, values}}}` — TensorBoard scalar curves for the run (downsampled; `{}` if no event file) |
 | `/api/courses`           | GET    | `{courses: [seeded YAML], presets: [arena presets]}`               |
 | `/api/rollout`           | POST   | `{policy, course, drone_count, dr, max_steps, n_gates, seed}` → run summary (sim-backed; single-flight, HTTP 409 if busy) |
 | `/api/runs/{path}`       | GET    | the replay `.json.gz` (octet-stream, path-jailed to `runs/`)       |
 | `/`                      | GET    | the static `web/studio/` frontend                                  |
 
 A module-level lock serializes rollouts (the batched GPU sim is not re-entrant). The GET listing
-routes import without torch/sim; only `/api/rollout` reaches the sim stack (lazily).
+routes import without torch/sim; only `/api/rollout` reaches the sim stack (lazily). The scalars
+route uses `studio/tbscalars.py`, a dependency-free TFRecord/protobuf scalar reader (validated
+against `tbparse`) — so charts need no extra deps beyond the `studio` extra.
 
 ## Frontend (`web/studio/`)
 
 Static ES modules; three.js + OrbitControls load from a jsDelivr **importmap** (no Node toolchain in
 this repo). `scene.js`/`geometry.js`/`drone-model.js` are ported near-verbatim from the lab;
-`playback.js` is adapted to the v2 `drones[]` group (one tinted actor per drone, a hero actor drives
-the HUD + cameras — the same approach as `../nw-viz/src/viewer.js`); `main.js` wires the selectors,
-the Fly button, and the transport.
+`playback.js` is adapted to the v2 `drones[]` group (one tinted actor per drone, **each with its own
+onboard FPV camera**; a hero actor drives the HUD + top-down cam — the same approach as
+`../nw-viz/src/viewer.js`); `main.js` wires the selectors, the Run button, the transport, the policy
+metadata panel, the canvas line charts (from `/api/policies/{run}/scalars`), and the
+movable/resizable PiP frames (one FPV box per drone, built on each run).
 
 ## Courses on disk
 

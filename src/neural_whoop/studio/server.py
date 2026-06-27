@@ -71,6 +71,16 @@ def create_app(
             "presets": courses_mod.list_presets(),
         }
 
+    # ----------------------------------------------------------------- training scalars (TB)
+    @app.get("/api/policies/{run}/scalars")
+    def get_scalars(run: str) -> dict:
+        from neural_whoop.studio import tbscalars
+
+        run_dir = (runs_dir / run).resolve()
+        if not run_dir.is_relative_to(runs_dir) or not run_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"no such run: {run!r}")
+        return {"run": run, "tags": tbscalars.run_scalars(run_dir)}
+
     # ----------------------------------------------------------------- runs (replay files)
     @app.get("/api/runs/{path:path}")
     def get_run(path: str) -> FileResponse:
@@ -144,31 +154,48 @@ def _resolve_run(runs_dir: Path, rel: str) -> Path:
 
 
 def _list_policies(runs_dir: Path, root: Path) -> list[dict]:
-    """List ``runs/*/ckpt_final.pt`` policies with their meta (task, obs_dim, step, best_lap)."""
+    """List ``runs/*/ckpt_final.pt`` policies with display metadata.
+
+    Each entry carries enough for the Studio's policy panel to render without a second round-trip:
+    ``task``/``obs_dim``/``act_dim``/``step`` from the meta sidecar, ``created`` (checkpoint mtime,
+    epoch seconds), the full ``eval`` metrics dict when an ``eval.json`` exists (``best_lap`` kept as
+    a flat convenience for the selector label), and ``has_scalars`` so the UI knows whether to offer
+    training charts.
+    """
     out: list[dict] = []
     if not runs_dir.exists():
         return out
     for ckpt in sorted(runs_dir.glob("*/ckpt_final.pt")):
         run_name = ckpt.parent.name
-        info: dict = {"path": _rel(ckpt, root), "name": run_name,
-                      "task": "gate_race", "obs_dim": None, "step": None, "best_lap": None}
+        info: dict = {
+            "path": _rel(ckpt, root), "name": run_name, "run": run_name,
+            "task": "gate_race", "obs_dim": None, "act_dim": None, "step": None,
+            "best_lap": None, "eval": None, "created": None, "has_scalars": False,
+        }
+        try:
+            info["created"] = ckpt.stat().st_mtime
+        except OSError:
+            pass
         meta_path = ckpt.with_suffix(ckpt.suffix + ".meta.json")
         if meta_path.is_file():
             try:
                 m = json.loads(meta_path.read_text())
-                info.update(task=m.get("task", "gate_race"),
-                            obs_dim=m.get("obs_dim"), step=m.get("step"))
+                info.update(task=m.get("task", "gate_race"), obs_dim=m.get("obs_dim"),
+                            act_dim=m.get("act_dim"), step=m.get("step"))
             except Exception:  # noqa: BLE001 - skip an unreadable sidecar
                 pass
-        # Best lap from a recorded eval.json, if present (runs/<run>/eval.json or viz/eval.json).
+        # Eval metrics from a recorded eval.json (runs/<run>/eval.json or viz/eval.json).
         for cand in (ckpt.parent / "eval.json", ckpt.parent / "viz" / "eval.json"):
             if cand.is_file():
                 try:
-                    bl = json.loads(cand.read_text()).get("best_lap_time")
+                    ev = json.loads(cand.read_text())
+                    info["eval"] = ev
+                    bl = ev.get("best_lap_time")
                     if bl is not None:
                         info["best_lap"] = float(bl)
-                        break
+                    break
                 except Exception:  # noqa: BLE001
                     pass
+        info["has_scalars"] = any(ckpt.parent.glob("events.out.tfevents.*"))
         out.append(info)
     return out

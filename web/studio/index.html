@@ -7,9 +7,12 @@
   <style>
     :root {
       /* Greyscale only — blacks / whites / tones of grey, no colour tint. */
-      --bg: #141414; --panel: #1c1c1c; --panel-2: #232323; --line: #383838;
-      --fg: #ececec; --muted: #9a9a9a; --accent: #d6d6d6; --accent-dim: #8c8c8c;
-      --on: #f2f2f2; --error: #c8c8c8;
+      --bg: #141414; --panel: #1b1b1b; --panel-2: #242424; --panel-3: #2c2c2c;
+      --line: #3a3a3a; --line-strong: #4a4a4a;
+      --fg: #ededed; --muted: #9a9a9a; --accent: #dcdcdc; --accent-dim: #8c8c8c;
+      --on: #f4f4f4;
+      --radius: 11px; --radius-sm: 8px;
+      --bw: 1.5px;                 /* base border weight — deliberately not hairline */
       --font: Calibri, "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
     }
     * { box-sizing: border-box; }
@@ -17,44 +20,74 @@
       font: 14px/1.45 var(--font); background: var(--bg); color: var(--fg); }
     canvas { display: block; }
     button, select, input { font: inherit; }
-    input[type=checkbox], input[type=range] { accent-color: var(--accent-dim); }
-    .btn { background: var(--panel-2); color: var(--fg); border: 1px solid var(--line);
-      border-radius: 6px; padding: 7px 13px; cursor: pointer; }
-    .btn:hover { border-color: var(--accent); }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn.primary { background: #2e2e2e; border-color: var(--accent); color: var(--on); font-weight: 600; }
-    .btn.block { width: 100%; padding: 9px; }
-    select, input[type=number] { width: 100%; background: var(--panel-2); color: var(--fg);
-      border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
-    input[type=number] { width: 100%; }
+    input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; }
+    input[type=range] { accent-color: var(--accent); }
+
+    /* Flat 2D controls — rounded, solid borders, no native chrome. */
+    .btn { background: var(--panel-2); color: var(--fg); border: var(--bw) solid var(--line);
+      border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; transition: border-color .12s, background .12s; }
+    .btn:hover { border-color: var(--line-strong); background: var(--panel-3); }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+    .btn.primary { background: var(--panel-3); border-color: var(--accent-dim); color: var(--on); font-weight: 600; }
+    .btn.primary:hover { border-color: var(--accent); }
+    .btn.block { width: 100%; padding: 10px; }
+
+    /* Custom-styled <select>: kill the native 3D dropdown look, draw our own flat chevron. */
+    select { appearance: none; -webkit-appearance: none; -moz-appearance: none;
+      background-color: var(--panel-2); color: var(--fg);
+      border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
+      padding: 8px 30px 8px 10px; width: 100%; cursor: pointer;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%239a9a9a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+      background-repeat: no-repeat; background-position: right 10px center; }
+    select:hover { border-color: var(--line-strong); }
+    select:focus { outline: none; border-color: var(--accent-dim); }
+    select option, select optgroup { background: var(--panel-2); color: var(--fg); }
+    input[type=number], input[type=text] { width: 100%; background: var(--panel-2); color: var(--fg);
+      border: var(--bw) solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; }
+    input[type=number]:focus, input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
 
     #shell { position: fixed; inset: 0; display: flex; }
     #view { position: relative; flex: 1; min-width: 0; }
     .view3d { position: absolute; inset: 0; }
 
-    /* Right control sidebar (replaces the old top + bottom bars). */
-    #sidebar { width: 340px; flex: none; height: 100%; overflow-y: auto;
-      background: var(--panel); border-left: 1px solid var(--line);
+    /* Right control sidebar. */
+    #sidebar { width: 348px; flex: none; height: 100%; overflow-y: auto;
+      background: var(--panel); border-left: var(--bw) solid var(--line);
       display: flex; flex-direction: column; }
-    #sidebar .brand { padding: 14px 16px; font-weight: 700; letter-spacing: .2px;
-      color: var(--fg); border-bottom: 1px solid var(--line); }
+    #sidebar .brand { padding: 15px 16px; font-weight: 700; letter-spacing: .2px;
+      color: var(--fg); border-bottom: var(--bw) solid var(--line); }
     #sidebar .brand small { color: var(--muted); font-weight: 400; }
-    .section { padding: 14px 16px; border-bottom: 1px solid var(--line);
-      display: flex; flex-direction: column; gap: 10px; }
+    .section { padding: 15px 16px; border-bottom: var(--bw) solid var(--line);
+      display: flex; flex-direction: column; gap: 11px; }
     .section h4 { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
-      color: var(--muted); font-weight: 600; }
-    .field { display: flex; flex-direction: column; gap: 4px; }
+      color: var(--muted); font-weight: 700; }
+    .field { display: flex; flex-direction: column; gap: 5px; }
     .field > span { color: var(--muted); font-size: 12px; }
-    .row2 { display: flex; gap: 10px; }
+    .row2 { display: flex; gap: 11px; }
     .row2 > * { flex: 1; }
-    .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
     .chk input { width: auto; }
-    .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+    .toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 11px; }
     .status { color: var(--muted); font-size: 12px; min-height: 16px; }
 
+    /* Collapsible section (flat, custom chevron — no native <details> triangle). */
+    details.fold { border: none; }
+    details.fold > summary { list-style: none; cursor: pointer; display: flex; align-items: center;
+      justify-content: space-between; gap: 8px; }
+    details.fold > summary::-webkit-details-marker { display: none; }
+    details.fold > summary .chev { color: var(--muted); transition: transform .15s;
+      font-size: 11px; }
+    details.fold[open] > summary .chev { transform: rotate(90deg); }
+    .fold-body { display: flex; flex-direction: column; gap: 11px; padding-top: 12px; }
+
+    /* Key/value meta rows. */
+    .kv { display: flex; justify-content: space-between; gap: 16px; padding: 2px 0; font-size: 13px; }
+    .kv .k { color: var(--muted); } .kv .v { color: var(--fg); font-variant-numeric: tabular-nums;
+      text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 62%; }
+
     /* Transport. */
-    .scrub { width: 100%; accent-color: var(--accent); }
-    .transport { display: flex; align-items: center; gap: 10px; }
+    .scrub { width: 100%; }
+    .transport { display: flex; align-items: center; gap: 11px; }
     .time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
     .spacer { flex: 1; }
 
@@ -64,17 +97,36 @@
     .hud .title { color: var(--fg); margin-bottom: 6px; font-weight: 600;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-    /* PiP camera frames (FPV + top-down), overlaid on the 3D view, on by default. */
-    .cam-frame { position: absolute; top: 12px; left: 12px; width: 300px; height: 169px;
-      border: 1px solid var(--line); border-radius: 7px; pointer-events: none;
-      box-shadow: 0 6px 20px #0007; overflow: hidden; }
-    .cam-frame.top { top: 193px; left: 12px; width: 200px; height: 200px; }
-    .cam-label { position: absolute; top: 4px; left: 8px; z-index: 2; color: var(--accent);
-      font-size: 11px; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
+    /* Training charts — small 2D line plots. */
+    .charts { display: flex; flex-direction: column; gap: 12px; }
+    .chart { display: flex; flex-direction: column; gap: 4px; }
+    .chart .clabel { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted);
+      letter-spacing: .3px; }
+    .chart .clabel b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+    .chart canvas { width: 100%; height: 78px; background: var(--panel-2);
+      border: var(--bw) solid var(--line); border-radius: var(--radius-sm); }
+    .charts-empty { color: var(--muted); font-size: 12px; }
+
+    /* PiP camera frames (FPV-per-drone + top-down): movable + resizable overlays on the 3D view.
+       The body is transparent — the camera image is scissor-rendered onto the main canvas behind
+       it; only the frame chrome (border + drag header) is DOM. */
+    .cam-frame { position: absolute; display: flex; flex-direction: column;
+      border: var(--bw) solid var(--line-strong); border-radius: var(--radius); overflow: hidden;
+      background: transparent; resize: both; min-width: 130px; min-height: 100px;
+      box-shadow: 0 4px 16px #0007; }
+    .cam-frame.dragging { opacity: .92; }
+    .cam-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 5px 9px; cursor: move; user-select: none; font-size: 11px; letter-spacing: 1px;
+      color: var(--accent); background: rgba(18,18,18,.78); border-bottom: var(--bw) solid var(--line); }
+    .cam-head .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+    .cam-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* Body clicks pass through to the canvas (so you can still orbit the scene under a frame);
+       the header drags, and the frame's own bottom-right corner resizes. */
+    .cam-body { flex: 1; min-height: 0; pointer-events: none; }
 
     .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
-      background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px;
-      padding: 9px 14px; z-index: 50; max-width: 70vw; color: var(--fg); }
+      background: var(--panel-2); border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
+      padding: 10px 15px; z-index: 50; max-width: 70vw; color: var(--fg); }
     .toast.err { border-color: var(--accent); }
     .spin { display: inline-block; animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -85,8 +137,13 @@
   <div id="shell">
     <div id="view">
       <div class="view3d"></div>
-      <div class="cam-frame" data-h="fpvframe"><span class="cam-label">FPV · onboard</span></div>
-      <div class="cam-frame top" data-h="topframe"><span class="cam-label">top-down</span></div>
+      <!-- FPV frames are created per-drone at run time, into here. -->
+      <div data-h="fpvframes"></div>
+      <!-- Single top-down frame (movable + resizable), same default size as an FPV frame. -->
+      <div class="cam-frame" data-h="topframe" style="right: 12px; top: 12px; width: 240px; height: 168px;">
+        <div class="cam-head" data-drag><span class="name">top-down</span></div>
+        <div class="cam-body" data-h="topbody"></div>
+      </div>
     </div>
 
     <div id="sidebar">
@@ -103,6 +160,16 @@
         <label class="chk"><input data-h="dr" type="checkbox" /> domain randomization</label>
         <button class="btn primary block" data-h="run">▶ Run</button>
         <div class="status" data-h="status"></div>
+      </div>
+
+      <!-- Policy metadata: what this policy is, when it was made, how it evals. -->
+      <div class="section">
+        <details class="fold" data-h="metafold" open>
+          <summary><h4 style="margin:0">policy</h4><span class="chev">▶</span></summary>
+          <div class="fold-body" data-h="meta">
+            <div class="charts-empty">pick a policy to see its details.</div>
+          </div>
+        </details>
       </div>
 
       <div class="section">
@@ -122,7 +189,7 @@
         </label>
         <div class="toggles">
           <label class="chk"><input type="checkbox" data-h="follow" /> follow cam</label>
-          <label class="chk"><input type="checkbox" data-h="fpv" checked /> FPV</label>
+          <label class="chk"><input type="checkbox" data-h="fpv" checked /> FPV (per drone)</label>
           <label class="chk"><input type="checkbox" data-h="top" checked /> top-down</label>
           <label class="chk"><input type="checkbox" data-h="trail" checked /> trail</label>
         </div>
@@ -136,6 +203,18 @@
         <div class="row"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
         <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
         <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
+      </div>
+
+      <!-- Training curves parsed from the run's TensorBoard event file. -->
+      <div class="section">
+        <details class="fold" data-h="chartfold">
+          <summary><h4 style="margin:0">training charts</h4><span class="chev">▶</span></summary>
+          <div class="fold-body">
+            <div class="charts" data-h="charts">
+              <div class="charts-empty">pick a policy to load its training curves.</div>
+            </div>
+          </div>
+        </details>
       </div>
     </div>
   </div>

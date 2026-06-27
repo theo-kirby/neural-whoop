@@ -161,3 +161,49 @@ def test_api_lists_policies_and_courses(tmp_path):
     courses = client.get("/api/courses").json()
     assert any(c["name"] == "spread-a" for c in courses["courses"])
     assert any(c["kind"] == "preset" for c in courses["presets"])
+
+
+def test_api_policy_metadata_and_scalars(tmp_path):
+    from fastapi.testclient import TestClient
+
+    runs_dir = tmp_path / "repo" / "runs"
+    _make_ckpt(runs_dir, "gate_race", n_gates=5)        # -> runs/gate_race/ckpt_final.pt
+    courses_dir = tmp_path / "repo" / "assets" / "courses"
+    courses_dir.mkdir(parents=True)
+
+    from neural_whoop.studio.server import create_app
+
+    app = create_app(repo_root=tmp_path / "repo", runs_dir=runs_dir,
+                     courses_dir=courses_dir, device="cpu")
+    client = TestClient(app)
+
+    p = next(x for x in client.get("/api/policies").json() if x["name"] == "gate_race")
+    # The enriched metadata the Studio's policy panel renders.
+    for key in ("run", "created", "act_dim", "obs_dim", "step", "eval", "has_scalars"):
+        assert key in p
+    assert p["created"] is not None                     # checkpoint mtime
+    assert p["has_scalars"] is False                    # no event file in this fixture
+
+    # Scalars route: empty (no event file) for a real run, 404 for a bogus one.
+    sc = client.get("/api/policies/gate_race/scalars").json()
+    assert sc["run"] == "gate_race" and sc["tags"] == {}
+    assert client.get("/api/policies/nope/scalars").status_code == 404
+
+
+def test_tbscalars_reads_real_event_file(tmp_path):
+    # The dependency-free TB reader round-trips a file written by torch's SummaryWriter.
+    from torch.utils.tensorboard import SummaryWriter
+
+    from neural_whoop.studio import tbscalars
+
+    with SummaryWriter(log_dir=str(tmp_path)) as w:
+        for step in range(20):
+            w.add_scalar("charts/episodic_return", float(step) * 1.5, step)
+            w.add_scalar("losses/value", 10.0 - step, step)
+
+    out = tbscalars.run_scalars(tmp_path)
+    assert set(out) == {"charts/episodic_return", "losses/value"}
+    er = out["charts/episodic_return"]
+    assert len(er["steps"]) == 20
+    assert er["steps"][-1] == 19
+    assert abs(er["values"][-1] - 19 * 1.5) < 1e-3

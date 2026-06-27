@@ -56,10 +56,12 @@ export class Playback {
     this._q2 = new THREE.Quaternion();
     this._followPos = new THREE.Vector3();
     this._fpvOff = new THREE.Vector3();
-    // Hero-mounted FPV camera (wide, rolls with the body) + a top-down chase cam.
-    this.fpvCamera = new THREE.PerspectiveCamera(95, 16 / 9, 0.02, 400);
+    // Each drone gets its OWN body-mounted FPV camera (built per-episode, one per actor — see
+    // setEpisode); the top-down chase cam tracks the hero. fpvCamera aliases the hero's FPV.
     this.topCamera = new THREE.PerspectiveCamera(55, 1, 0.05, 400);
   }
+
+  get fpvCamera() { return this.actors[this.heroIdx]?.fpvCamera; }
 
   get heroFrames() { return this.actors[this.heroIdx]?.frames || []; }
   get maxFrames() { return this.actors.reduce((m, a) => Math.max(m, a.frames.length), 0); }
@@ -78,7 +80,9 @@ export class Playback {
       this.view.world.add(glyph);
       const frames = t.frames || [];
       const trail = frames.length ? buildTrail(this.view.world, frames) : null;
-      return { glyph, frames, trail, tint };
+      // One onboard camera per drone (wide, rolls with its body) so every FPV inset is independent.
+      const fpvCamera = new THREE.PerspectiveCamera(95, 16 / 9, 0.02, 400);
+      return { glyph, frames, trail, tint, fpvCamera };
     });
     this.heroIdx = heroTrackIndex(tracks);
     this.idx = 0;
@@ -125,6 +129,7 @@ export class Playback {
       a.glyph.position.set(f.pos[0], f.pos[1], f.pos[2]);
       a.glyph.quaternion.set(f.quat[0], f.quat[1], f.quat[2], f.quat[3]);
       if (a.trail) a.trail.done.geometry.setDrawRange(0, i + 1);
+      this._updateFpv(a.glyph, a.fpvCamera);   // each drone's onboard cam follows its own body
     }
     const hero = this.actors[this.heroIdx];
     const hi = Math.max(0, Math.min(hero.frames.length - 1, Math.floor(idx)));
@@ -137,18 +142,24 @@ export class Playback {
       line.material.opacity = state === "next" ? 1.0 : 0.18;
       line.scale.setScalar(state === "next" ? 1.08 : 1.0);
     }
-    this._updateCams(hero.glyph, hf);
+    this._updateTop(hero.glyph);
     if (this.follow) this._followCam(hf);
     if (this.onFrame) this.onFrame(hf, hi);
   }
 
-  _updateCams(glyph, f) {
+  // Position one drone's onboard FPV camera at its nose, rolling with the body.
+  _updateFpv(glyph, cam) {
     glyph.updateWorldMatrix(true, false);
     const dq = glyph.getWorldQuaternion(this._q2);
     const dp = this._v.setFromMatrixPosition(glyph.matrixWorld);
-    this.fpvCamera.position.copy(dp).add(this._fpvOff.copy(FPV_OFFSET).applyQuaternion(dq));
-    this.fpvCamera.quaternion.copy(dq).multiply(BODY_TO_CAM);
-    // Top-down: straight above the hero, looking down, heading-up.
+    cam.position.copy(dp).add(this._fpvOff.copy(FPV_OFFSET).applyQuaternion(dq));
+    cam.quaternion.copy(dq).multiply(BODY_TO_CAM);
+  }
+
+  // Top-down chase cam: straight above the hero, looking down, heading-up.
+  _updateTop(glyph) {
+    glyph.updateWorldMatrix(true, false);
+    const dp = this._v.setFromMatrixPosition(glyph.matrixWorld);
     this.topCamera.position.copy(dp).addScaledVector(UP_Y, 8);
     this.topCamera.up.set(0, 0, -1).applyMatrix4(this.view.world.matrixWorld).normalize();
     this.topCamera.lookAt(dp);

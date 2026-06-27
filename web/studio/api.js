@@ -15,6 +15,10 @@ async function jsonOrThrow(res) {
 export const getPolicies = () => fetch("/api/policies").then(jsonOrThrow);
 export const getCourses = () => fetch("/api/courses").then(jsonOrThrow);
 
+// Training scalars (TensorBoard curves) for a run dir name -> { run, tags: {tag: {steps, values}} }.
+export const getScalars = (run) =>
+  fetch(`/api/policies/${encodeURIComponent(run)}/scalars`).then(jsonOrThrow);
+
 export const postRollout = (req) =>
   fetch("/api/rollout", {
     method: "POST", headers: { "Content-Type": "application/json" },
