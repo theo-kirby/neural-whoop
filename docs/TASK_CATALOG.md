@@ -35,8 +35,13 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   motion field. **First empirical result (Flywheel `cool-resonance-0983`, MIXED/Pareto):**
   detector-training gives condition-invariance + ~65× fewer crashes under noise, but bought it by
   backing off (2.17 m vs d*=1.5 m); the naive oracle policy does *not* lose the target under noise
-  (in-view 0.996) — the gap is crash-rate, not tracking. Open follow-up `old-leaf-3989` (tighter
-  standoff reward). Honest camera-only eval via the DiffAero depth render remains a later hook.
+  (in-view 0.996) — the gap is crash-rate, not tracking. The tighter-standoff-reward follow-up
+  (`old-leaf-3989`) was **refuted** (`royal-wildflower-3231`, RED): tightening only nudged standoff
+  2.17→1.97 m and only by spending crash-robustness (~8×) — the back-off is a genuine
+  **robustness↔accuracy frontier set by the perception, not a reward artifact** (same shape as the
+  racing tight↔big Pareto). To move it (not slide along it): better in-sim perception (wider FOV /
+  lower dropout / temporal filtering) or a risk-budget objective. Honest camera-only eval via the
+  DiffAero depth render remains a later hook.
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
