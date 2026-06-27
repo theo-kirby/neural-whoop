@@ -70,14 +70,25 @@ actually did: per-step hero telemetry + the contract metadata to interpret it. `
 pure stdlib+numpy (imports without the sim/viz extras); `viz/render.py` is lazily-imported (the
 `viz` extra: matplotlib + Pillow + tbparse) and turns a replay into Flywheel-native PNG/CSV
 artifacts. Recording is **hero-subset** (full frames for a few drones; aggregate metrics over the
-full population) and the training path stays render-free. The same JSON shape feeds the lab's
-`web/replay-viewer/` Three.js viewer **and** the sibling **`../nw-viz/`** project
-(`theo-kirby/nw-viz`) — a standalone pure-JS/Three.js tool (no Node in this repo) that renders a
-replay into a composited **hero MP4**: a fixed wide 3D course shot plus synced onboard-FPV and
-top-down picture-in-picture insets, captured headlessly (Playwright + SwiftShader → ffmpeg). It
-consumes the locked replay contract unchanged; `scripts/viz.py --video` optionally shells out to it
-(non-fatal if absent). `render_depth` is a documented stub for the future DiffAero Taichi renderer
-(deferred — Blackwell camera path).
+full population) and the training path stays render-free. The same JSON shape feeds the in-repo
+**Studio** (`web/studio/`, served by `scripts/serve.py` — see below) **and** the sibling
+**`../nw-viz/`** project (`theo-kirby/nw-viz`) — a standalone pure-JS/Three.js tool (no Node in this
+repo) that renders a replay into a composited **hero MP4**: a fixed wide 3D course shot plus synced
+onboard-FPV and top-down picture-in-picture insets, captured headlessly (Playwright + SwiftShader →
+ffmpeg). It consumes the locked replay contract unchanged; `scripts/viz.py --video` optionally
+shells out to it (non-fatal if absent). `render_depth` is a documented stub for the future DiffAero
+Taichi renderer (deferred — Blackwell camera path).
+
+**Studio (`web/studio/` + `src/neural_whoop/studio/`).** An interactive browser viewer:
+`scripts/serve.py` (the `studio` extra: FastAPI + uvicorn) lists saved policies and courses, runs a
+**fixed-course** rollout on demand (`studio/rollout.py` → `evaluate_and_record(group=True)`, the
+same v2 group-episode path), and serves the replay to a static Three.js frontend that plays it back
+(3D wide + FPV/top-down, play/pause/scrub). You pick a **policy**, a **course** (a seeded
+`assets/courses/*.yaml` or an arena **preset**), and a **drone count**. Drone-count maps to the
+substrate per the policy's task: `gate_race` → `n_envs = drone_count, n_agents = 1` (N independent
+racers sharing one fixed track); `swarm_race` → `n_envs = 1, n_agents = drone_count` (collision-aware
+shared-track swarm). The frontend loads three.js from a CDN importmap (no Node toolchain in this
+repo). The gate Editor + Metrics tabs from the lab studio are deferred. See `docs/STUDIO.md`.
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).
@@ -150,7 +161,18 @@ events → no curves; no `--baseline` → no comparison).
 # Hero MP4 (3D wide shot + FPV/top-down PiP) via the sibling nw-viz project (one-time: cd ../nw-viz && npm install):
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
 cd ../nw-viz && node capture.mjs --replay ../neural-whoop/runs/<run>/replay.json.gz --out out/<run>.mp4  # or directly
+
+# Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
+uv pip install -e '.[studio]'                       # FastAPI + uvicorn
+uv run python scripts/seed_courses.py               # (once) seed bigger assets/courses/*.yaml
+uv run python scripts/serve.py                      # -> http://127.0.0.1:8000
 ```
+
+**Course geometry knobs.** `gate_race`/`swarm_race` configs now surface `step_min`/`step_max`
+(inter-gate hop, m) + `max_turn_deg` alongside `arena_radius`/`z_*`/`bound_*`. Defaults (1.5/2.8 m)
+reproduce the tight indoor track; raise them with a bigger `arena_radius`/`bound_xy` for spread-out
+courses (`configs/gate_race_spread.yaml`). `neural_whoop.course.ARENA_PRESETS`
+(`tight`/`spread`/`big`/`giant`) packages matched radius+hop sets for the Studio + `seed_courses.py`.
 
 ## Adding a task (the main extension point)
 

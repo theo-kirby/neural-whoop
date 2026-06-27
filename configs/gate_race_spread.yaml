@@ -1,0 +1,66 @@
+# Spread-course gate racing: same single-drone task as gate_race, but gates placed FAR apart
+# (step_min/step_max 3.0/5.5 m vs the tight 1.5/2.8) inside a bigger arena. Tests whether the
+# tiny policy still finds a fast racing line when consecutive gates demand real cruise legs
+# between them rather than tight back-to-back turns. Set up for the autonomous loop (Part F);
+# not yet run to convergence. Builds on gate_race ([128,128]@120M).
+
+run:
+  name: gate_race_spread
+
+task:
+  name: gate_race
+  n_gates: 6
+  episode_len: 900        # steps; dt=0.02s -> 18s episodes (longer legs -> longer laps)
+  v_ref: 4.0
+  gate_radius: 0.45
+  progress_scale: 1.0
+  gate_bonus: 5.0
+  lap_bonus: 20.0
+  crash_penalty: 10.0
+  time_penalty: 0.05
+  smoothness_penalty: 0.001
+  # Spread geometry: bigger arena + wider gate hops, with crash bounds widened to match.
+  arena_radius: 8.0
+  step_min: 3.0
+  step_max: 5.5
+  z_min: 0.7
+  z_max: 3.0
+  bound_xy: 10.0
+  bound_z_min: 0.15
+  bound_z_max: 5.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Seam-level domain randomization (airframe DR is always on inside the dynamics).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 0.0
+  detector_dropout_prob: 0.0
+  detector_fov_deg: 360.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

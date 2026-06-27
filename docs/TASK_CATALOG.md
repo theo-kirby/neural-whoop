@@ -79,7 +79,13 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 ### 🧊 Deferred branches
 - **Photoreal RGB / Isaac Lab** vision: revisit when Isaac's tiled-camera Blackwell bug (#4951) is
   fixed. Until then, camera tasks train render-free and eval on DiffAero depth.
-- **Web studio** (`web/`, `api/` from the lab): a later branch; not needed for the RL loop.
+- **Web studio** (`web/studio/` + `src/neural_whoop/studio/`): **shipped** (first cut) — a
+  FastAPI + Three.js viewer to watch saved policies fly selectable courses with a chosen drone
+  count (`scripts/serve.py`, `docs/STUDIO.md`). The drag-to-place gate **Editor** and **Metrics**
+  charts from the lab studio remain deferred.
+- **Spread courses**: gate spacing is now a config knob (`step_min`/`step_max`/`max_turn_deg`) +
+  `ARENA_PRESETS`; `configs/gate_race_spread.yaml` trains on far-apart gates (oracle lap ~7 s vs
+  ~3–4 s tight). Set up for the autonomous loop; not yet run to convergence.
 
 ---
 
