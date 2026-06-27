@@ -89,6 +89,22 @@ def test_swarm_rollout_shares_one_course(tmp_path):
         assert len(d["frames"]) > 0
 
 
+def test_scale_curriculum_grows_course_range():
+    # With a curriculum, early training (progress~0) draws only tight courses; late training
+    # (progress >= scale_curriculum_frac) opens the full tight->big range.
+    task = make_task("gate_race", scale_randomize=True, scale_curriculum_frac=0.5,
+                     n_gates=5, bound_xy=14.0, bound_z_max=5.0)
+    env = MultiAgentDroneEnv(task, n_envs=512, device="cpu", seed=0)
+    env.set_course_scale(0.0)
+    env.reset_all()
+    early = task.gate_pos[..., :2].norm(dim=-1).max().item()
+    env.set_course_scale(1.0)
+    env.reset_all()
+    late = task.gate_pos[..., :2].norm(dim=-1).max().item()
+    assert early < 6.0          # tight-only early (radius ~4.5)
+    assert late > early + 3.0   # range widened toward big (radius up to ~12)
+
+
 def test_seeded_course_roundtrip(tmp_path):
     # A course saved to YAML loads back to tensors the env can fly.
     course = {"name": "t", "gates": [

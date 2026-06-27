@@ -82,6 +82,11 @@ class MultiAgentDroneEnv:
         # of per-env random courses — set by the Studio rollout so a chosen track is flown. The
         # default (``None``) keeps the training path on procedurally-generated per-env courses.
         self.fixed_course: tuple[Tensor, Tensor] | None = None
+        # Course-scale curriculum progress in ``[0, 1]`` (1.0 = full configured scale range). The
+        # trainer ramps this 0->1 over training; a scale-randomizing task reads it to grow the
+        # course-size range from tight to full. Default 1.0 -> no curriculum effect (eval / non-
+        # curriculum runs see the full range).
+        self.course_scale_progress = 1.0
 
         self.task.setup(self)
         self.reset_all()
@@ -130,6 +135,15 @@ class MultiAgentDroneEnv:
         early learning. Takes effect per-drone on the next reset (and immediately for obs noise).
         """
         self.dr.scale = float(min(1.0, max(0.0, scale)))
+
+    def set_course_scale(self, frac: float) -> None:
+        """Set the course-scale curriculum progress in ``[0, 1]`` (1.0 = full configured range).
+
+        A scale-randomizing task reads this on reset to grow the sampled course-size range from
+        tight toward full, so early training masters the small (high-value) regime before the big
+        cruise-and-brake courses are added. Takes effect on the next reset.
+        """
+        self.course_scale_progress = float(min(1.0, max(0.0, frac)))
 
     # --- observation (with optional frame stacking) ---
     def _raw_obs(self) -> Tensor:

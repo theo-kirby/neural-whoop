@@ -1,0 +1,73 @@
+# Scale-generalist gate racing WITH A CURRICULUM: same as gate_race_general, but the course-size
+# range grows tight->big over the first 50% of training (scale_curriculum_frac), so the policy masters
+# tight courses first. Aims to recover the ~0.07 tight-completion tax the full-range generalist paid.
+# Base (no curriculum):
+# via per-episode scale randomization, so it flies far-apart "cruise-and-brake" courses as well as
+# tight back-to-back turns. Motivated by the studio: the [128,128]@120M tight baseline is 0.95
+# completion on tight courses but degrades to 0.49 (big) / 0.21 (giant) — it never trained on
+# spread geometry. This run mixes arena radius 4.5->12 m (gate hops 1.5->7.5 m) per episode.
+# Same net + 120M budget as the racing baseline; the only change is the course distribution.
+
+run:
+  name: gate_race_general_curric
+
+task:
+  name: gate_race
+  n_gates: 5
+  episode_len: 900        # steps; dt=0.02 -> 18s, room for a couple laps even on big courses
+  v_ref: 4.0
+  gate_radius: 0.45
+  progress_scale: 1.0
+  gate_bonus: 5.0
+  lap_bonus: 20.0
+  crash_penalty: 10.0
+  time_penalty: 0.05
+  smoothness_penalty: 0.001
+  # Scale-randomization curriculum (tight -> big). Crash bounds cover the largest scale.
+  scale_randomize: true
+  scale_radius_min: 4.5
+  scale_radius_max: 12.0
+  scale_step_ratio_min: 0.34
+  scale_step_ratio_max: 0.62
+  scale_z_max_min: 2.3
+  scale_z_max_max: 3.5
+  scale_curriculum_frac: 0.5   # ramp tight->big over the first 50% of training (trim the tight tax)
+  bound_xy: 14.0
+  bound_z_min: 0.15
+  bound_z_max: 5.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Seam-level domain randomization (airframe DR is always on inside the dynamics).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 0.0
+  detector_dropout_prob: 0.0
+  detector_fov_deg: 360.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

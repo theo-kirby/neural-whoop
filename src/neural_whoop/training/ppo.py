@@ -161,6 +161,8 @@ def train_ppo(
         if cfg.dr_curriculum_frac > 0.0:
             dr_scale = min(1.0, global_step / max(1.0, cfg.dr_curriculum_frac * cfg.total_steps))
             env.set_dr_scale(dr_scale)
+        # Course-scale curriculum progress (the task decides whether to use it). Linear in training.
+        env.set_course_scale(global_step / max(1.0, cfg.total_steps))
 
         for step in range(cfg.num_steps):
             obs_buf[step] = next_obs

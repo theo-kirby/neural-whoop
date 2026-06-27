@@ -84,6 +84,11 @@ class GateRaceConfig:
     scale_step_ratio_max: float = 0.62   # step_max = ratio * radius
     scale_z_max_min: float = 2.3
     scale_z_max_max: float = 3.5
+    # Scale curriculum (default 0 = full range from step 0). When >0, the sampled MAX radius grows
+    # from scale_radius_min (tight only) to scale_radius_max (full) over this fraction of training,
+    # so the policy masters tight courses first, then extends to big — trims the tight tax that
+    # full-range-from-scratch incurs. The trainer feeds progress via env.set_course_scale().
+    scale_curriculum_frac: float = 0.0
     # Crash bounds.
     bound_xy: float = 6.0
     bound_z_min: float = 0.15
@@ -145,10 +150,15 @@ class GateRaceTask(DroneTask):
             rad = fc[1].to(self._dev).unsqueeze(0).expand(k, -1).clone()
         elif c.scale_randomize:
             # Per-env random course SCALE (the generalist curriculum): radius ~U[lo,hi], gate hops
-            # proportional to radius, gate height ~U[z_max range].
+            # proportional to radius, gate height ~U[z_max range]. With a scale curriculum, the
+            # upper radius grows from tight to full over the first scale_curriculum_frac of training.
             def _u(lo, hi):
                 return torch.rand(k, device=self._dev, generator=env.gen) * (hi - lo) + lo
-            radius = _u(c.scale_radius_min, c.scale_radius_max)
+            radius_hi = c.scale_radius_max
+            if c.scale_curriculum_frac > 0.0:
+                ramp = min(1.0, getattr(env, "course_scale_progress", 1.0) / c.scale_curriculum_frac)
+                radius_hi = c.scale_radius_min + (c.scale_radius_max - c.scale_radius_min) * ramp
+            radius = _u(c.scale_radius_min, radius_hi)
             z_max = _u(c.scale_z_max_min, c.scale_z_max_max)
             pos, rad = course_mod.random_courses_batched(
                 k, c.n_gates, radius=radius,
