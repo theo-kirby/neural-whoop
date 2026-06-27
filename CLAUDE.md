@@ -64,9 +64,10 @@ taxonomy (all defined on the root `morning-feather-7342`):
   recommended studio policy node; moving it records history. Use one_only pointers (not category
   tags) for "current X" markers.
 
-**Hard rule discovered the hard way: a tag's assigned node set must form a CONNECTED subgraph**
-(every tagged node reachable from another via parent/child edges *through other tagged nodes*).
-Consequences: (1) only tag a node with a `cluster:` if it's adjacent to that cluster's other members
+**Hard rule discovered the hard way: a `cluster:` tag's assigned node set must form a CONNECTED
+subgraph** (every node carrying it reachable from another via parent/child edges *through other
+nodes carrying it*). This applies to **cluster tags only** — `kind:`/`outcome:` tags assign freely to
+scattered nodes. Consequences: (1) only tag a node with a `cluster:` if it's adjacent to that cluster's other members
 — a reward node living in the reliability branch can't carry `cluster:reward-shaping`; (2) when
 building up a cluster, **assign tags sequentially anchor-first**, not in parallel — concurrent
 `set_node_tag_assignments` calls race and a child gets rejected as "disconnected" before its parent
