@@ -50,6 +50,12 @@ JSON schema (version 1)
           "gates":  [ {"pos": [x,y,z], "radius": <float>} ],   # this episode's course
           "dr":     { ... } | null,             # live per-drone domain-randomization params
           "oracle_lap": <float>,                # speed-oracle target lap time (s)
+          "drones": [                           # OPTIONAL (v2): swarm group sharing one course.
+            {                                   # present for n_agents>1 tasks. When present, the
+              "drone": <int>, "dr": {...}|null, # episode-level drone/dr/summary/frames mirror
+              "summary": {...}, "frames": [...] # drones[0] (the lead) for v1-reader compat.
+            }
+          ],
           "summary": {                          # filled at end_episode
             "steps": <int>, "total_reward": <float>,
             "laps": <int>, "best_lap": <float|null>,
@@ -94,7 +100,7 @@ from typing import Any
 import numpy as np
 
 REPLAY_FORMAT = "neural-whoop-replay"
-REPLAY_VERSION = 1
+REPLAY_VERSION = 2
 
 #: Coordinate-frame / layout strings baked into every replay's ``meta`` block — the single
 #: source of truth so the CLI, eval, and the autonomous loop agree byte-for-byte.
@@ -121,6 +127,50 @@ def _vec(x: Any) -> list[float]:
     """Coerce a numpy array / torch tensor / sequence / scalar to a plain list of JSON floats."""
     arr = np.asarray(x, dtype=np.float64).reshape(-1)
     return [float(v) for v in arr]
+
+
+def _build_frame(
+    *,
+    t: float,
+    step: int,
+    pos: Any,
+    quat: Any,
+    rpy: Any,
+    vel: Any,
+    angvel: Any,
+    action: Any,
+    action_diffaero: Any,
+    reward: float,
+    cum_reward: float,
+    gate_idx: int,
+    dist_to_gate: float,
+    laps: int,
+    passed: bool = False,
+    crashed: bool = False,
+    obs: Any = None,
+) -> dict[str, Any]:
+    """Coerce one control-step frame to plain JSON types (shared by single- and group-episode)."""
+    frame: dict[str, Any] = {
+        "t": float(t),
+        "step": int(step),
+        "pos": _vec(pos),
+        "quat": _vec(quat),
+        "rpy": _vec(rpy),
+        "vel": _vec(vel),
+        "angvel": _vec(angvel),
+        "action": _vec(action),
+        "action_diffaero": _vec(action_diffaero),
+        "reward": float(reward),
+        "cum_reward": float(cum_reward),
+        "gate_idx": int(gate_idx),
+        "dist_to_gate": float(dist_to_gate),
+        "laps": int(laps),
+        "passed": bool(passed),
+        "crashed": bool(crashed),
+    }
+    if obs is not None:
+        frame["obs"] = _vec(obs)
+    return frame
 
 
 def build_meta(
@@ -250,27 +300,58 @@ class RunRecorder:
         """Append one control-step frame to the current episode (see the module schema)."""
         if self._current is None:
             raise RuntimeError("add_frame() called before begin_episode()")
-        frame: dict[str, Any] = {
-            "t": float(t),
-            "step": int(step),
-            "pos": _vec(pos),
-            "quat": _vec(quat),
-            "rpy": _vec(rpy),
-            "vel": _vec(vel),
-            "angvel": _vec(angvel),
-            "action": _vec(action),
-            "action_diffaero": _vec(action_diffaero),
-            "reward": float(reward),
-            "cum_reward": float(cum_reward),
-            "gate_idx": int(gate_idx),
-            "dist_to_gate": float(dist_to_gate),
-            "laps": int(laps),
-            "passed": bool(passed),
-            "crashed": bool(crashed),
-        }
-        if obs is not None:
-            frame["obs"] = _vec(obs)
-        self._current["frames"].append(frame)
+        self._current["frames"].append(_build_frame(
+            t=t, step=step, pos=pos, quat=quat, rpy=rpy, vel=vel, angvel=angvel,
+            action=action, action_diffaero=action_diffaero, reward=reward,
+            cum_reward=cum_reward, gate_idx=gate_idx, dist_to_gate=dist_to_gate,
+            laps=laps, passed=passed, crashed=crashed, obs=obs,
+        ))
+
+    def add_group_episode(
+        self,
+        index: int,
+        gates: Any,
+        tracks: list[dict[str, Any]],
+        *,
+        oracle_lap: float | None = None,
+    ) -> None:
+        """Append a **swarm group episode**: several drones flying ONE shared course (v2).
+
+        Used for ``n_agents > 1`` tasks, where the recorded heroes are all agents of a single
+        env — so they coexist on the same gates and should render together as one scene. Each
+        track's frames are coerced exactly like :meth:`add_frame`. The lead track (``tracks[0]``)
+        is mirrored onto the episode-level ``drone``/``dr``/``summary``/``frames`` so a v1 reader
+        (e.g. the matplotlib pack) still sees a valid single-drone episode.
+
+        Args:
+            index: 1-based episode number.
+            gates: The shared course (same accepted forms as :meth:`begin_episode`).
+            tracks: One dict per drone: ``{"drone": int, "dr": {...}|None, "summary": {...},
+                "frames": [<add_frame kwargs dict>, ...]}``.
+            oracle_lap: Speed-oracle target lap time (s) for the shared course.
+        """
+        if not tracks:
+            raise ValueError("add_group_episode() requires at least one track")
+        drones = [
+            {
+                "drone": int(tr["drone"]),
+                "dr": tr.get("dr"),
+                "summary": dict(tr.get("summary", {})),
+                "frames": [_build_frame(**fr) for fr in tr["frames"]],
+            }
+            for tr in tracks
+        ]
+        lead = drones[0]
+        self._episodes.append({
+            "index": int(index),
+            "drone": lead["drone"],
+            "gates": _gates_list(gates),
+            "dr": lead["dr"],
+            "oracle_lap": float(oracle_lap) if oracle_lap is not None else None,
+            "summary": lead["summary"],
+            "frames": lead["frames"],
+            "drones": drones,
+        })
 
     def end_episode(self, summary: dict[str, Any]) -> None:
         """Close the current episode, attaching its summary."""

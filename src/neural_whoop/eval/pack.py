@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from neural_whoop.eval.rollout import evaluate_and_record, select_heroes
+from neural_whoop.eval.rollout import evaluate_and_record, select_heroes, select_swarm_heroes
 from neural_whoop.viz.replay import RunRecorder, build_meta
 
 
@@ -56,10 +56,13 @@ def record_rollout(
     """
     meta = build_meta(env, config=config, policy=policy_label(agent, ckpt))
     recorder = RunRecorder(meta)
-    heroes = select_heroes(env, n_heroes)
+    # Swarm tasks (n_agents>1): record all agents of one env so they render as a coexisting group;
+    # single-drone tasks spread n_heroes across the population for course diversity.
+    swarm = int(getattr(env, "n_agents", 1)) > 1
+    heroes = select_swarm_heroes(env) if swarm else select_heroes(env, n_heroes)
     metrics = evaluate_and_record(
         env, agent, recorder, heroes=heroes, steps=steps,
-        deterministic=deterministic, record_obs=record_obs,
+        deterministic=deterministic, record_obs=record_obs, group=swarm,
     )
     path = recorder.save(out_path)
     return path, metrics

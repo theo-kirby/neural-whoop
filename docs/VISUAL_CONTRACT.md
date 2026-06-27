@@ -12,16 +12,22 @@ no torch, no viz extra). A lazily-imported renderer turns it into PNG/CSV artifa
 (`src/neural_whoop/viz/render.py`, the `viz` extra: matplotlib + Pillow + tbparse). The training
 path stays render-free; viz is opt-in.
 
-## The replay document (`format="neural-whoop-replay"`, `version=1`)
+## The replay document (`format="neural-whoop-replay"`, `version=2`)
 
 ```jsonc
 {
   "format": "neural-whoop-replay",
-  "version": 1,                         // bump on a breaking schema change
+  "version": 2,                         // bump on a breaking schema change
   "meta": { ...run-level contract... },
-  "episodes": [ { ...one hero flight... } ]
+  "episodes": [ { ...one hero flight, or one swarm group... } ]
 }
 ```
+
+> **v2 (additive, backward-compatible):** an episode may carry an optional `drones[]` list — a
+> **swarm group** of several drones flying ONE shared course (recorded for `n_agents > 1` tasks so
+> the viewer can render them coexisting). The episode-level `drone`/`dr`/`summary`/`frames` mirror
+> the lead drone (`drones[0]`), so a v1 reader still sees a valid single-drone episode. v1 documents
+> (no `drones` key) remain valid.
 
 ### `meta` — the self-describing contract block
 A consumer needs no external doc; everything to interpret the frames is here.
@@ -41,20 +47,28 @@ A consumer needs no external doc; everything to interpret the frames is here.
 | `action_limits` | the `ActionLimits` the env mapped the action onto (4 floats) |
 | `unity_hint` | Z-up RH → Unity Y-up LH conversion hint (verify against your rig) |
 
-### `episodes[]` — one recorded **hero** flight each
-Recording is **hero-subset**: full per-step frames are kept only for a small, configurable set of
-hero drones (`select_heroes`, default 4, spread across the population); aggregate metrics still
-cover the full population. Each hero records its **first** episode — from rollout start to its first
-`done` (crash / time-limit) or the window end. Tensors accumulate on GPU and move to CPU once.
+### `episodes[]` — one recorded **hero** flight (or one swarm group) each
+Recording is **hero-subset**: full per-step frames are kept only for a small set of hero drones;
+aggregate metrics still cover the full population. Each hero records its **first** episode — from
+rollout start to its first `done` (crash / time-limit) or the window end. Tensors accumulate on GPU
+and move to CPU once.
+
+Hero selection depends on the task: **single-drone** tasks use `select_heroes` (default 4, spread
+across the population — diverse courses, one solo drone each). **Swarm** tasks (`n_agents > 1`) use
+`select_swarm_heroes` — **all agents of one env**, which share a course — and record them as a
+single **group episode** (`drones[]`) so the racers render together. (Spreading across the flat
+`n_envs*n_agents` index instead would grab unrelated solo drones from different courses — which is
+exactly why an early swarm replay rendered as one lonely drone.)
 
 | key | meaning |
 |-----|---------|
-| `index` | 1-based hero number |
-| `drone` | flat drone index this episode recorded |
+| `index` | 1-based hero / group number |
+| `drone` | flat drone index this episode recorded (lead drone for a group) |
 | `gates` | this episode's course: `[{"pos":[x,y,z], "radius":r}, ...]` |
 | `dr` | live per-drone domain-randomization params, or `null` (DR off) |
 | `oracle_lap` | speed-oracle target lap time (s) for this course |
 | `summary` | `steps, total_reward, laps, best_lap, gates_passed, num_gates, ended` |
+| `drones` | **(v2, optional)** swarm group: `[{drone, dr, summary, frames}, ...]` sharing `gates` |
 
 ### `frames[]` — one control step each
 
@@ -125,3 +139,7 @@ is the FPV artifact.
 Bump `version` only on a **breaking** schema change (a removed/renamed field a consumer relies on).
 Additive fields (new optional per-frame keys) are forward-compatible and do not bump it. Document
 any change here and in `CLAUDE.md`, mirroring the obs/act versioning discipline in `docs/CONTRACT.md`.
+
+- **v2** — added the optional `episodes[].drones[]` **swarm group** (multiple drones on one shared
+  course). Additive and backward-compatible (the lead drone is mirrored at the episode level), but
+  the version was bumped so the self-describing document advertises the capability honestly.

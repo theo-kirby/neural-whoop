@@ -84,6 +84,27 @@ def select_heroes(env: MultiAgentDroneEnv, n_heroes: int = 4) -> list[int]:
     return sorted(int(i) for i in idx.tolist())
 
 
+def select_swarm_heroes(env: MultiAgentDroneEnv, env_idx: int = 0) -> list[int]:
+    """Pick **all agents of one env** so the heroes share a single course (for swarm tasks).
+
+    Multi-agent envs flatten ``(n_envs, n_agents)`` env-major: env ``e``'s agents are flat drone
+    indices ``e*n_agents .. e*n_agents+n_agents-1`` (see ``MultiAgentDroneEnv._agent_indices``).
+    Recording those co-env drones together lets the viewer render them coexisting on the same
+    gates — unlike :func:`select_heroes`, which spreads across the population (one solo drone per
+    env). For ``n_agents == 1`` this is just ``[env_idx]``.
+
+    Args:
+        env: The evaluation env.
+        env_idx: Which env's agents to record (clamped to ``[0, n_envs)``).
+
+    Returns:
+        The flat drone indices of that env's agents, ascending.
+    """
+    na = int(env.n_agents)
+    e = max(0, min(int(env_idx), env.n_envs - 1))
+    return [e * na + a for a in range(na)]
+
+
 def _dr_dict(env: MultiAgentDroneEnv, d: int) -> dict | None:
     """Serialize the live per-drone seam DR params for drone ``d``, or ``None`` if DR is off."""
     dr = env.dr
@@ -114,6 +135,7 @@ def evaluate_and_record(
     steps: int = 1500,
     deterministic: bool = True,
     record_obs: bool = False,
+    group: bool | None = None,
 ) -> dict:
     """Roll out like :func:`evaluate`, additionally recording hero telemetry into ``recorder``.
 
@@ -128,17 +150,23 @@ def evaluate_and_record(
         env: The evaluation env (build with DR off / eval-DR for an honest number).
         agent: Trained :class:`ActorCritic`.
         recorder: A :class:`~neural_whoop.viz.replay.RunRecorder` (already built with meta).
-        heroes: Flat drone indices to record (``None`` -> :func:`select_heroes`).
+        heroes: Flat drone indices to record (``None`` -> :func:`select_heroes`, or
+            :func:`select_swarm_heroes` when the env is multi-agent).
         steps: Control steps to roll.
         deterministic: Use the actor mean (clipped) instead of sampling.
         record_obs: Also store the flat observation vector per frame.
+        group: Record the heroes as one **swarm group episode** (they share a course) rather than
+            one episode each. ``None`` -> auto (on when ``env.n_agents > 1`` and >1 hero).
 
     Returns:
         The same aggregate metric dict :func:`evaluate` returns.
     """
     dev = env.device
     task = env.task
-    heroes = heroes if heroes is not None else select_heroes(env)
+    if heroes is None:
+        heroes = select_swarm_heroes(env) if env.n_agents > 1 else select_heroes(env)
+    if group is None:
+        group = env.n_agents > 1 and len(heroes) > 1
     h = torch.tensor(heroes, device=dev, dtype=torch.long)
     n_h = len(heroes)
     num_gates = int(task.cfg.n_gates) if hasattr(task, "cfg") else 0
@@ -248,18 +276,8 @@ def evaluate_and_record(
                 "obs": obs_h[j] if obs_h is not None else None,
             })
 
-    # Flush each hero's buffered episode into the (single-open-episode) recorder.
-    for j in range(n_h):
-        recorder.begin_episode(
-            j + 1,
-            hero_meta[j]["gates"],
-            drone=hero_meta[j]["drone"],
-            dr=hero_meta[j]["dr"],
-            oracle_lap=hero_meta[j]["oracle_lap"],
-        )
-        for fr in hero_frames[j]:
-            recorder.add_frame(**fr)
-        recorder.end_episode({
+    def _summary(j: int) -> dict:
+        return {
             "steps": len(hero_frames[j]),
             "total_reward": cum[j],
             "laps": last_laps[j],
@@ -267,7 +285,37 @@ def evaluate_and_record(
             "gates_passed": gates_passed[j],
             "num_gates": num_gates,
             "ended": ended[j],
-        })
+        }
+
+    if group and n_h > 1:
+        # One swarm group episode: the heroes are co-env agents, so they share heroes[0]'s course.
+        recorder.add_group_episode(
+            1,
+            hero_meta[0]["gates"],
+            tracks=[
+                {
+                    "drone": hero_meta[j]["drone"],
+                    "dr": hero_meta[j]["dr"],
+                    "summary": _summary(j),
+                    "frames": hero_frames[j],
+                }
+                for j in range(n_h)
+            ],
+            oracle_lap=hero_meta[0]["oracle_lap"],
+        )
+    else:
+        # Flush each hero's buffered episode into the (single-open-episode) recorder.
+        for j in range(n_h):
+            recorder.begin_episode(
+                j + 1,
+                hero_meta[j]["gates"],
+                drone=hero_meta[j]["drone"],
+                dr=hero_meta[j]["dr"],
+                oracle_lap=hero_meta[j]["oracle_lap"],
+            )
+            for fr in hero_frames[j]:
+                recorder.add_frame(**fr)
+            recorder.end_episode(_summary(j))
 
     m = dict(env.task.metrics(env))
     m["mean_reward"] = (rew_sum / steps).mean().item()
