@@ -62,6 +62,12 @@ class SwarmRaceConfig:
     alive_bonus: float = 0.01
     collision_penalty: float = 10.0  # per-drone penalty when inside collision_radius of a neighbour
     collision_radius: float = 0.25   # m centre-to-centre; below this counts as a collision
+    # Shared-fate knob (Flywheel hop-14). True (default): a collision ends the whole env episode
+    # (shared fate) — a clean drone is punished for a teammate's collision, capping lap_completion.
+    # False: collisions stay a per-step SOFT cost (collision_penalty still applies) but DON'T
+    # terminate, so clean drones keep racing; only out-of-arena crash ends the env. Hypothesis: lifts
+    # lap_completion_rate by lengthening clean drones' episodes while collision_rate stays bounded.
+    collision_terminates: bool = True
     # Arena / course geometry.
     arena_radius: float = 4.5
     gate_radius: float = 0.45
@@ -261,8 +267,10 @@ class SwarmRaceTask(DroneTask):
         self.last_min_sep = min_sep
         self._step_count += 1
 
-        # Per-env termination (env contract): an env ends if ANY of its drones fails.
-        drone_fail = crashed | collided
+        # Per-env termination (env contract): an env ends if ANY of its drones fails. With
+        # collision_terminates=False, a collision is a soft cost only (penalized above, not fatal);
+        # only an out-of-arena crash ends the env (relaxed shared fate, Flywheel hop-14).
+        drone_fail = (crashed | collided) if c.collision_terminates else crashed
         terminated_env = env.to_agents(drone_fail).any(dim=1)
 
         info = {"passed": passed, "crashed": crashed, "collided": collided}
