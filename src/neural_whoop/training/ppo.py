@@ -269,14 +269,17 @@ def train_ppo(
             ep_ret_mean = float(done_ret_sum / done_count) if float(done_count) > 0 else float("nan")
             ep_len_mean = float(done_len_sum / done_count) if float(done_count) > 0 else float("nan")
             m = env.task.metrics(env)
-            best_lap = m.get("best_lap_time", float("nan"))
-            log(
-                f"upd {update}/{num_updates} step {global_step:,} | sps {sps:,} | "
-                f"ep_ret {ep_ret_mean:7.2f} | best_lap {best_lap:6.3f}s "
-                f"(oracle {m.get('oracle_lap_time', float('nan')):.3f}s) | "
-                f"laps {m.get('laps_completed_mean', 0):.2f} | "
-                f"compl {m.get('lap_completion_rate', 0):.2f} | kl {float(approx_kl):.3f}"
-            )
+            head = f"upd {update}/{num_updates} step {global_step:,} | sps {sps:,} | ep_ret {ep_ret_mean:7.2f}"
+            if "best_lap_time" in m:  # racing tasks: lap-time line
+                tail = (
+                    f" | best_lap {m['best_lap_time']:6.3f}s "
+                    f"(oracle {m.get('oracle_lap_time', float('nan')):.3f}s) | "
+                    f"laps {m.get('laps_completed_mean', 0):.2f} | "
+                    f"compl {m.get('lap_completion_rate', 0):.2f}"
+                )
+            else:  # other tasks: show their own metrics generically
+                tail = "".join(f" | {k} {v:.3f}" for k, v in m.items())
+            log(f"{head}{tail} | kl {float(approx_kl):.3f}")
             if writer is not None:
                 writer.add_scalar("charts/episodic_return", ep_ret_mean, global_step)
                 writer.add_scalar("charts/episodic_length", ep_len_mean, global_step)
