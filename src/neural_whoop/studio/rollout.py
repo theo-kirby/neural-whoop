@@ -90,15 +90,29 @@ def studio_rollout(
     )
     course_gates = int(pos.shape[0])
 
+    # Size the crash bounds + episode length to the CHOSEN course. Seeded/preset courses can place
+    # gates far outside the default tight bounds (bound_xy=6 m), so without this the drone crosses
+    # the boundary heading to gate 0 and crashes before reaching it. Add margin for the gate radius
+    # and overshoot; never shrink below the tight defaults. episode_len = the requested window so a
+    # long spread lap isn't truncated mid-flight.
+    horiz_max = float(pos[:, :2].norm(dim=-1).max())
+    z_max = float(pos[:, 2].max())
+    rad_max = float(rad.max())
+    bound_kw = {
+        "bound_xy": max(6.0, horiz_max + rad_max + 2.0),
+        "bound_z_max": max(4.0, z_max + rad_max + 1.5),
+        "episode_len": max(600, int(max_steps)),
+    }
+
     # Map drone-count to the substrate per the policy's task.
     if task_name == "swarm_race":
         n_agents = max(2, drone_count)
         n_envs = 1
-        task = make_task(task_name, n_agents=n_agents, n_gates=course_gates)
+        task = make_task(task_name, n_agents=n_agents, n_gates=course_gates, **bound_kw)
     else:
         n_agents = 1
         n_envs = drone_count
-        task = make_task(task_name, n_gates=course_gates)
+        task = make_task(task_name, n_gates=course_gates, **bound_kw)
 
     # Match the checkpoint's frame-stack (obs_dim = base_obs_dim * obs_stack).
     ckpt_obs = int(meta.get("obs_dim") or task.obs_dim)
