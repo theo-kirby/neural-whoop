@@ -169,7 +169,7 @@ def evaluate_and_record(
         group = env.n_agents > 1 and len(heroes) > 1
     h = torch.tensor(heroes, device=dev, dtype=torch.long)
     n_h = len(heroes)
-    num_gates = int(task.cfg.n_gates) if hasattr(task, "cfg") else 0
+    num_gates = int(getattr(getattr(task, "cfg", None), "n_gates", 0))  # 0 for gate-less tasks (e.g. target_follow)
 
     obs = env.reset_all()
 

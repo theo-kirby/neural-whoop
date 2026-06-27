@@ -1,0 +1,62 @@
+# Control for the perception experiment: target_follow with the DETECTOR seam OFF (perfect oracle).
+# Identical to target_follow.yaml in every other respect (task, net, budget, and the rest of the
+# seam DR: wind/rate-gain/thrust/latency/obs-noise all ON) — only the detector error model is
+# identity. Two uses:
+#   1. Train an oracle-clean control policy (the "never saw detection error" baseline).
+#   2. As an EVAL condition (detector-off) for the clean-vs-noisy matrix on either policy.
+# Flywheel: the control arm for idea node 96fbd7ef.
+
+run:
+  name: target_follow_clean
+
+task:
+  name: target_follow
+  episode_len: 600
+  motion: mixed
+  target_speed: 1.5
+  target_radius: 1.5
+  d_desired: 1.5
+  track_sigma: 0.6
+  fov_deg: 110.0
+  track_scale: 1.0
+  in_view_bonus: 0.5
+  center_scale: 0.3
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Same seam DR as target_follow.yaml EXCEPT the detector error model is identity (perfect oracle).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 0.0
+  detector_range_frac: 0.0
+  detector_dropout_prob: 0.0
+  detector_fov_deg: 360.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100
