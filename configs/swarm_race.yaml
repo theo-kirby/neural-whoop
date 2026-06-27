@@ -1,0 +1,63 @@
+# Hop-13 (Flywheel) — *** THE SWARM PIVOT: first n_agents>1 task ***
+# swarm_race: n_agents=3 drones share one closed gate course and race it under a SHARED policy,
+# avoiding each other (collision penalty + shared-fate per-env termination). Builds on the
+# single-drone racing baseline ([128,128]@120M, 0933f70) — same net, same budget — but with a
+# new neighbour observation (obs_dim 14->20) and a collision metric. Decision metric = swarm lap
+# throughput at a bounded collision rate (lap_completion_rate + collision_rate_per_step +
+# best_lap_time). GREEN = coordinated racing emerges; RED = collision collapse.
+# n_drones = n_envs * n_agents = 4096 * 3 = 12288; total_steps 120M counts drone-env steps.
+
+run:
+  name: swarm_race
+
+task:
+  name: swarm_race
+  n_agents: 3
+  n_gates: 5
+  episode_len: 600
+  v_ref: 4.0
+  gate_radius: 0.45
+  progress_scale: 1.0
+  gate_bonus: 5.0
+  lap_bonus: 20.0
+  crash_penalty: 10.0
+  time_penalty: 0.05
+  smoothness_penalty: 0.001
+  collision_penalty: 10.0
+  collision_radius: 0.25
+  spawn_spread: 0.6
+
+env:
+  n_envs: 4096
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 0.0
+  detector_dropout_prob: 0.0
+  detector_fov_deg: 360.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

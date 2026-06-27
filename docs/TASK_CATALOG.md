@@ -49,10 +49,23 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Basis:** DiffAero's depth/LiDAR render (Blackwell-OK) for the occupancy signal; render-free
   proxy oracle for fast training.
 
-### ⬜ `swarm_formation` — N-drone formation / coverage (first swarm task)
+### ✅ `swarm_race` — multi-drone shared-track gate racing (first swarm task, Flywheel hop-13)
+- **Metric:** swarm lap throughput at a bounded collision rate — `lap_completion_rate` ↑ +
+  `collision_rate_per_step` bounded + `best_lap_time` ↓ (guardrail: out-of-arena crash rate).
+- **Obs:** the single-drone racing obs (14) + nearest in-env neighbour's body-frame relative
+  position (3) and velocity (3) → obs_dim 20 (MCU deploy-size flag). The neighbour channel is what
+  lets the tiny shared policy keep separation.
+- **Coupling:** `n_agents` drones share one course; a collision (centre-to-centre < `collision_radius`)
+  penalizes the involved drones and ends the env episode (shared fate). Pure task-layer — no env
+  changes (agent-flattened dynamics; collision/relative-obs in the task).
+- **Sim2real basis:** same CTBR + body-frame obs + airframe/seam DR as `gate_race`; a real cheap
+  range/relative-bearing estimate stands in for the neighbour vector. Shared policy across agents.
+
+### ⬜ `swarm_formation` — N-drone formation / coverage
 - **Metric:** formation error ↓ + inter-agent collisions → 0.
 - **Basis:** exercises the `n_agents>1` path (agent-flattened dynamics; relative-observation coupling
-  in the task layer). Shared policy across agents. Good first multi-agent shakedown.
+  in the task layer). Shared policy across agents. The relative-position-target sibling of
+  `swarm_race` (track a desired offset instead of racing a shared track).
 
 ### ⬜ `swarm_transport` — cooperative transport / shepherding
 - **Metric:** payload/target delivered ↓ time, cooperation required.
