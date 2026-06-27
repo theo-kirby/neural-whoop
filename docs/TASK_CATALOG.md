@@ -26,11 +26,17 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - Racing-line reward (velocity-direction / minimum-jerk terms), DR/curriculum schedules.
 - SHAC/BPTT via DiffAero's differentiable path; compare to PPO at equal wall-clock.
 
-### ⬜ `target_follow` — camera-only / oracle pursuit of a moving target
-- **Metric:** time-in-view + mean tracking distance ↓.
-- **Obs/oracle:** pursuit obs (movable-target estimate); train render-free via the perception oracle
-  + detector noise, **eval** honestly with DiffAero depth render (Blackwell-OK). `target.py` provides
-  the batched motion field (static/orbit/lissajous/mixed).
+### ✅ `target_follow` — standoff keep-in-view of a moving target through a noisy detector
+- **Metric:** `time_in_view_rate` ↑ + `mean_track_error` (|distance − d*|) ↓ (both from ground truth).
+- **Status:** implemented (`tasks/target_follow.py`, `configs/target_follow{,_clean}.yaml`). Standoff
+  keep-in-view (hold d*=1.5 m, target centered in a 110° FOV) over an orbit/lissajous mover; obs-v4
+  unchanged (target estimate replaces the gate vector), run through the perception oracle + the
+  `DetectorNoise` seam (bearing/range/FOV/dropout + stale-hold). `target.py` supplies the batched
+  motion field. **First empirical result (Flywheel `cool-resonance-0983`, MIXED/Pareto):**
+  detector-training gives condition-invariance + ~65× fewer crashes under noise, but bought it by
+  backing off (2.17 m vs d*=1.5 m); the naive oracle policy does *not* lose the target under noise
+  (in-view 0.996) — the gap is crash-rate, not tracking. Open follow-up `old-leaf-3989` (tighter
+  standoff reward). Honest camera-only eval via the DiffAero depth render remains a later hook.
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
