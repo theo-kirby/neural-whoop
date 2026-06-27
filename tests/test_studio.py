@@ -105,6 +105,24 @@ def test_scale_curriculum_grows_course_range():
     assert late > early + 3.0   # range widened toward big (radius up to ~12)
 
 
+def test_scale_sample_weight_biases_small_keeps_big():
+    # scale_sample_weight>1 spends more episodes on small/tight courses (lower mean course size)
+    # WITHOUT withdrawing big courses (the max stays comparable to uniform — big still reachable).
+    uni = make_task("gate_race", scale_randomize=True, n_gates=5, bound_xy=14.0, bound_z_max=5.0)
+    env_u = MultiAgentDroneEnv(uni, n_envs=4096, device="cpu", seed=0)
+    env_u.reset_all()
+    dist_u = uni.gate_pos[..., :2].norm(dim=-1)
+
+    biased = make_task("gate_race", scale_randomize=True, scale_sample_weight=4.0,
+                       n_gates=5, bound_xy=14.0, bound_z_max=5.0)
+    env_b = MultiAgentDroneEnv(biased, n_envs=4096, device="cpu", seed=0)
+    env_b.reset_all()
+    dist_b = biased.gate_pos[..., :2].norm(dim=-1)
+
+    assert dist_b.mean().item() < dist_u.mean().item() * 0.9   # meaningfully more tight episodes
+    assert dist_b.max().item() > 8.0                           # big courses still present (radius ~12)
+
+
 def test_seeded_course_roundtrip(tmp_path):
     # A course saved to YAML loads back to tensors the env can fly.
     course = {"name": "t", "gates": [

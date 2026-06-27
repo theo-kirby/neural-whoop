@@ -89,6 +89,11 @@ class GateRaceConfig:
     # so the policy masters tight courses first, then extends to big — trims the tight tax that
     # full-range-from-scratch incurs. The trainer feeds progress via env.set_course_scale().
     scale_curriculum_frac: float = 0.0
+    # Scale-importance weighting (default 1.0 = uniform). When >1, the per-env radius is drawn as
+    # radius = lo + (hi-lo) * U[0,1]**weight, biasing the draw toward SMALL/tight courses while big
+    # courses stay reachable (present from step 0, unlike the curriculum which withdraws them early).
+    # The non-curriculum lever to attack the tight<->big Pareto frontier (see hypothesis cool-grass-4001).
+    scale_sample_weight: float = 1.0
     # Crash bounds.
     bound_xy: float = 6.0
     bound_z_min: float = 0.15
@@ -158,7 +163,13 @@ class GateRaceTask(DroneTask):
             if c.scale_curriculum_frac > 0.0:
                 ramp = min(1.0, getattr(env, "course_scale_progress", 1.0) / c.scale_curriculum_frac)
                 radius_hi = c.scale_radius_min + (c.scale_radius_max - c.scale_radius_min) * ramp
-            radius = _u(c.scale_radius_min, radius_hi)
+            if c.scale_sample_weight != 1.0:
+                # Importance-weight toward small radii (big stays reachable at u->1). One (k,) draw,
+                # same RNG-draw count as _u, so z_max ordering below is unchanged.
+                u = torch.rand(k, device=self._dev, generator=env.gen) ** c.scale_sample_weight
+                radius = c.scale_radius_min + (radius_hi - c.scale_radius_min) * u
+            else:
+                radius = _u(c.scale_radius_min, radius_hi)
             z_max = _u(c.scale_z_max_min, c.scale_z_max_max)
             pos, rad = course_mod.random_courses_batched(
                 k, c.n_gates, radius=radius,
