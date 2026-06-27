@@ -39,9 +39,14 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   (`old-leaf-3989`) was **refuted** (`royal-wildflower-3231`, RED): tightening only nudged standoff
   2.17→1.97 m and only by spending crash-robustness (~8×) — the back-off is a genuine
   **robustness↔accuracy frontier set by the perception, not a reward artifact** (same shape as the
-  racing tight↔big Pareto). To move it (not slide along it): better in-sim perception (wider FOV /
-  lower dropout / temporal filtering) or a risk-budget objective. Honest camera-only eval via the
-  DiffAero depth render remains a later hook.
+  racing tight↔big Pareto). The **detector-regime sweep** (`nameless-bar-9184`, measurement/RED)
+  then localized *which* perception axis: sweeping dropout {0→0.10} and FOV {110→150°} with the
+  reward held identical leaves standoff **flat at ~2.2–2.5 m** (zero-dropout sits at 2.47 m, *farther*
+  than the 0.05 anchor) — the back-off is **insensitive to detection availability** and is driven by
+  per-fix **bearing/range precision** (3° / 10%, present on every fix); only removing the detector
+  entirely recovers d* (the clean policy, at 10–60× the crash rate). So the lever is **not**
+  dropout-coasting memory but precision-*filtering* (EMA/Kalman on the noisy fix) or a better onboard
+  detector. Honest camera-only eval via the DiffAero depth render remains a later hook.
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
