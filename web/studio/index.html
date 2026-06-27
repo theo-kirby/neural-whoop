@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>neural-whoop · studio</title>
+  <style>
+    :root {
+      --bg: #0c0f14; --panel: #151b24cc; --panel-solid: #151b24; --line: #243040;
+      --fg: #e7edf3; --muted: #8a98a8; --accent: #4ea1ff;
+      --passed: #39d98a; --next: #ffd23f; --error: #ff5d5d;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden;
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--bg); color: var(--fg); }
+    canvas { display: block; }
+    button, select, input { font: inherit; }
+    .btn { background: #1b2433; color: var(--fg); border: 1px solid var(--line);
+      border-radius: 7px; padding: 7px 13px; cursor: pointer; }
+    .btn:hover { border-color: var(--accent); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.primary { background: #1d3a5f; border-color: var(--accent); }
+    select, input[type=number] { background: #1b2433; color: var(--fg);
+      border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+
+    #shell { position: fixed; inset: 0; display: flex; flex-direction: column; }
+    #topbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex-wrap: wrap;
+      background: var(--panel-solid); border-bottom: 1px solid var(--line); z-index: 10; }
+    #topbar .brand { color: var(--accent); font-weight: 600; margin-right: 8px; letter-spacing: .3px; }
+    #topbar label { color: var(--muted); display: inline-flex; gap: 5px; align-items: center; }
+    #topbar .spacer { flex: 1; }
+    #view { position: relative; flex: 1; min-height: 0; }
+    .view3d { position: absolute; inset: 0; }
+
+    .hud { position: absolute; top: 12px; left: 12px; padding: 10px 12px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+      backdrop-filter: blur(6px); min-width: 210px; pointer-events: none; }
+    .hud .row { display: flex; justify-content: space-between; gap: 16px; }
+    .hud .k { color: var(--muted); } .hud .v { color: var(--fg); }
+    .hud .title { color: var(--accent); margin-bottom: 6px; font-weight: 600;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+
+    .bar { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 10px 12px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 9px;
+      backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 8px; }
+    .scrub { width: 100%; accent-color: var(--accent); }
+    .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .spacer { flex: 1; }
+    .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+    .chk { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+
+    /* PiP camera frames (FPV + top-down). pointer-events:none so they don't steal orbit. */
+    .cam-frame { position: absolute; top: 168px; left: 12px; width: 300px; height: 169px;
+      border: 1px solid var(--accent); border-radius: 8px; pointer-events: none;
+      box-shadow: 0 0 0 1px #0008, 0 6px 20px #0006; overflow: hidden; }
+    .cam-frame.top { top: 168px; left: 324px; width: 200px; height: 200px; border-color: var(--next); }
+    .cam-label { position: absolute; top: 4px; left: 8px; z-index: 2; color: var(--accent);
+      font-size: 11px; letter-spacing: 1px; text-shadow: 0 1px 3px #000; }
+    .cam-frame.top .cam-label { color: var(--next); }
+
+    .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      background: var(--panel-solid); border: 1px solid var(--line); border-radius: 8px;
+      padding: 9px 14px; z-index: 50; max-width: 70vw; }
+    .toast.err { border-color: var(--error); color: #ffd6d6; }
+    .spin { display: inline-block; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div id="shell">
+    <div id="topbar">
+      <span class="brand">neural-whoop · studio</span>
+      <label>policy <select data-h="policy"></select></label>
+      <label>course <select data-h="course"></select></label>
+      <label>drones <input data-h="drones" type="number" min="1" max="16" value="3" style="width:54px" /></label>
+      <label>gates <input data-h="gates" type="number" min="1" max="24" value="6" style="width:54px" /></label>
+      <label class="chk"><input data-h="dr" type="checkbox" /> DR</label>
+      <button class="btn primary" data-h="fly">▶ Fly</button>
+      <span class="spacer"></span>
+      <span class="time" data-h="status"></span>
+    </div>
+    <div id="view">
+      <div class="view3d"></div>
+      <div class="cam-frame" data-h="fpvframe" hidden><span class="cam-label">FPV · onboard</span></div>
+      <div class="cam-frame top" data-h="topframe" hidden><span class="cam-label">top-down</span></div>
+      <div class="hud" hidden>
+        <div class="title" data-h="title">—</div>
+        <div class="row"><span class="k">drones</span><span class="v" data-h="ndrones">—</span></div>
+        <div class="row"><span class="k">step</span><span class="v" data-h="step">—</span></div>
+        <div class="row"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
+        <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
+        <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
+      </div>
+      <div class="bar hidden" data-h="bar">
+        <input class="scrub" data-h="scrub" type="range" min="0" max="0" value="0" step="1" />
+        <div class="controls">
+          <button class="btn" data-h="play">▶ Play</button>
+          <span class="time"><span data-h="tcur">0.00</span>s / <span data-h="tend">0.00</span>s ·
+            <span data-h="fcur">0</span>/<span data-h="fend">0</span></span>
+          <span class="spacer"></span>
+          <label>speed
+            <select data-h="speed">
+              <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+            </select>
+          </label>
+          <label class="chk"><input type="checkbox" data-h="follow" /> follow cam</label>
+          <label class="chk"><input type="checkbox" data-h="fpv" /> FPV</label>
+          <label class="chk"><input type="checkbox" data-h="top" /> top-down</label>
+          <label class="chk"><input type="checkbox" data-h="trail" checked /> trail</label>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Pin three.js (CDN importmap) so the studio needs no Node toolchain in this repo. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
