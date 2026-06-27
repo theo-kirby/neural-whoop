@@ -10,7 +10,7 @@
 # Flywheel: realizes idea node 96fbd7ef (close the perception sim2real gap).
 
 run:
-  name: target_follow_ema
+  name: target_follow_ema05
 
 task:
   name: target_follow
@@ -24,9 +24,7 @@ task:
   track_scale: 1.0
   in_view_bonus: 0.5
   center_scale: 0.3
-  estimate_ema_alpha: 0.85  # EMA precision filter (in-place; obs stays 11). 0.85 = ROBUST operating point
-                            # (Flywheel P7 alpha-sweep long-tree-2976 follow-up): alpha=0.7 is seed-fragile
-                            # (1/2 seeds back off), alpha=0.5 too weak; alpha>=0.85 holds d* across seeds.
+  estimate_ema_alpha: 0.5   # EMA precision filter on the detector estimate (in-place; obs stays 11)
   smoothness_penalty: 0.001
   crash_penalty: 10.0
 
