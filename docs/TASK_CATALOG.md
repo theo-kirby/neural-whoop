@@ -51,7 +51,11 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   noisy fixes → standoff **2.17→1.54 m** (track_err 0.91→0.25, ≈ the clean policy) at crash 8.7e-5 —
   **5.6× safer than the brittle clean policy** and below the racing reliability bar, condition-invariant.
   A new Pareto-dominant corner (accurate *and* robust); the EMA is a reusable perception primitive for
-  any detector-fed task. Honest camera-only eval via the DiffAero depth render remains a later hook.
+  any detector-fed task. The α-sweep follow-up (`flat-waterfall-0121`) found a **threshold**: α=0.85 is
+  the *robust* operating point (both seeds hold d*, dominating 0.7), α=0.7 is seed-fragile (1/2 seeds
+  back off — the original single-seed GREEN sat on the knife-edge), α=0.5 too weak; the recommended
+  default is **0.85** (`configs/target_follow_ema.yaml`). Honest camera-only eval via the DiffAero
+  depth render remains a later hook.
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
