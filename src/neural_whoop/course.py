@@ -38,6 +38,19 @@ class ArenaSpec:
     start_xy: tuple[float, float] = (1.5, 0.0)
 
 
+#: Named arena presets for the Studio + spread-course training. ``tight`` reproduces the default
+#: small indoor arena (gates ~1.5–2.8 m apart); ``spread``/``big``/``giant`` progressively grow the
+#: radius **and** the inter-gate hop (``step_min/step_max``) so the gates are genuinely farther
+#: apart, not just placed in a bigger circle. Step ranges are kept comfortably inside the radius so
+#: a generated walk stays flyable, and ``z_max`` rises with size for more vertical room.
+ARENA_PRESETS: dict[str, "ArenaSpec"] = {
+    "tight": ArenaSpec(),
+    "spread": ArenaSpec(radius=8.0, step_min=3.0, step_max=5.5, z_min=0.7, z_max=3.0),
+    "big": ArenaSpec(radius=12.0, step_min=4.5, step_max=7.5, z_min=0.8, z_max=3.5),
+    "giant": ArenaSpec(radius=18.0, step_min=6.0, step_max=10.0, z_min=0.8, z_max=4.0),
+}
+
+
 def random_courses(
     n_envs: int,
     n_gates: int,

@@ -67,6 +67,11 @@ class SwarmRaceConfig:
     gate_radius: float = 0.45
     z_min: float = 0.7
     z_max: float = 2.3
+    # Gate spacing of the procedural walk (see GateRaceConfig): defaults reproduce the tight
+    # course; raise with arena_radius/bound_xy for spread-out swarm tracks.
+    step_min: float = 1.5
+    step_max: float = 2.8
+    max_turn_deg: float = 60.0
     # Crash bounds.
     bound_xy: float = 6.0
     bound_z_min: float = 0.15
@@ -90,7 +95,8 @@ class SwarmRaceTask(DroneTask):
         self._oracle = OracleEstimator()
         self._arena = course_mod.ArenaSpec(
             radius=self.cfg.arena_radius, z_min=self.cfg.z_min, z_max=self.cfg.z_max,
-            gate_radius=self.cfg.gate_radius,
+            gate_radius=self.cfg.gate_radius, step_min=self.cfg.step_min,
+            step_max=self.cfg.step_max, max_turn_deg=self.cfg.max_turn_deg,
         )
         self._bounds = Bounds(xy=self.cfg.bound_xy, z_min=self.cfg.bound_z_min, z_max=self.cfg.bound_z_max)
         self._feasible_oracle = oracle_mod.FeasibleOracle(
@@ -126,9 +132,15 @@ class SwarmRaceTask(DroneTask):
         k = env_idx.numel()
         na = self.cfg.n_agents
         # One shared course per env, replicated to that env's agents (env-major drone order).
-        pos, rad = course_mod.random_courses(
-            k, self.cfg.n_gates, self._arena, device=self._dev, generator=env.gen
-        )
+        fc = getattr(env, "fixed_course", None)
+        if fc is not None:
+            # Studio: every env flies the ONE chosen course (broadcast across envs and agents).
+            pos = fc[0].to(self._dev).unsqueeze(0).expand(k, -1, -1).clone()
+            rad = fc[1].to(self._dev).unsqueeze(0).expand(k, -1).clone()
+        else:
+            pos, rad = course_mod.random_courses(
+                k, self.cfg.n_gates, self._arena, device=self._dev, generator=env.gen
+            )
         d_idx = env.drone_idx(env_idx)                     # (k*na,) env-major
         pos_d = pos.repeat_interleave(na, dim=0)           # (k*na, ng, 3)
         rad_d = rad.repeat_interleave(na, dim=0)

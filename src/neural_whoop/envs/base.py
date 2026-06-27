@@ -78,6 +78,11 @@ class MultiAgentDroneEnv:
         self.prev_action = torch.zeros(self.n_drones, self.act_dim, device=self.device)
         self.prev_pos = torch.zeros(self.n_drones, 3, device=self.device)
 
+        # Optional fixed course (gate_pos (ng,3), gate_rad (ng,)) broadcast to ALL envs instead
+        # of per-env random courses — set by the Studio rollout so a chosen track is flown. The
+        # default (``None``) keeps the training path on procedurally-generated per-env courses.
+        self.fixed_course: tuple[Tensor, Tensor] | None = None
+
         self.task.setup(self)
         self.reset_all()
 

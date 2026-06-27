@@ -39,9 +39,17 @@ viz = [
     "imageio>=2.34",
     "imageio-ffmpeg>=0.5",
 ]
+# Interactive browser Studio backend (FastAPI + uvicorn). The static Three.js frontend under
+# web/studio/ loads three.js from a CDN, so no Node toolchain lives in this repo.
+studio = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
+    "httpx>=0.27",   # FastAPI TestClient (studio API tests)
 ]
 
 [tool.setuptools.packages.find]

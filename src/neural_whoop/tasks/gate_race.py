@@ -66,11 +66,20 @@ class GateRaceConfig:
     gate_radius: float = 0.45
     z_min: float = 0.7
     z_max: float = 2.3
+    # Gate spacing of the procedural walk: each gate is a ``step_min..step_max`` hop from the
+    # previous, turning by at most ``max_turn_deg``. Defaults reproduce the tight indoor course;
+    # raise them (with a bigger ``arena_radius``/``bound_xy``) for spread-out tracks.
+    step_min: float = 1.5
+    step_max: float = 2.8
+    max_turn_deg: float = 60.0
     # Crash bounds.
     bound_xy: float = 6.0
     bound_z_min: float = 0.15
     bound_z_max: float = 4.0
     spawn_height: float = 1.0
+    # Ring spawn radius used only when a Studio fixed course is flown by >1 drone (so the racers
+    # don't start coincident). The training path (per-env random courses) keeps the small jitter.
+    spawn_spread: float = 0.6
 
 
 @register_task("gate_race")
@@ -86,7 +95,8 @@ class GateRaceTask(DroneTask):
         self._oracle = OracleEstimator()
         self._arena = course_mod.ArenaSpec(
             radius=self.cfg.arena_radius, z_min=self.cfg.z_min, z_max=self.cfg.z_max,
-            gate_radius=self.cfg.gate_radius,
+            gate_radius=self.cfg.gate_radius, step_min=self.cfg.step_min,
+            step_max=self.cfg.step_max, max_turn_deg=self.cfg.max_turn_deg,
         )
         self._bounds = Bounds(xy=self.cfg.bound_xy, z_min=self.cfg.bound_z_min, z_max=self.cfg.bound_z_max)
         self._feasible_oracle = oracle_mod.FeasibleOracle(
@@ -114,9 +124,16 @@ class GateRaceTask(DroneTask):
 
     def reset(self, env, env_idx: Tensor) -> None:
         k = env_idx.numel()
-        pos, rad = course_mod.random_courses(
-            k, self.cfg.n_gates, self._arena, device=self._dev, generator=env.gen
-        )
+        fc = getattr(env, "fixed_course", None)
+        if fc is not None:
+            # Studio: every env flies the ONE chosen course (broadcast), so the recorded heroes
+            # share a single track. Truncate/pad is the caller's job — n_gates matches the course.
+            pos = fc[0].to(self._dev).unsqueeze(0).expand(k, -1, -1).clone()
+            rad = fc[1].to(self._dev).unsqueeze(0).expand(k, -1).clone()
+        else:
+            pos, rad = course_mod.random_courses(
+                k, self.cfg.n_gates, self._arena, device=self._dev, generator=env.gen
+            )
         self.gate_pos[env_idx] = pos
         self.gate_rad[env_idx] = rad
         self.target[env_idx] = 0
@@ -132,11 +149,18 @@ class GateRaceTask(DroneTask):
         else:
             self.oracle_lap[env_idx] = oracle_mod.pathlen_lap_time(pos, self.cfg.v_ref)
 
-        # Spawn near origin facing gate 0.
+        # Spawn near origin facing gate 0. On a shared fixed course flown by >1 drone, spread the
+        # spawns around a ring so the racers start well-separated (mirrors swarm_race); otherwise
+        # keep the small per-env jitter the training path uses.
         d_idx = env.drone_idx(env_idx)
         spawn = torch.zeros(k, 3, device=self._dev)
-        spawn[:, 0] = torch.rand(k, device=self._dev, generator=env.gen) * 0.4 - 0.2
-        spawn[:, 1] = torch.rand(k, device=self._dev, generator=env.gen) * 0.4 - 0.2
+        if fc is not None and k > 1:
+            ang = (2.0 * torch.pi / k) * torch.arange(k, device=self._dev)
+            spawn[:, 0] = ang.cos() * self.cfg.spawn_spread
+            spawn[:, 1] = ang.sin() * self.cfg.spawn_spread
+        else:
+            spawn[:, 0] = torch.rand(k, device=self._dev, generator=env.gen) * 0.4 - 0.2
+            spawn[:, 1] = torch.rand(k, device=self._dev, generator=env.gen) * 0.4 - 0.2
         spawn[:, 2] = self.cfg.spawn_height
         yaw = torch.atan2(pos[:, 0, 1] - spawn[:, 1], pos[:, 0, 0] - spawn[:, 0])
         env.spawn(d_idx, spawn, yaw=yaw)
