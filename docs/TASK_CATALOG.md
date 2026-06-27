@@ -46,7 +46,12 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   per-fix **bearing/range precision** (3° / 10%, present on every fix); only removing the detector
   entirely recovers d* (the clean policy, at 10–60× the crash rate). So the lever is **not**
   dropout-coasting memory but precision-*filtering* (EMA/Kalman on the noisy fix) or a better onboard
-  detector. Honest camera-only eval via the DiffAero depth render remains a later hook.
+  detector. **That precision-filtering lever LANDED (`long-tree-2976`, GREEN):** an in-place **EMA**
+  on the body-frame estimate (`estimate_ema_alpha`; obs stays 11 / MCU-clean) averages successive
+  noisy fixes → standoff **2.17→1.54 m** (track_err 0.91→0.25, ≈ the clean policy) at crash 8.7e-5 —
+  **5.6× safer than the brittle clean policy** and below the racing reliability bar, condition-invariant.
+  A new Pareto-dominant corner (accurate *and* robust); the EMA is a reusable perception primitive for
+  any detector-fed task. Honest camera-only eval via the DiffAero depth render remains a later hook.
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
