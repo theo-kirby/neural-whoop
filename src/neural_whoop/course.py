@@ -79,42 +79,86 @@ def random_courses(
     arena = arena or ArenaSpec()
     if n_gates < 1:
         raise ValueError(f"n_gates must be >= 1, got {n_gates}")
+    return random_courses_batched(
+        n_envs, n_gates,
+        radius=arena.radius, step_min=arena.step_min, step_max=arena.step_max,
+        z_min=arena.z_min, z_max=arena.z_max, gate_radius=arena.gate_radius,
+        gate_radius_min=arena.gate_radius_min, gate_radius_max=arena.gate_radius_max,
+        max_turn_deg=arena.max_turn_deg, start_xy=arena.start_xy,
+        device=device, generator=generator,
+    )
+
+
+def random_courses_batched(
+    n_envs: int,
+    n_gates: int,
+    *,
+    radius,
+    step_min,
+    step_max,
+    z_min,
+    z_max,
+    gate_radius: float,
+    gate_radius_min: float | None = None,
+    gate_radius_max: float | None = None,
+    max_turn_deg: float = 60.0,
+    start_xy: tuple[float, float] = (1.5, 0.0),
+    device: torch.device | str = "cpu",
+    generator: torch.Generator | None = None,
+) -> tuple[Tensor, Tensor]:
+    """Like :func:`random_courses` but with **per-env** geometry: ``radius``/``step_min``/
+    ``step_max``/``z_min``/``z_max`` may each be a scalar or an ``(n_envs,)`` tensor.
+
+    This is the vectorized core that lets a single reset generate courses of *different scales*
+    across envs (the scale-randomization curriculum — see ``GateRaceConfig.scale_randomize``).
+    With all-scalar args it is byte-identical to the original ``random_courses`` (same RNG draw
+    order), so existing seeded courses are unchanged.
+    """
     dev = torch.device(device)
 
-    def rand(*shape: int, lo: float = 0.0, hi: float = 1.0) -> Tensor:
+    def _vec(v) -> Tensor:
+        """Broadcast a scalar or tensor to an ``(n_envs,)`` float tensor on ``dev``."""
+        if torch.is_tensor(v):
+            return v.to(dev).reshape(n_envs).float()
+        return torch.full((n_envs,), float(v), device=dev)
+
+    radius_t, step_min_t, step_max_t = _vec(radius), _vec(step_min), _vec(step_max)
+    z_min_t, z_max_t = _vec(z_min), _vec(z_max)
+
+    def rand(*shape: int, lo=0.0, hi=1.0) -> Tensor:
         return torch.rand(*shape, device=dev, generator=generator) * (hi - lo) + lo
 
-    rad_lo = arena.gate_radius_min if arena.gate_radius_min is not None else arena.gate_radius
-    rad_hi = arena.gate_radius_max if arena.gate_radius_max is not None else arena.gate_radius
+    rad_lo = gate_radius_min if gate_radius_min is not None else gate_radius
+    rad_hi = gate_radius_max if gate_radius_max is not None else gate_radius
 
-    pos_xy = torch.tensor(arena.start_xy, device=dev, dtype=torch.float32).expand(n_envs, 2).clone()
+    pos_xy = torch.tensor(start_xy, device=dev, dtype=torch.float32).expand(n_envs, 2).clone()
     heading = rand(n_envs, lo=-math.pi / 4, hi=math.pi / 4)
-    max_turn = math.radians(arena.max_turn_deg)
+    max_turn = math.radians(max_turn_deg)
 
     positions = torch.empty(n_envs, n_gates, 3, device=dev)
     radii = torch.empty(n_envs, n_gates, device=dev)
 
     for g in range(n_gates):
         heading = heading + rand(n_envs, lo=-max_turn, hi=max_turn)
-        step = rand(n_envs, lo=arena.step_min, hi=arena.step_max)
+        step = rand(n_envs, lo=step_min_t, hi=step_max_t)
         nxt = pos_xy + step.unsqueeze(-1) * torch.stack([heading.cos(), heading.sin()], dim=-1)
-        # Steer back toward origin where the hop would leave the arena.
-        out = nxt.norm(dim=-1) > arena.radius
+        # Steer back toward origin where the hop would leave the (per-env) arena.
+        out = nxt.norm(dim=-1) > radius_t
         if out.any():
             back = torch.atan2(-pos_xy[:, 1], -pos_xy[:, 0]) + rand(n_envs, lo=-0.4, hi=0.4)
             heading = torch.where(out, back, heading)
             nxt2 = pos_xy + step.unsqueeze(-1) * torch.stack([heading.cos(), heading.sin()], dim=-1)
             nxt = torch.where(out.unsqueeze(-1), nxt2, nxt)
-        # Hard clamp inside the arena radius.
+        # Hard clamp inside the (per-env) arena radius.
         dist = nxt.norm(dim=-1, keepdim=True).clamp_min(1e-9)
-        scale = (arena.radius / dist).clamp_max(1.0)
+        scale = (radius_t.unsqueeze(-1) / dist).clamp_max(1.0)
         nxt = nxt * scale
         # Re-align heading with actual travel direction.
         delta = nxt - pos_xy
         moved = delta.norm(dim=-1) > 1e-9
         heading = torch.where(moved, torch.atan2(delta[:, 1], delta[:, 0]), heading)
         pos_xy = nxt
-        z = rand(n_envs, lo=arena.z_min, hi=arena.z_max)
+        z = rand(n_envs, lo=z_min_t, hi=z_max_t)
         positions[:, g, 0] = pos_xy[:, 0]
         positions[:, g, 1] = pos_xy[:, 1]
         positions[:, g, 2] = z

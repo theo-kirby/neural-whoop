@@ -72,6 +72,18 @@ class GateRaceConfig:
     step_min: float = 1.5
     step_max: float = 2.8
     max_turn_deg: float = 60.0
+    # Scale-randomization curriculum (default off): when on, each env's course is drawn at a random
+    # SCALE per reset — arena radius ~U[scale_radius_min, scale_radius_max], gate hops proportional
+    # (step = ratio * radius), gate height ~U[scale_z_max_*]. One policy then learns to fly tight
+    # back-to-back turns AND long cruise-and-brake legs (generalist across course sizes). Set the
+    # crash bounds (bound_xy / bound_z_max) to cover the largest scale. Overrides step_*/arena_radius.
+    scale_randomize: bool = False
+    scale_radius_min: float = 4.5
+    scale_radius_max: float = 12.0
+    scale_step_ratio_min: float = 0.34   # step_min = ratio * radius (matches the preset ladder)
+    scale_step_ratio_max: float = 0.62   # step_max = ratio * radius
+    scale_z_max_min: float = 2.3
+    scale_z_max_max: float = 3.5
     # Crash bounds.
     bound_xy: float = 6.0
     bound_z_min: float = 0.15
@@ -125,14 +137,28 @@ class GateRaceTask(DroneTask):
     def reset(self, env, env_idx: Tensor) -> None:
         k = env_idx.numel()
         fc = getattr(env, "fixed_course", None)
+        c = self.cfg
         if fc is not None:
             # Studio: every env flies the ONE chosen course (broadcast), so the recorded heroes
             # share a single track. Truncate/pad is the caller's job — n_gates matches the course.
             pos = fc[0].to(self._dev).unsqueeze(0).expand(k, -1, -1).clone()
             rad = fc[1].to(self._dev).unsqueeze(0).expand(k, -1).clone()
+        elif c.scale_randomize:
+            # Per-env random course SCALE (the generalist curriculum): radius ~U[lo,hi], gate hops
+            # proportional to radius, gate height ~U[z_max range].
+            def _u(lo, hi):
+                return torch.rand(k, device=self._dev, generator=env.gen) * (hi - lo) + lo
+            radius = _u(c.scale_radius_min, c.scale_radius_max)
+            z_max = _u(c.scale_z_max_min, c.scale_z_max_max)
+            pos, rad = course_mod.random_courses_batched(
+                k, c.n_gates, radius=radius,
+                step_min=c.scale_step_ratio_min * radius, step_max=c.scale_step_ratio_max * radius,
+                z_min=c.z_min, z_max=z_max, gate_radius=c.gate_radius,
+                max_turn_deg=c.max_turn_deg, device=self._dev, generator=env.gen,
+            )
         else:
             pos, rad = course_mod.random_courses(
-                k, self.cfg.n_gates, self._arena, device=self._dev, generator=env.gen
+                k, c.n_gates, self._arena, device=self._dev, generator=env.gen
             )
         self.gate_pos[env_idx] = pos
         self.gate_rad[env_idx] = rad
