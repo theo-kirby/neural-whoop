@@ -44,6 +44,34 @@ reason for it to be a graph). So:
   across branches.
 - Be **honest**: record negative/refuted results too, not just wins.
 
+### Node tags (the kind/outcome/cluster taxonomy)
+
+Flywheel **removed** the typed body fields `kind`/`node_type`/`hypothesis` from the node model — the
+canonical way to express what a node *is* is now **graph tags** (created once on the root, then
+assigned to nodes). Untagged nodes are invisible to filtered/zoomed-out graph views, so **tag every
+new neural-whoop node** with one `kind:`, an `outcome:` if it has a verdict, and ≥1 `cluster:`. The
+taxonomy (all defined on the root `morning-feather-7342`):
+
+- **`kind:`** (exactly one) — `experiment` · `measurement` (characterize, no hypothesis) · `method`
+  (tooling/infra/viz) · `idea` (framing / north-star / setup) · `hypothesis` (an untested, testable
+  prediction).
+- **`outcome:`** (empirical nodes) — `GREEN` (confirmed win) · `RED` (refuted) · `NO-GO` (no
+  effect / not worth shipping). Mixed/Pareto results may carry none (honest signal that it's nuanced).
+- **`cluster:`** (≥1, the workstream) — `reward-shaping` · `reliability-dr` · `generalization` ·
+  `swarm` · `tooling-viz` · `capacity-budget`. These are the contract's "cluster tags so zoomed-out
+  views stay legible." Add a new cluster when a genuinely new workstream opens.
+- **`★ studio-baseline`** — a `one_only=true track_history=true` *pointer* tag marking the current
+  recommended studio policy node; moving it records history. Use one_only pointers (not category
+  tags) for "current X" markers.
+
+**Hard rule discovered the hard way: a tag's assigned node set must form a CONNECTED subgraph**
+(every tagged node reachable from another via parent/child edges *through other tagged nodes*).
+Consequences: (1) only tag a node with a `cluster:` if it's adjacent to that cluster's other members
+— a reward node living in the reliability branch can't carry `cluster:reward-shaping`; (2) when
+building up a cluster, **assign tags sequentially anchor-first**, not in parallel — concurrent
+`set_node_tag_assignments` calls race and a child gets rejected as "disconnected" before its parent
+is tagged. Tag creation bumps the root revision (sequence creates, incrementing `expected_revision`).
+
 ## Architecture
 
 ```
