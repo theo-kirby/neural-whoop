@@ -171,6 +171,7 @@ def _list_policies(runs_dir: Path, root: Path) -> list[dict]:
             "path": _rel(ckpt, root), "name": run_name, "run": run_name,
             "task": "gate_race", "obs_dim": None, "act_dim": None, "step": None,
             "best_lap": None, "eval": None, "created": None, "has_scalars": False,
+            "family": "gate", "needs_course": True,
         }
         try:
             info["created"] = ckpt.stat().st_mtime
@@ -184,6 +185,11 @@ def _list_policies(runs_dir: Path, root: Path) -> list[dict]:
                             act_dim=m.get("act_dim"), step=m.get("step"))
             except Exception:  # noqa: BLE001 - skip an unreadable sidecar
                 pass
+        # Family flag drives the UI (gateless tasks hide the course selector). Derived from the task
+        # so the frontend never hardcodes task names.
+        from neural_whoop.studio.rollout import GATELESS_TASKS, task_family
+        info["family"] = task_family(info["task"])
+        info["needs_course"] = info["task"] not in GATELESS_TASKS
         # Eval metrics from a recorded eval.json (runs/<run>/eval.json or viz/eval.json).
         for cand in (ckpt.parent / "eval.json", ckpt.parent / "viz" / "eval.json"):
             if cand.is_file():

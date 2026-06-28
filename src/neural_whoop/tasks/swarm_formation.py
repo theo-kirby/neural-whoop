@@ -245,6 +245,16 @@ class SwarmFormationTask(DroneTask):
         info = {"crashed": crashed, "collided": collided}
         return reward, terminated_env, info
 
+    # --- visual scene (replay `scene` channel) ---
+    def scene_objects(self, env) -> dict:
+        """The shared moving anchor (broadcast per drone) + each drone's own assigned ring slot."""
+        anchor = self._field.position(env.sim_time).repeat_interleave(self.cfg.n_agents, 0)
+        return {"anchor": anchor, "slot": self._slots(env, env.sim_time)}
+
+    def scene_info(self) -> dict:
+        """Formation ring radius so the viewer can size the slot markers."""
+        return {"formation_radius": float(self.cfg.formation_radius)}
+
     def metrics(self, env) -> dict:
         steps = self.steps.clamp_min(1).float()
         sep = self.last_min_sep[torch.isfinite(self.last_min_sep)]

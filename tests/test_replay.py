@@ -160,6 +160,42 @@ def test_round_trip_gzip(tmp_path):
     assert doc["episodes"][0]["gates"][1]["radius"] == pytest.approx(0.45)
 
 
+def test_scene_channel_round_trips(tmp_path):
+    """A frame with the optional `scene` channel survives save/load; vectors stay vectors and the
+    command scalar is unwrapped. meta.scene_info round-trips too — all additive at v2."""
+    rec = RunRecorder({**_META, "scene_info": {"standoff": 0.8, "command_labels": ["STOP", "GO"]}})
+    rec.begin_episode(1, [], dr=None, oracle_lap=None)
+    rec.add_frame(
+        t=0.02, step=1, pos=[0, 0, 1], quat=[0, 0, 0, 1], rpy=[0, 0, 0],
+        vel=[0, 0, 0], angvel=[0, 0, 0], action=[0, 0, 0, 0], action_diffaero=[1, 0, 0, 0],
+        reward=0.0, cum_reward=0.0, gate_idx=0, dist_to_gate=0.0, laps=0,
+        scene={"target": np.array([1.0, 2.0, 3.0]), "command": np.float32(1.0)},
+    )
+    rec.end_episode({"steps": 1})
+    doc = load_run(rec.save(tmp_path / "scene.json.gz"))
+    json.dumps(doc)  # no leaked numpy types
+    assert doc["meta"]["scene_info"]["command_labels"] == ["STOP", "GO"]
+    fr = doc["episodes"][0]["frames"][0]
+    assert fr["scene"]["target"] == [1.0, 2.0, 3.0]   # vector stays a list
+    assert fr["scene"]["command"] == 1.0              # length-1 unwrapped to a scalar
+    assert isinstance(fr["scene"]["command"], float)
+
+
+def test_scene_absent_still_validates(tmp_path):
+    """Back-compat: a frame with no `scene` emits no `scene` key (old readers untouched)."""
+    rec = RunRecorder(_META)
+    rec.begin_episode(1, [], dr=None, oracle_lap=None)
+    rec.add_frame(
+        t=0.02, step=1, pos=[0, 0, 1], quat=[0, 0, 0, 1], rpy=[0, 0, 0],
+        vel=[0, 0, 0], angvel=[0, 0, 0], action=[0, 0, 0, 0], action_diffaero=[1, 0, 0, 0],
+        reward=0.0, cum_reward=0.0, gate_idx=0, dist_to_gate=0.0, laps=0,
+    )
+    rec.end_episode({"steps": 1})
+    doc = load_run(rec.save(tmp_path / "noscene.json"))
+    assert "scene" not in doc["episodes"][0]["frames"][0]
+    assert "scene_info" not in doc["meta"]
+
+
 def test_dr_dict_round_trips(tmp_path):
     rec = RunRecorder({"config": "dr_on"})
     dr = {"wind_vec": [0.5, -0.2, 0.0], "rate_gain_scale": 1.07, "latency_steps": 1}

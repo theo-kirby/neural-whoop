@@ -80,12 +80,21 @@ JSON schema (version 1)
               "laps":   <int>,            # laps completed so far this episode
               "passed": <bool>,           # a gate was passed this step
               "crashed": <bool>,          # the drone crashed this step
-              "obs": [...]                # optional flat observation vector
+              "obs": [...],               # optional flat observation vector
+              "scene": {                  # OPTIONAL (v2): per-drone world-frame markers for gateless
+                "target": [x,y,z],        # follow/formation tasks. Keys per task (target/anchor/slot
+                "command": <float>        # vectors; command scalar). See meta.scene_info + the task's
+              }                           # scene_objects(). Absent for gate tasks.
             }
           ]
         }
       ]
     }
+
+``meta`` additionally carries an OPTIONAL ``scene_info`` dict (v2) — static descriptors for the
+``scene`` markers (standoff radius, ``command_labels``, ``formation_radius``) so a consumer can
+label/scale them without hardcoding task names. Both ``scene`` and ``scene_info`` are purely
+additive, so the version stays at 2 and old readers ignore them.
 
 Read a file back with :func:`load_run` (gzip-transparent).
 """
@@ -148,6 +157,7 @@ def _build_frame(
     passed: bool = False,
     crashed: bool = False,
     obs: Any = None,
+    scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Coerce one control-step frame to plain JSON types (shared by single- and group-episode)."""
     frame: dict[str, Any] = {
@@ -170,6 +180,15 @@ def _build_frame(
     }
     if obs is not None:
         frame["obs"] = _vec(obs)
+    if scene:
+        # Additive `scene` channel (v2, optional): per-frame world-frame markers for gateless
+        # follow/formation tasks. Each value is coerced with _vec; a length-1 result is unwrapped to
+        # a scalar (the command channel), a longer one stays a vector (target/anchor/slot).
+        coerced: dict[str, Any] = {}
+        for key, val in scene.items():
+            vec = _vec(val)
+            coerced[key] = vec if len(vec) > 1 else float(vec[0])
+        frame["scene"] = coerced
     return frame
 
 
@@ -178,6 +197,7 @@ def build_meta(
     *,
     config: str,
     policy: str,
+    scene_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the replay ``meta`` block from a config name + the live env contract.
 
@@ -188,6 +208,9 @@ def build_meta(
         env: The :class:`~neural_whoop.envs.base.MultiAgentDroneEnv` being rolled out.
         config: Experiment/config name (e.g. ``"gate_race"``).
         policy: Human-readable policy label (params, source checkpoint).
+        scene_info: Static descriptors for the optional ``scene`` channel (standoff radius, command
+            labels, formation radius). ``None`` -> pull from ``env.task.scene_info()`` (the common
+            path); attached as ``meta["scene_info"]`` only when non-empty (additive at v2).
 
     Returns:
         The ``meta`` dict (all JSON-native types).
@@ -196,7 +219,10 @@ def build_meta(
     control_hz = int(round(1.0 / dt)) if dt > 0 else 0
     n_substeps = int(getattr(env.dyn.params, "n_substeps", 1))
     lim = env.limits
-    return {
+    if scene_info is None:
+        si = getattr(env.task, "scene_info", None)
+        scene_info = si() if callable(si) else {}
+    meta = {
         "config": str(config),
         "policy": str(policy),
         "task": str(getattr(env.task, "name", "unknown")),
@@ -217,6 +243,9 @@ def build_meta(
         },
         "unity_hint": UNITY_HINT,
     }
+    if scene_info:
+        meta["scene_info"] = dict(scene_info)
+    return meta
 
 
 class RunRecorder:
@@ -296,6 +325,7 @@ class RunRecorder:
         passed: bool = False,
         crashed: bool = False,
         obs: Any = None,
+        scene: dict[str, Any] | None = None,
     ) -> None:
         """Append one control-step frame to the current episode (see the module schema)."""
         if self._current is None:
@@ -304,7 +334,7 @@ class RunRecorder:
             t=t, step=step, pos=pos, quat=quat, rpy=rpy, vel=vel, angvel=angvel,
             action=action, action_diffaero=action_diffaero, reward=reward,
             cum_reward=cum_reward, gate_idx=gate_idx, dist_to_gate=dist_to_gate,
-            laps=laps, passed=passed, crashed=crashed, obs=obs,
+            laps=laps, passed=passed, crashed=crashed, obs=obs, scene=scene,
         ))
 
     def add_group_episode(

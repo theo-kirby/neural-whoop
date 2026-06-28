@@ -239,6 +239,10 @@ def evaluate_and_record(
         laps_h = task.laps[h].cpu() if hasattr(task, "laps") else torch.zeros(n_h, dtype=torch.long)
         bl_h = task.best_lap[h].cpu() if hasattr(task, "best_lap") else torch.full((n_h,), float("inf"))
         obs_h = obs[h].cpu() if record_obs else None
+        # Optional per-drone scene markers (moving target/anchor/slot + command) for gateless tasks.
+        # Sliced to the hero rows exactly like the pose snapshots; empty dict for gate tasks.
+        scene_raw = task.scene_objects(env)
+        scene_h = {k: v[h].cpu() for k, v in scene_raw.items()} if scene_raw else None
 
         for j in range(n_h):
             if not open_ep[j]:
@@ -274,6 +278,7 @@ def evaluate_and_record(
                 "passed": bool(passed_h[j]),
                 "crashed": bool(crashed_h[j]),
                 "obs": obs_h[j] if obs_h is not None else None,
+                "scene": {k: v[j] for k, v in scene_h.items()} if scene_h else None,
             })
 
     def _summary(j: int) -> dict:

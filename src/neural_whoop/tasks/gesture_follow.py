@@ -113,6 +113,17 @@ class GestureFollowTask(HandFollowTask):
         info = {"crashed": crashed, "in_view": in_fov}
         return reward, crashed, info
 
+    # --- visual scene: inherit the target marker, add the STOP/GO command channel ---
+    def scene_objects(self, env) -> dict:
+        scene = super().scene_objects(env)
+        scene["command"] = self._gesture          # 0 = STOP, 1 = GO
+        return scene
+
+    def scene_info(self) -> dict:
+        info = super().scene_info()
+        info["command_labels"] = ["STOP", "GO"]
+        return info
+
     def metrics(self, env) -> dict:
         m = super().metrics(env)
         go = self._go_steps.clamp_min(1.0)

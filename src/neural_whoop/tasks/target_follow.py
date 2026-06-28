@@ -258,6 +258,15 @@ class TargetFollowTask(DroneTask):
         info = {"crashed": crashed, "in_view": in_fov}
         return reward, terminated_env, info
 
+    # --- visual scene (replay `scene` channel) ---
+    def scene_objects(self, env) -> dict:
+        """The moving target's world position per drone (n_drones == n_envs for the follow tasks)."""
+        return {"target": self._field.position(env.sim_time)}
+
+    def scene_info(self) -> dict:
+        """Standoff radius + FOV so the viewer can label/size the target marker."""
+        return {"standoff": float(self.cfg.d_desired), "fov_deg": float(self.cfg.fov_deg)}
+
     def metrics(self, env) -> dict:
         steps = self.steps.clamp_min(1).float()
         return {

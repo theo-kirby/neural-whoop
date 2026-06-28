@@ -95,3 +95,26 @@ class DroneTask(ABC):
     def metrics(self, env: "MultiAgentDroneEnv") -> dict:
         """Optional richer eval metrics (defaults to empty)."""
         return {}
+
+    def scene_objects(self, env: "MultiAgentDroneEnv") -> dict:
+        """Per-drone, world-frame scene markers for this control step (the replay ``scene`` channel).
+
+        Default empty: gate tasks need nothing extra — their gates already travel in the episode's
+        ``gates`` block. Gateless follow/formation tasks override this to surface what the policy is
+        tracking (a moving target/anchor/slot) so the visualizers (Studio + nw-viz) can draw it.
+
+        Returns a dict of **per-drone** tensors, each either a world-frame vector ``(n_drones, 3)``
+        (e.g. ``"target"``/``"anchor"``/``"slot"``) or a per-drone scalar ``(n_drones,)`` (e.g. a
+        ``"command"`` channel). Keys are consumer-stable — see ``docs/VISUAL_CONTRACT.md``. The
+        recorder slices the hero rows and stores them per frame; absent keys cost nothing.
+        """
+        return {}
+
+    def scene_info(self) -> dict:
+        """Static, task-level descriptors for the scene markers (the replay ``meta.scene_info``).
+
+        Standoff radius, command-vocabulary labels, formation ring radius — whatever the visualizer
+        needs to label/scale the :meth:`scene_objects` markers without hardcoding task names.
+        Default empty.
+        """
+        return {}

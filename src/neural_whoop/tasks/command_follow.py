@@ -111,6 +111,19 @@ class CommandFollowTask(HandFollowTask):
         info = {"crashed": crashed, "in_view": in_fov}
         return reward, crashed, info
 
+    # --- visual scene: inherit the target marker, add the 3-way STOP/NEAR/FAR command channel ---
+    def scene_objects(self, env) -> dict:
+        scene = super().scene_objects(env)
+        scene["command"] = self._cmd              # 0 = STOP, 1 = NEAR, 2 = FAR
+        return scene
+
+    def scene_info(self) -> dict:
+        info = super().scene_info()
+        info["command_labels"] = ["STOP", "NEAR", "FAR"]
+        info["d_near"] = float(self.cfg.d_near)
+        info["d_far"] = float(self.cfg.d_far)
+        return info
+
     def metrics(self, env) -> dict:
         steps = self.steps.clamp_min(1).float()
         out = {

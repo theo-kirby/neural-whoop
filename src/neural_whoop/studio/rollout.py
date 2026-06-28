@@ -4,13 +4,18 @@ The one Studio route that touches the sim. Reuses the eval recording path verbat
 (:func:`neural_whoop.eval.rollout.evaluate_and_record` with ``group=True``) so the produced
 file is exactly the v2 group-episode replay the viewer (and nw-viz) already render.
 
-Drone-count maps to the substrate per the policy's task (see CLAUDE.md / the plan):
+Drone-count maps to the substrate per the policy's task family (see CLAUDE.md / docs/STUDIO.md):
 
-* **single-drone policy** (``gate_race``): ``n_envs = drone_count``, ``n_agents = 1`` — N
-  independent racers on the SAME fixed course (shared via ``env.fixed_course``), recorded as one
-  group episode (they share the track, no mutual awareness).
-* **swarm policy** (``swarm_race``): ``n_envs = 1``, ``n_agents = max(2, drone_count)`` — a
+* **gate_race** (gated, single-drone): ``n_envs = drone_count``, ``n_agents = 1`` — N independent
+  racers on the SAME fixed course (shared via ``env.fixed_course``), one group episode.
+* **swarm_race** (gated swarm): ``n_envs = 1``, ``n_agents = max(2, drone_count)`` — a
   collision-aware shared-track swarm via the task's neighbour observation.
+* **follow tasks** (``target/hand/gesture/command_follow``, gateless single-drone):
+  ``n_envs = drone_count``, ``n_agents = 1`` — N independent followers, each with its own moving
+  target; no course is resolved (the task supplies its arena), the ``scene`` channel records the
+  target (+ command) per drone.
+* **swarm_formation** (gateless swarm): ``n_envs = 1``, ``n_agents = max(2, drone_count)`` — a ring
+  formation around one shared moving anchor; the ``scene`` channel records the anchor + each slot.
 
 Heavy imports (torch/env/agent) are function-local so the server module imports without a GPU.
 """
@@ -22,6 +27,26 @@ from pathlib import Path
 
 #: Default location of seeded course YAMLs and run outputs, relative to the repo root.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+#: Task families that map drone-count to ``n_agents`` (shared env, mutual awareness) rather than
+#: ``n_envs`` (independent racers): the swarm tasks.
+SWARM_TASKS = frozenset({"swarm_race", "swarm_formation"})
+#: Tasks with no gate course — they supply their own arena and a moving target/anchor instead, so
+#: course resolution + gate sizing is skipped (the ``scene`` channel carries what they track).
+GATELESS_TASKS = frozenset(
+    {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation"}
+)
+
+
+def task_family(task_name: str) -> str:
+    """Coarse family for the frontend: ``gate`` / ``gate_swarm`` / ``follow`` / ``formation``."""
+    if task_name == "swarm_formation":
+        return "formation"
+    if task_name == "swarm_race":
+        return "gate_swarm"
+    if task_name in GATELESS_TASKS:
+        return "follow"
+    return "gate"
 
 
 def _read_ckpt_meta(policy_path: Path) -> dict:
@@ -83,32 +108,47 @@ def studio_rollout(
     meta = _read_ckpt_meta(policy_path)
     task_name = meta.get("task", "gate_race")
     drone_count = max(1, int(drone_count))
+    gateless = task_name in GATELESS_TASKS
 
-    # Resolve the chosen course to tensors (shared by every env/agent via env.fixed_course).
-    pos, rad, course_label = courses_mod.resolve_course(
-        course, courses_dir, n_gates=int(n_gates), seed=int(seed), device=device,
-    )
-    course_gates = int(pos.shape[0])
+    if gateless:
+        # No gate course: the task carries its own arena + a moving target/anchor (the `scene`
+        # channel records what it tracks). We only thread the requested episode length through so the
+        # watched clip isn't truncated; bounds stay at the task's own defaults.
+        pos = rad = None
+        course_gates = 0
+        course_label = "arena"
+        bound_kw = {"episode_len": max(600, int(max_steps))}
+    else:
+        # Resolve the chosen course to tensors (shared by every env/agent via env.fixed_course).
+        pos, rad, course_label = courses_mod.resolve_course(
+            course, courses_dir, n_gates=int(n_gates), seed=int(seed), device=device,
+        )
+        course_gates = int(pos.shape[0])
+        # Size the crash bounds + episode length to the CHOSEN course. Seeded/preset courses can place
+        # gates far outside the default tight bounds (bound_xy=6 m), so without this the drone crosses
+        # the boundary heading to gate 0 and crashes before reaching it. Add margin for the gate radius
+        # and overshoot; never shrink below the tight defaults. episode_len = the requested window so a
+        # long spread lap isn't truncated mid-flight.
+        horiz_max = float(pos[:, :2].norm(dim=-1).max())
+        z_max = float(pos[:, 2].max())
+        rad_max = float(rad.max())
+        bound_kw = {
+            "bound_xy": max(6.0, horiz_max + rad_max + 2.0),
+            "bound_z_max": max(4.0, z_max + rad_max + 1.5),
+            "episode_len": max(600, int(max_steps)),
+        }
 
-    # Size the crash bounds + episode length to the CHOSEN course. Seeded/preset courses can place
-    # gates far outside the default tight bounds (bound_xy=6 m), so without this the drone crosses
-    # the boundary heading to gate 0 and crashes before reaching it. Add margin for the gate radius
-    # and overshoot; never shrink below the tight defaults. episode_len = the requested window so a
-    # long spread lap isn't truncated mid-flight.
-    horiz_max = float(pos[:, :2].norm(dim=-1).max())
-    z_max = float(pos[:, 2].max())
-    rad_max = float(rad.max())
-    bound_kw = {
-        "bound_xy": max(6.0, horiz_max + rad_max + 2.0),
-        "bound_z_max": max(4.0, z_max + rad_max + 1.5),
-        "episode_len": max(600, int(max_steps)),
-    }
-
-    # Map drone-count to the substrate per the policy's task.
-    if task_name == "swarm_race":
+    # Map drone-count to the substrate per the policy's task. Swarm tasks raise n_agents (shared env,
+    # mutual awareness); the rest fly drone_count independent envs sharing one fixed scene.
+    if task_name in SWARM_TASKS:
         n_agents = max(2, drone_count)
         n_envs = 1
-        task = make_task(task_name, n_agents=n_agents, n_gates=course_gates, **bound_kw)
+        gate_kw = {} if gateless else {"n_gates": course_gates}
+        task = make_task(task_name, n_agents=n_agents, **gate_kw, **bound_kw)
+    elif gateless:
+        n_agents = 1
+        n_envs = drone_count
+        task = make_task(task_name, **bound_kw)
     else:
         n_agents = 1
         n_envs = drone_count
@@ -125,13 +165,14 @@ def studio_rollout(
         raise ValueError(
             f"policy obs_dim {ckpt_obs} != env obs_dim {env.obs_dim} for task {task_name!r}"
         )
-    env.fixed_course = (pos.to(device), rad.to(device))
+    if pos is not None:
+        env.fixed_course = (pos.to(device), rad.to(device))
 
     agent = load_agent(str(policy_path), device=device)
 
-    # Record all flown drones as one group (they share the fixed course). For gate_race that's one
-    # drone per env (indices 0..n_envs-1); for swarm it's env 0's agents.
-    heroes = list(range(n_agents)) if task_name == "swarm_race" else list(range(n_envs))
+    # Record all flown drones as one group. Swarm tasks (n_agents>1) record env 0's agents; the
+    # single-agent tasks (gate_race + follow) record one drone per env (indices 0..n_envs-1).
+    heroes = list(range(n_agents)) if task_name in SWARM_TASKS else list(range(n_envs))
     rec_meta = build_meta(env, config=f"studio:{task_name}:{course_label}",
                           policy=policy_label(agent, str(policy_path)))
     recorder = RunRecorder(rec_meta)
@@ -145,20 +186,30 @@ def studio_rollout(
     recorder.save(out_path)
     rel = out_path.resolve().relative_to(runs_dir.resolve()).as_posix()
 
-    # Report only metrics that are MEANINGFUL for a single watched rollout. We run one long episode
-    # per drone (episode_len == max_steps) so the hero clip is continuous, but that makes the task's
-    # snapshot `lap_completion_rate`/`laps_completed_mean` (laps since the last crash) phase-sensitive
-    # and unfair — so we drop them and report episode_len-independent throughput instead:
+    # Report only metrics that are MEANINGFUL for a single watched rollout. Gateless follow/formation
+    # tasks have no laps — pass through their own holding/tracking metrics (whichever the task emits).
+    # Gate tasks: we run one long episode per drone (episode_len == max_steps) so the hero clip is
+    # continuous, but that makes the task's snapshot `lap_completion_rate` (laps since the last crash)
+    # phase-sensitive and unfair — so we drop it and report episode_len-independent throughput instead:
     # best_lap (a min), total gates passed, and laps-per-drone (= gate passes / gates / drones).
-    total_drones = n_envs * n_agents
-    gates_total = float(metrics.get("gates_passed_total", 0.0) or 0.0)
-    studio_metrics = {
-        "best_lap_time": metrics.get("best_lap_time"),
-        "oracle_lap_time": metrics.get("oracle_lap_time"),
-        "gates_passed_total": int(gates_total),
-        "laps_per_drone": gates_total / max(1, course_gates * total_drones),
-        "crash_rate_per_step": metrics.get("crash_rate_per_step"),
-    }
+    if gateless:
+        keys = (
+            "mean_reward", "crash_rate_per_step",
+            "time_in_view_rate", "mean_track_error", "mean_distance", "follow_hold_rate",
+            "stop_compliance", "near_hold", "far_hold",
+            "mean_formation_error", "formation_hold_rate", "collision_rate_per_step",
+        )
+        studio_metrics = {k: metrics[k] for k in keys if k in metrics}
+    else:
+        total_drones = n_envs * n_agents
+        gates_total = float(metrics.get("gates_passed_total", 0.0) or 0.0)
+        studio_metrics = {
+            "best_lap_time": metrics.get("best_lap_time"),
+            "oracle_lap_time": metrics.get("oracle_lap_time"),
+            "gates_passed_total": int(gates_total),
+            "laps_per_drone": gates_total / max(1, course_gates * total_drones),
+            "crash_rate_per_step": metrics.get("crash_rate_per_step"),
+        }
     summary = {
         "run_path": rel,
         "task": task_name,

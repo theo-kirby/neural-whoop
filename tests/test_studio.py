@@ -89,6 +89,52 @@ def test_swarm_rollout_shares_one_course(tmp_path):
         assert len(d["frames"]) > 0
 
 
+def test_follow_rollout_records_scene_gateless(tmp_path):
+    # A gateless follow policy: drone_count -> independent envs, no course resolved, and every frame
+    # carries the moving target + command in the `scene` channel (with meta.scene_info labels).
+    ckpt = _make_ckpt(tmp_path, "command_follow")
+    _, summary = studio_rollout(
+        ckpt, "preset:spread", drone_count=2, dr=False, max_steps=30, seed=0,
+        device="cpu", courses_dir=tmp_path / "courses", runs_dir=tmp_path / "runs",
+    )
+    assert summary["task"] == "command_follow"
+    assert summary["course"] == "arena"          # no gate course resolved
+    assert summary["num_gates"] == 0
+
+    from neural_whoop.viz.replay import load_run
+
+    doc = load_run((tmp_path / "runs" / summary["run_path"]))
+    assert doc["version"] == 2
+    assert doc["meta"]["scene_info"]["command_labels"] == ["STOP", "NEAR", "FAR"]
+    ep = doc["episodes"][0]
+    assert len(ep["drones"]) == 2                 # two independent followers, one group episode
+    assert not ep["gates"]                        # gateless
+    fr = ep["drones"][0]["frames"][0]
+    assert len(fr["scene"]["target"]) == 3        # world-frame target vector
+    assert "command" in fr["scene"]               # STOP/NEAR/FAR scalar
+
+
+def test_formation_rollout_uses_n_agents_substrate(tmp_path):
+    # swarm_formation is a gateless SWARM task: drone_count -> n_agents in ONE env, anchor + per-slot
+    # markers in the scene channel.
+    ckpt = _make_ckpt(tmp_path, "swarm_formation", n_agents=3)
+    _, summary = studio_rollout(
+        ckpt, "preset:big", drone_count=4, dr=False, max_steps=30, seed=0,
+        device="cpu", courses_dir=tmp_path / "courses", runs_dir=tmp_path / "runs",
+    )
+    assert summary["task"] == "swarm_formation"
+    assert summary["drone_count"] == 4
+
+    from neural_whoop.viz.replay import load_run
+
+    doc = load_run((tmp_path / "runs" / summary["run_path"]))
+    ep = doc["episodes"][0]
+    assert len(ep["drones"]) == 4                 # n_agents == drone_count, all in env 0
+    assert not ep["gates"]
+    fr = ep["drones"][0]["frames"][0]
+    assert len(fr["scene"]["anchor"]) == 3 and len(fr["scene"]["slot"]) == 3
+
+
 def test_scale_curriculum_grows_course_range():
     # With a curriculum, early training (progress~0) draws only tight courses; late training
     # (progress >= scale_curriculum_frac) opens the full tight->big range.
@@ -179,10 +225,12 @@ def test_api_policy_metadata_and_scalars(tmp_path):
 
     p = next(x for x in client.get("/api/policies").json() if x["name"] == "gate_race")
     # The enriched metadata the Studio's policy panel renders.
-    for key in ("run", "created", "act_dim", "obs_dim", "step", "eval", "has_scalars"):
+    for key in ("run", "created", "act_dim", "obs_dim", "step", "eval", "has_scalars",
+                "family", "needs_course"):
         assert key in p
     assert p["created"] is not None                     # checkpoint mtime
     assert p["has_scalars"] is False                    # no event file in this fixture
+    assert p["family"] == "gate" and p["needs_course"] is True   # gate_race wants a course
 
     # Scalars route: empty (no event file) for a real run, 404 for a bogus one.
     sc = client.get("/api/policies/gate_race/scalars").json()
