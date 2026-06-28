@@ -46,6 +46,7 @@ A consumer needs no external doc; everything to interpret the frames is here.
 | `action_layout` | act-v2 + `action_diffaero` semantics |
 | `action_limits` | the `ActionLimits` the env mapped the action onto (4 floats) |
 | `unity_hint` | Z-up RH → Unity Y-up LH conversion hint (verify against your rig) |
+| `scene_info` | **(v2, optional)** static descriptors for the `scene` channel — see below |
 
 ### `episodes[]` — one recorded **hero** flight (or one swarm group) each
 Recording is **hero-subset**: full per-step frames are kept only for a small set of hero drones;
@@ -88,6 +89,29 @@ exactly why an early swarm replay rendered as one lonely drone.)
 | `laps` | laps completed so far | |
 | `passed`, `crashed` | per-step bool flags | |
 | `obs` | optional flat observation vector | `--record-obs` |
+| `scene` | **(v2, optional)** per-drone world-frame markers for **gateless** tasks | see below |
+
+### `scene` — what a gateless follow/formation policy is tracking (v2, additive)
+
+Gate tasks need nothing extra: their geometry travels in the episode's `gates`. The follow/perception
+thread (`target_follow` → `hand_follow` → `gesture_follow` → `command_follow`) and `swarm_formation`
+have **no gates** — they chase a moving target/anchor instead — so each frame carries an optional
+`scene` dict of **per-drone, world-frame** markers, populated by the task's
+`DroneTask.scene_objects(env)` hook and recorded alongside the pose. Values are either a world-frame
+**vector** `[x,y,z]` or a **scalar** (the command channel):
+
+| key | tasks | meaning |
+|-----|-------|---------|
+| `target` | the four `*_follow` tasks | world position of the moving target the drone follows |
+| `command` | `gesture_follow` (0/1), `command_follow` (0/1/2) | raw command index — label via `scene_info.command_labels` |
+| `anchor` | `swarm_formation` | world position of the shared moving anchor (same for the env's agents) |
+| `slot` | `swarm_formation` | this drone's assigned ring slot (world position) |
+
+`meta.scene_info` carries the static descriptors a viewer needs to label/scale those markers without
+hardcoding task names: `standoff` / `fov_deg` (follow), `command_labels` (e.g. `["STOP","NEAR","FAR"]`),
+`d_near` / `d_far` (command_follow), `formation_radius` (swarm_formation). Both viewers
+(`web/studio/` + `nw-viz`) draw `target`/`anchor` as a sphere (cyan/amber), `slot` as a faint ring,
+tint the target by `command`, and show a command chip from the labels. Gate tasks emit neither key.
 
 > **Frame-name note.** `vel`/`angvel` keep the lab's exact wire names so the existing
 > `web/replay-viewer/` Three.js viewer consumes new-repo rollouts unchanged. Their *frames* (world
@@ -143,3 +167,7 @@ any change here and in `CLAUDE.md`, mirroring the obs/act versioning discipline 
 - **v2** — added the optional `episodes[].drones[]` **swarm group** (multiple drones on one shared
   course). Additive and backward-compatible (the lead drone is mirrored at the episode level), but
   the version was bumped so the self-describing document advertises the capability honestly.
+- **(v2, no bump)** — added the optional per-frame `scene` dict + `meta.scene_info` for gateless
+  follow/formation tasks (moving target/anchor/slot + command channel). Purely additive optional
+  fields, so the version **stays at 2** per the rule above; old replays and the matplotlib pack are
+  unaffected.

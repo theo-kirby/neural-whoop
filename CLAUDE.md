@@ -95,7 +95,9 @@ viz/render.py    -> lazy renderer: trajectory / synthetic FPV / training curves 
 
 **Visual observability seam (`viz/`).** A versioned replay schema
 (`format="neural-whoop-replay"`, `docs/VISUAL_CONTRACT.md`) is the durable record of what a policy
-actually did: per-step hero telemetry + the contract metadata to interpret it. `viz/replay.py` is
+actually did: per-step hero telemetry + the contract metadata to interpret it (gate geometry for
+racing tasks; an additive per-frame `scene` channel — moving target/anchor/slot + command — for the
+gateless follow/formation tasks, via `DroneTask.scene_objects()`). `viz/replay.py` is
 pure stdlib+numpy (imports without the sim/viz extras); `viz/render.py` is lazily-imported (the
 `viz` extra: matplotlib + Pillow + tbparse) and turns a replay into Flywheel-native PNG/CSV
 artifacts. Recording is **hero-subset** (full frames for a few drones; aggregate metrics over the
@@ -116,9 +118,14 @@ same v2 group-episode path), and serves the replay to a static Three.js frontend
 a policy-metadata panel and TensorBoard training charts parsed via the dependency-free
 `studio/tbscalars.py`). You pick a **policy**, a **course** (a seeded
 `assets/courses/*.yaml` or an arena **preset**), and a **drone count**. Drone-count maps to the
-substrate per the policy's task: `gate_race` → `n_envs = drone_count, n_agents = 1` (N independent
-racers sharing one fixed track); `swarm_race` → `n_envs = 1, n_agents = drone_count` (collision-aware
-shared-track swarm). The frontend loads three.js from a CDN importmap (no Node toolchain in this
+substrate per the policy's **task family**: gated single-drone (`gate_race`) → `n_envs = drone_count,
+n_agents = 1` (independent racers on one fixed track); gated swarm (`swarm_race`) → `n_envs = 1,
+n_agents = drone_count` (collision-aware shared-track swarm); gateless **follow**
+(`target/hand/gesture/command_follow`) → `n_envs = drone_count, n_agents = 1` (independent followers,
+each its own moving target); gateless **formation** (`swarm_formation`) → `n_envs = 1, n_agents =
+drone_count` (ring around one moving anchor). The gateless families have **no course** (the
+`/api/policies` `family`/`needs_course` flag hides the course selector); what they track rides in the
+replay's `scene` channel, drawn as a target/anchor/slot marker (+ command chip). The frontend loads three.js from a CDN importmap (no Node toolchain in this
 repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab from
 the lab studio is deferred. See `docs/STUDIO.md`.
 

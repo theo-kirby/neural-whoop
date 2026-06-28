@@ -117,7 +117,11 @@ def studio_rollout(
         pos = rad = None
         course_gates = 0
         course_label = "arena"
-        bound_kw = {"episode_len": max(600, int(max_steps))}
+        # episode_len a hair beyond the rollout window so no terminal truncation-reset fires within
+        # it: these tasks' holding/tracking rate metrics live in task.metrics() (reset-zeroed
+        # accumulators), so a reset on the final step would report them as 0 (gate tasks dodge this
+        # by reporting min/total metrics that survive a reset).
+        bound_kw = {"episode_len": max(600, int(max_steps)) + 5}
     else:
         # Resolve the chosen course to tensors (shared by every env/agent via env.fixed_course).
         pos, rad, course_label = courses_mod.resolve_course(

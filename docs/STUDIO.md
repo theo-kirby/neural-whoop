@@ -36,23 +36,31 @@ The FPV/top-down frames can be dragged (by their header) and resized (corner gri
 
 ## Drone-count semantics
 
-Drone-count maps to the substrate per the policy's task (the env flattens `(n_envs, n_agents)` →
-`n_drones`):
+Drone-count maps to the substrate per the policy's **task family** (the env flattens
+`(n_envs, n_agents)` → `n_drones`):
 
-| policy task   | mapping                                  | meaning                                              |
-|---------------|------------------------------------------|------------------------------------------------------|
-| `gate_race`   | `n_envs = drone_count`, `n_agents = 1`   | N **independent** racers sharing one fixed course (no mutual awareness; ring-spread spawns) |
-| `swarm_race`  | `n_envs = 1`, `n_agents = drone_count` (≥2) | collision-aware shared-track swarm (neighbour obs)   |
+| family (task)                         | gated? | mapping                                  | meaning |
+|---------------------------------------|--------|------------------------------------------|---------|
+| **gate** (`gate_race`)                | yes    | `n_envs = drone_count`, `n_agents = 1`   | N **independent** racers sharing one fixed course (ring-spread spawns) |
+| **gate_swarm** (`swarm_race`)         | yes    | `n_envs = 1`, `n_agents = drone_count` (≥2) | collision-aware shared-track swarm (neighbour obs) |
+| **follow** (`target/hand/gesture/command_follow`) | no | `n_envs = drone_count`, `n_agents = 1` | N independent followers, each chasing its **own** moving target |
+| **formation** (`swarm_formation`)     | no     | `n_envs = 1`, `n_agents = drone_count` (≥2) | a ring formation around one shared moving anchor |
 
-Either way the drones fly the **one** chosen course (broadcast to every env/agent via
-`env.fixed_course`) and are recorded as a single **v2 group episode** (`episodes[].drones[]`), so the
-viewer renders them coexisting on the same gates, tinted per drone.
+The drones are recorded as a single **v2 group episode** (`episodes[].drones[]`), so the viewer
+renders them coexisting, tinted per drone. Gated families fly the **one** chosen course (broadcast
+via `env.fixed_course`). The **gateless** families (follow/formation) have no course: the
+`/api/policies` `needs_course`/`family` flag tells the frontend to **hide the course + gates
+selectors** for them, the task supplies its own arena, and the replay's `scene` channel carries what
+each policy tracks (moving target/anchor/slot + STOP/GO/NEAR/FAR command) — drawn as a cyan target
+sphere / amber anchor / faint slot ring, the target tinted by command, with a command HUD chip (see
+`docs/VISUAL_CONTRACT.md`). The hero drone for a gateless run is the one that tracks its target/slot
+closest (lowest mean distance), since there are no laps to rank by.
 
 ## Endpoints (`src/neural_whoop/studio/server.py`)
 
 | route                    | method | returns                                                            |
 |--------------------------|--------|--------------------------------------------------------------------|
-| `/api/policies`          | GET    | `[{path, name, run, task, obs_dim, act_dim, step, created, best_lap, eval, has_scalars}]` from `runs/*/ckpt_final.pt` (`created` = ckpt mtime epoch; `eval` = full `eval.json` when present) |
+| `/api/policies`          | GET    | `[{path, name, run, task, family, needs_course, obs_dim, act_dim, step, created, best_lap, eval, has_scalars}]` from `runs/*/ckpt_final.pt` (`family`/`needs_course` drive the gateless-course UI; `created` = ckpt mtime epoch; `eval` = full `eval.json` when present) |
 | `/api/policies/{run}/scalars` | GET | `{run, tags: {tag: {steps, values}}}` — TensorBoard scalar curves for the run (downsampled; `{}` if no event file) |
 | `/api/courses`           | GET    | `{courses: [seeded YAML], presets: [arena presets]}`               |
 | `/api/rollout`           | POST   | `{policy, course, drone_count, dr, max_steps, n_gates, seed}` → run summary (sim-backed; single-flight, HTTP 409 if busy) |
