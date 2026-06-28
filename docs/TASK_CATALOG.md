@@ -59,10 +59,20 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Sim2real basis:** the render-free seam + detector-error DR is exactly the lab's validated Phase-8
   trick; a cheap onboard blob/depth detector closes the loop on hardware.
 
-### ⬜ `hand_follow` — follow a held hand / gesture target
-- **Metric:** tracking distance ↓ + responsiveness to direction changes.
-- **Basis:** same perception seam; the "target" is a hand-held marker. A gesture channel (stop/come)
-  can be added to the obs later.
+### ✅ `hand_follow` — close-follow a jerky hand target through a noisy detector (Flywheel hop-23)
+- **Metric:** `follow_hold_rate` ↑ (frac of steps within `hold_tol` of d* — responsiveness) +
+  `mean_track_error` ↓ + `time_in_view_rate` ↑ (all ground truth).
+- **Status:** implemented (`tasks/hand_follow.py`, subclasses `target_follow`; `configs/hand_follow_*.yaml`).
+  Close-follows (d*=0.8 m) a **`KIND_ZIGZAG`** triangle-wave hand mover (sharp, abrupt direction
+  reversals — the closed-form stand-in for a held hand), through the same detector seam. **Result
+  (Flywheel `<hand_follow>`, GREEN):** the clean policy follows the jerky hand at hold **0.996**
+  (track_err 0.11, ~0 crash); detector noise degrades it (hold 0.996→**0.630**, backs off 0.8→1.05 m);
+  the **EMA(0.85) primitive RECOVERS it on abrupt motion** (hold 0.630→**0.985**, standoff back to
+  ≈d*). The lag concern (EMA failing on sharp reversals) did **not** materialize at target_speed 1.8 —
+  variance-reduction still outweighs lag, so the EMA's validated envelope (smooth `target_follow`)
+  **extends to jerky motion**. A gesture channel (stop/come) can be added to the obs later.
+- **Basis:** same perception seam; the "target" is a hand-held marker. The `KIND_ZIGZAG` mover is the
+  first non-smooth motion in `target.py`.
 
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.

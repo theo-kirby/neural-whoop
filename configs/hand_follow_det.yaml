@@ -1,0 +1,59 @@
+# Hop-23 (Flywheel, builds-on flat-waterfall-0121 EMA + the closed filtering thread): hand_follow
+# NEW TASK -- close-follow a ZIGZAG (abrupt-direction-change) hand target. Tests whether the EMA
+# precision primitive (validated on SMOOTH motion) survives jerky motion where its lag should
+# bite hardest. Variant: det.
+run:
+  name: hand_follow_det
+
+task:
+  name: hand_follow
+  episode_len: 600        # steps; dt=0.02s -> 12s of tracking
+  motion: zigzag          # the abrupt triangle-wave hand mover (sharp direction reversals)
+  target_speed: 1.8       # a hand moves a touch quicker
+  target_radius: 1.2      # orbit / lissajous extent (m)
+  d_desired: 0.8          # follow CLOSE to the hand
+  track_sigma: 0.5        # tighter bell for close following
+  hold_tol: 0.4           # |dist-d*|<tol counts as tracking (responsiveness)
+  fov_deg: 110.0          # camera FOV (full angle) for the in-view reward — match dr.detector_fov_deg
+  track_scale: 1.0
+  in_view_bonus: 0.5
+  center_scale: 0.3
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Seam-level DR with the DETECTOR error model ON (the whole point of this task).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 3.0     # ~3 deg bearing noise std
+  detector_range_frac: 0.10     # 10% multiplicative range error
+  detector_dropout_prob: 0.05   # 5% per-step dropout -> stale-hold
+  detector_fov_deg: 110.0       # forward camera cone; target outside -> stale-hold
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000  # match the racing baseline budget knee (Flywheel shrill-limit-5398)
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

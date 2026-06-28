@@ -100,9 +100,10 @@ class TargetFollowTask(DroneTask):
 
     n_agents = 1
     obs_dim = OBS_DIM  # obs-v4 (11), unchanged — the target vector replaces the gate vector
+    config_cls = TargetFollowConfig  # subclasses (hand_follow) override with their own config
 
     def __init__(self, **kwargs):
-        self.cfg = TargetFollowConfig(**kwargs)
+        self.cfg = self.config_cls(**kwargs)
         self.episode_len = self.cfg.episode_len
         self._oracle = OracleEstimator()
         self._arena = course_mod.ArenaSpec(

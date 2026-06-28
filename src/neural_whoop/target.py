@@ -24,7 +24,20 @@ from neural_whoop.course import ArenaSpec
 KIND_STATIC = 0
 KIND_ORBIT = 1
 KIND_LISSAJOUS = 2
-_KIND_NAMES = {"static": KIND_STATIC, "orbit": KIND_ORBIT, "lissajous": KIND_LISSAJOUS}
+KIND_ZIGZAG = 3  # triangle-wave per axis: piecewise-linear with SHARP direction reversals (the
+#                  "hand" mover for hand_follow — abrupt direction changes, still closed-form).
+_KIND_NAMES = {
+    "static": KIND_STATIC, "orbit": KIND_ORBIT, "lissajous": KIND_LISSAJOUS, "zigzag": KIND_ZIGZAG,
+}
+
+
+def _triangle(x: Tensor) -> Tensor:
+    """Unit triangle wave in [-1, 1], period 2*pi: ``(2/pi) * asin(sin(x))``.
+
+    Piecewise-linear with sharp corners -> velocity is piecewise-constant and flips sign
+    instantly at each peak (an abrupt direction reversal), unlike the smooth orbit/lissajous.
+    """
+    return (2.0 / math.pi) * torch.asin(torch.sin(x).clamp(-1.0, 1.0))
 
 
 class TargetField:
@@ -61,12 +74,15 @@ class TargetField:
         )
         # Lissajous: center + amp * sin(freq * t + phase), per axis.
         liss = p["center"] + p["amp"] * (p["freq"] * tt.unsqueeze(-1) + p["phase"]).sin()
+        # Zigzag: center + amp * triangle(freq * t + phase), per axis (sharp direction reversals).
+        zig = p["center"] + p["amp"] * _triangle(p["freq"] * tt.unsqueeze(-1) + p["phase"])
         # Static: just the center.
         stat = p["center"]
 
         out = stat.clone()
         out = torch.where((self.kind == KIND_ORBIT).unsqueeze(-1), orbit, out)
         out = torch.where((self.kind == KIND_LISSAJOUS).unsqueeze(-1), liss, out)
+        out = torch.where((self.kind == KIND_ZIGZAG).unsqueeze(-1), zig, out)
         return out
 
 
