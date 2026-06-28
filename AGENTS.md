@@ -33,17 +33,23 @@ Each task defines its own metric; you optimize it and record it on every empiric
    empirical node with the hypothesis and the parent it builds on.
 2. **Run.** Make the change on a branch; run `scripts/train.py` on the 5090 within the budget. Keep
    `scripts/env_check.py` green first if you touched the substrate.
-3. **Artifacts.** Attach to the node the **standard visual pack** + a parent-baseline comparison
-   (all public) — this is mandatory, not optional. Build it with
+3. **Artifacts (the cardinal rule — no empty nodes).** Attach to the node the **standard visual
+   pack** + a parent-baseline comparison (all public) — **mandatory, not optional; an empirical node
+   without an artifact didn't happen** (`docs/FLYWHEEL.md`). Build it with
    `scripts/viz.py --config <cfg> --from <ckpt> --no-dr --baseline <parent>/replay.json.gz --out
-   runs/<run>/viz`, then upload: `replay.json.gz` + `eval.json` → `json`, every `*.png`
-   (`trajectory`, `fpv_*`, `training_curves`, `comparison`) → `image`, `table.csv` → `table`. Also
-   attach the exported `policy.onnx` when relevant. Record the exact config + git SHA. (Schema +
-   pack + artifact-type mapping: `docs/VISUAL_CONTRACT.md`.) The replay is portable — the lab's
-   `web/replay-viewer/` Three.js viewer and other repos consume the same `replay.json.gz`.
-4. **Verdict.** Compare to the parent on the decision metric. Mark the node terminal with a
-   `stop_reason` (improved / no-effect / regressed / diverged). **Commit only after a terminal
-   verdict**, with the node id in the message.
+   runs/<run>/viz`, then upload (prepare → PUT bytes → finalize): `replay.json.gz` + `eval.json` +
+   the **`run.json` reproducibility manifest** (command / config / ckpt / seed / git SHA / versions)
+   → `json`, every `*.png` (`trajectory`, `fpv_*`, `training_curves`, `comparison`) → `image`,
+   `table.csv` → `table`. Also attach the exported `policy.onnx` when relevant. `run.json` already
+   pins the exact config + git SHA. (Schema + pack + artifact-type mapping: `docs/VISUAL_CONTRACT.md`.)
+   The replay is portable — the lab's `web/replay-viewer/` Three.js viewer and other repos consume
+   the same `replay.json.gz`.
+4. **Verdict + verify.** Compare to the parent on the decision metric. Write the summary in the
+   codified shape (change-vs-parent + metric Δ + verdict) and mark the node terminal with a
+   `stop_reason` (vocabulary in `docs/FLYWHEEL.md`). **Commit only after a terminal verdict**, with
+   the node id in the message. Then **verify after commit**: re-read the node (`flywheel_get_node`,
+   `projection=full`) and confirm artifacts attached + summary written + tags set (`kind:` ×1,
+   `outcome:` if resolved, `cluster:` ≥1).
 5. **Branch.** Spawn the next hypotheses creatively (reward, curriculum, algorithm, task, course
    difficulty, DR schedule). Keep the graph ~`n` hops ahead of where you've committed.
 

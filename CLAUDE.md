@@ -31,6 +31,25 @@ with a clear message, **push** the affected repo(s), update any docs/this file t
 write a **Flywheel node** referencing the commit SHA(s). Commit at natural seams, not one big
 end-of-session dump.
 
+**Cardinal rule — no empty nodes.** Every empirical node (an experiment or measurement) carries
+**≥1 finalized artifact** — the standard visual pack, including the `run.json` reproducibility
+manifest (`docs/VISUAL_CONTRACT.md`) — **and** a written **summary** stating the concrete change
+vs its parent, the metric number, and the verdict. *If it isn't backed by an artifact and a written
+result, it didn't happen.* A bare title is not a summary.
+
+- **Summary discipline:** summary = change-vs-parent + the metric Δ + verdict, reproducible from the
+  text alone (e.g. "[128,128] policy: 3.29→2.91 s best lap, −12%, GREEN").
+- **Body skeleton:** **Hypothesis → Setup → Results (with the Δ vs parent/baseline) → Verdict /
+  Honesty → Lineage.** Record negative/refuted results in the same shape. Canonical exemplar:
+  `morning-base-2167` (the `command_follow` node).
+- **Definition of done / verify:** after committing a node, **re-read it** (`flywheel_get_node`,
+  `projection=full`) and confirm artifacts attached + summary written + tags set (`kind:` ×1,
+  `outcome:` if resolved, `cluster:` ≥1) before moving on. Apply this to your own work.
+- **Tooling:** Flywheel mutations go through the MCP tools — artifacts are **prepare → PUT
+  bytes (202) → finalize**, done *before* the commit; the `flywheel-auto` / `flywheel-lookahead`
+  skills drive the autonomous loop. The operating loop lives in `AGENTS.md`; the graph-shape +
+  node conventions in `docs/FLYWHEEL.md` — follow those rather than restating them here.
+
 The Flywheel graph is the point of the project's record: a **very connected, very exploratory, very
 honest** account of the R&D process — **not a linear chain** (if it were a chain there'd be no
 reason for it to be a graph). So:
