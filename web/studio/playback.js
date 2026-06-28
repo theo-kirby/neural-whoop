@@ -5,7 +5,10 @@
 // cameras. UI-agnostic: calls back via `onFrame(heroFrame, i)`.
 
 import * as THREE from "three";
-import { GATE_COLORS, DRONE_TINTS, buildGates, buildTrail, disposeGroup } from "./geometry.js";
+import {
+  GATE_COLORS, DRONE_TINTS, COMMAND_TINTS, SCENE_COLORS,
+  buildGates, buildTrail, buildMarker, buildSlot, disposeGroup,
+} from "./geometry.js";
 import { makeDrone } from "./drone-model.js";
 
 // Body(+X fwd, +Y left, +Z up) -> camera(look down -Z, up +Y): forward = body +X, up = body +Z.
@@ -25,8 +28,30 @@ function episodeTracks(ep) {
   return [{ drone: ep.drone ?? 0, frames: ep.frames || [], summary: ep.summary || {} }];
 }
 
-// Most interesting drone: laps -> gates -> length (matches render.py / nw-viz hero pick).
-function heroTrackIndex(tracks) {
+// Mean distance from a track's drone to whatever it tracks (slot, else target) — the gateless
+// hero key (lower = tracking best). Returns Infinity if the track carries no scene reference.
+function meanTrackError(track) {
+  const frames = track.frames || [];
+  let sum = 0, cnt = 0;
+  for (const f of frames) {
+    const ref = f.scene && (f.scene.slot || f.scene.target);
+    if (ref) { sum += Math.hypot(f.pos[0] - ref[0], f.pos[1] - ref[1], f.pos[2] - ref[2]); cnt++; }
+  }
+  return cnt ? sum / cnt : Infinity;
+}
+
+// Most interesting drone. Gate tasks: laps -> gates -> length (matches render.py / nw-viz). Gateless
+// follow/formation tasks have no laps, so pick the drone that tracks its target/slot best (lowest
+// mean distance), falling back to track 0.
+function heroTrackIndex(tracks, hasGates) {
+  if (!hasGates) {
+    let best = 0, bestErr = Infinity;
+    for (let i = 0; i < tracks.length; i++) {
+      const err = meanTrackError(tracks[i]);
+      if (err < bestErr) { bestErr = err; best = i; }
+    }
+    return best;
+  }
   let best = 0, bestKey = [-1, -1, -1];
   for (let i = 0; i < tracks.length; i++) {
     const s = tracks[i].summary || {};
@@ -82,9 +107,18 @@ export class Playback {
       const trail = frames.length ? buildTrail(this.view.world, frames) : null;
       // One onboard camera per drone (wide, rolls with its body) so every FPV inset is independent.
       const fpvCamera = new THREE.PerspectiveCamera(95, 16 / 9, 0.02, 400);
-      return { glyph, frames, trail, tint, fpvCamera };
+      // Gateless tasks carry per-frame scene markers — build one per key present in this drone's
+      // frames (moving target/anchor sphere, slot ring). Updated each frame in applyFrame.
+      const sc0 = frames[0] && frames[0].scene;
+      const markers = {};
+      if (sc0) {
+        if (sc0.target !== undefined) markers.target = buildMarker(this.view.world, SCENE_COLORS.target);
+        if (sc0.anchor !== undefined) markers.anchor = buildMarker(this.view.world, SCENE_COLORS.anchor, 0.2);
+        if (sc0.slot !== undefined) markers.slot = buildSlot(this.view.world);
+      }
+      return { glyph, frames, trail, tint, fpvCamera, markers };
     });
-    this.heroIdx = heroTrackIndex(tracks);
+    this.heroIdx = heroTrackIndex(tracks, (episode.gates || []).length > 0);
     this.idx = 0;
     this.playing = false;
     this.frameToCamera();
@@ -97,6 +131,7 @@ export class Playback {
     for (const a of this.actors) {
       disposeGroup([a.glyph], this.view.world);
       if (a.trail) disposeGroup([a.trail.full, a.trail.done], this.view.world);
+      if (a.markers) disposeGroup(Object.values(a.markers), this.view.world);
     }
     this.actors = [];
   }
@@ -130,11 +165,13 @@ export class Playback {
       a.glyph.quaternion.set(f.quat[0], f.quat[1], f.quat[2], f.quat[3]);
       if (a.trail) a.trail.done.geometry.setDrawRange(0, i + 1);
       this._updateFpv(a.glyph, a.fpvCamera);   // each drone's onboard cam follows its own body
+      this._updateMarkers(a, f.scene);          // moving target/anchor/slot (gateless tasks)
     }
     const hero = this.actors[this.heroIdx];
     const hi = Math.max(0, Math.min(hero.frames.length - 1, Math.floor(idx)));
     const hf = hero.frames[hi];
     // Only `gate_idx` (hero's next gate) actually counts — make that sphere pop, fade the rest.
+    // Gateless tasks have no gate lines (the loop is a no-op there).
     for (let g = 0; g < this.gateLines.length; g++) {
       const state = g < hf.gate_idx ? "passed" : g === hf.gate_idx ? "next" : "upcoming";
       const line = this.gateLines[g];
@@ -154,6 +191,21 @@ export class Playback {
     const dp = this._v.setFromMatrixPosition(glyph.matrixWorld);
     cam.position.copy(dp).add(this._fpvOff.copy(FPV_OFFSET).applyQuaternion(dq));
     cam.quaternion.copy(dq).multiply(BODY_TO_CAM);
+  }
+
+  // Position this actor's scene markers from the frame's `scene` dict (gateless tasks). The target
+  // marker recolors by the command channel when present (STOP/GO/NEAR/FAR), so you read the command
+  // off the world too, not just the HUD chip.
+  _updateMarkers(a, scene) {
+    if (!a.markers || !scene) return;
+    if (a.markers.target && scene.target) {
+      a.markers.target.position.set(scene.target[0], scene.target[1], scene.target[2]);
+      if (scene.command !== undefined) {
+        a.markers.target.material.color.setHex(COMMAND_TINTS[Math.round(scene.command) % COMMAND_TINTS.length]);
+      }
+    }
+    if (a.markers.anchor && scene.anchor) a.markers.anchor.position.set(scene.anchor[0], scene.anchor[1], scene.anchor[2]);
+    if (a.markers.slot && scene.slot) a.markers.slot.position.set(scene.slot[0], scene.slot[1], scene.slot[2]);
   }
 
   // Top-down chase cam: straight above the hero, looking down, heading-up.

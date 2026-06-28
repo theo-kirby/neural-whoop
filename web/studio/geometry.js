@@ -19,6 +19,14 @@ export const DRONE_TINTS = [
   0xff9d3c, // orange
 ];
 
+// Scene-marker colours for gateless follow/formation tasks: the moving target is cyan, the
+// formation anchor amber, slots faint grey. (Gates keep their own GATE_COLORS above.)
+export const SCENE_COLORS = { target: 0x35e0e0, anchor: 0xffb13a, slot: 0x8a8a8a };
+
+// Per-command tint for the target marker when a command channel is present, indexed by the raw
+// command value: 0=STOP (red), 1=GO/NEAR (cyan), 2=FAR (amber). Mirrors nw-viz/src/palette.js.
+export const COMMAND_TINTS = [0xff5d5d, 0x35e0e0, 0xffd23f];
+
 // Turbo colormap (x in [0,1] -> [r,g,b] in [0,1]) for heat-coloured speed trails. Ported from
 // ../nw-viz/src/palette.js so the Studio trail matches the MP4 renderer.
 export function turbo(x) {
@@ -66,6 +74,25 @@ export function buildGates(world, gates) {
     lines.push(line);
   }
   return lines;
+}
+
+// A solid emissive marker sphere for a moving target/anchor (sim frame, added under `world`). The
+// caller positions it per frame from `frame.scene.{target,anchor}` and may recolor it by command.
+export function buildMarker(world, color, radius = 0.16) {
+  const geo = new THREE.SphereGeometry(radius, 16, 12);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85 }));
+  world.add(mesh);
+  return mesh;
+}
+
+// A faint wire ring marking a formation slot (sim frame). Lies flat in the world xy-plane (the
+// slots ring the anchor horizontally), so it reads as a target pad from the wide + top views.
+export function buildSlot(world, radius = 0.18) {
+  const geo = new THREE.TorusGeometry(radius, 0.012, 8, 24);
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial(
+    { color: SCENE_COLORS.slot, transparent: true, opacity: 0.55 }));
+  world.add(mesh);
+  return mesh;
 }
 
 // Dim grey full path + a heat-coloured "traveled" overlay revealed via drawRange. The traveled

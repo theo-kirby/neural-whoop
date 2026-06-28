@@ -96,6 +96,13 @@
     .hud .k { color: var(--muted); } .hud .v { color: var(--fg); font-variant-numeric: tabular-nums; }
     .hud .title { color: var(--fg); margin-bottom: 6px; font-weight: 600;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* Command chip (gesture/command_follow): a small pill tinted by the raw command value, matching
+       the world-space target-marker tints (0=STOP red, 1=GO/NEAR cyan, 2=FAR amber). */
+    .hud .v.cmd { font-weight: 700; letter-spacing: .5px; padding: 1px 9px; border-radius: 999px;
+      background: var(--panel-3); color: var(--fg); }
+    .hud .v.cmd-0 { background: #4a2424; color: #ff9d9d; }
+    .hud .v.cmd-1 { background: #163d3d; color: #6ff0f0; }
+    .hud .v.cmd-2 { background: #463a18; color: #ffe08a; }
 
     /* Training charts — small 2D line plots. */
     .charts { display: flex; flex-direction: column; gap: 12px; }
@@ -152,10 +159,10 @@
       <div class="section">
         <h4>setup</h4>
         <label class="field"><span>policy</span><select data-h="policy"></select></label>
-        <label class="field"><span>course</span><select data-h="course"></select></label>
+        <label class="field" data-h="coursefield"><span>course</span><select data-h="course"></select></label>
         <div class="row2">
           <label class="field"><span>drones</span><input data-h="drones" type="number" min="1" max="16" value="3" /></label>
-          <label class="field"><span>gates (preset)</span><input data-h="gates" type="number" min="1" max="24" value="6" /></label>
+          <label class="field" data-h="gatesfield"><span>gates (preset)</span><input data-h="gates" type="number" min="1" max="24" value="6" /></label>
         </div>
         <label class="chk"><input data-h="dr" type="checkbox" /> domain randomization</label>
         <button class="btn primary block" data-h="run">▶ Run</button>
@@ -200,7 +207,8 @@
         <div class="title" data-h="title">—</div>
         <div class="row"><span class="k">drones</span><span class="v" data-h="ndrones">—</span></div>
         <div class="row"><span class="k">step</span><span class="v" data-h="step">—</span></div>
-        <div class="row"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
+        <div class="row" data-h="gaterow"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
+        <div class="row hidden" data-h="cmdrow"><span class="k">command</span><span class="v cmd" data-h="cmd">—</span></div>
         <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
         <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
       </div>

@@ -26,6 +26,7 @@ const view = createScene(document.querySelector(".view3d"));
 const playback = new Playback(view);
 let fpvOn = true, topOn = true;     // FPV-per-drone + top-down insets shown by default
 let fpvFrames = [];                 // [{ frame, body, idx }] — one per drone, built per run
+let sceneInfo = {};                 // meta.scene_info of the loaded run (command labels, standoff…)
 const policiesByPath = new Map();   // path -> policy meta (for the details panel + scalars run name)
 
 // Screen-space rect of an element in the WebGL convention (origin = canvas BOTTOM-left).
@@ -94,12 +95,32 @@ playback.onStateChange = () => { syncPlayBtn(); $("scrub").value = String(Math.f
 playback.onFrame = (f, i) => {
   const spd = Math.hypot(f.vel[0], f.vel[1], f.vel[2]);
   $("step").textContent = String(f.step);
-  $("gate").textContent = `${f.gate_idx}/${(playback.episode?.gates || []).length}`;
+  // Gate row carries gate progress for gate tasks; for gateless follow/formation it shows the
+  // distance to whatever the hero tracks (slot, else target) read off the scene channel.
+  const nGates = (playback.episode?.gates || []).length;
+  if (nGates) {
+    $("gaterow").classList.remove("hidden");
+    $("gate").textContent = `${f.gate_idx}/${nGates}`;
+  } else {
+    $("gaterow").classList.add("hidden");
+  }
   $("spd").textContent = `${spd.toFixed(2)} m/s`;
   $("reward").textContent = f.cum_reward.toFixed(1);
   $("tcur").textContent = (i * playback.dt).toFixed(2);
   $("fcur").textContent = String(i + 1);
   $("scrub").value = String(i);
+  // Command chip (gesture/command_follow): label the raw command via meta.scene_info.command_labels.
+  const labels = sceneInfo.command_labels;
+  const sc = f.scene || {};
+  if (labels && sc.command !== undefined) {
+    const cmd = labels[Math.round(sc.command)] ?? String(sc.command);
+    const chip = $("cmd");
+    chip.textContent = cmd;
+    chip.className = "v cmd cmd-" + Math.round(sc.command);
+    $("cmdrow").classList.remove("hidden");
+  } else {
+    $("cmdrow").classList.add("hidden");
+  }
 };
 
 $("play").addEventListener("click", () => playback.setPlaying(!playback.playing));
@@ -222,6 +243,11 @@ function onPolicyPicked() {
   const p = policiesByPath.get($("policy").value);
   renderMeta(p);
   loadScalarsFor(p);
+  // Gateless follow/formation policies fly their own arena — hide the course + preset-gates fields
+  // (no course to pick). The drone-count input stays (it maps to envs / n_agents per family).
+  const needsCourse = !p || p.needs_course !== false;
+  $("coursefield").classList.toggle("hidden", !needsCourse);
+  $("gatesfield").classList.toggle("hidden", !needsCourse);
 }
 $("policy").addEventListener("change", onPolicyPicked);
 // Charts only have a measurable size once their fold is open — (re)draw on reveal + on resize.
@@ -308,6 +334,7 @@ $("run").addEventListener("click", async () => {
 
 function showRun(doc, summary) {
   const meta = doc.meta || {};
+  sceneInfo = meta.scene_info || {};
   $("title").textContent = `${summary.course} · ${meta.policy ?? ""}`;
   $("ndrones").textContent = String(summary.drone_count);
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
