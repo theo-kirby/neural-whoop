@@ -1,0 +1,65 @@
+# Hop-18 (Flywheel, builds-on summer-wave-6268 + long-tree-2976): PERCEPTION-AWARE FORMATION.
+# The formation ANCHOR is observed through the DetectorNoise seam (bearing/range/FOV/dropout)
+# instead of ground truth -- does formation hold under realistic onboard detection, and does the
+# validated EMA precision filter (alpha=0.0) help? Unites the perception + swarm branches.
+# Hop-15 (Flywheel) — swarm_formation: SECOND swarm task (the formation half of the catalog).
+# N drones hold a ring formation around a slowly-moving anchor (their OWN assigned slot each, no
+# shared track) under a shared policy + nearest-neighbour obs + collision avoidance. The density
+# curve (proud-wood-6049) flagged this as sidestepping shared-track congestion. Pure task-layer
+# (no env changes). Decision metric = mean_formation_error DOWN + formation_hold_rate UP at bounded
+# collision_rate. Builds on the single-drone racing net ([128,128]@120M) + swarm_race machinery.
+
+run:
+  name: swarm_formation_percep_det
+
+task:
+  name: swarm_formation
+  n_agents: 3
+  episode_len: 600
+  motion: mixed
+  anchor_speed: 1.0
+  anchor_radius: 1.5
+  formation_radius: 1.0
+  estimate_ema_alpha: 0.0   # EMA on the noisy anchor estimate
+  track_sigma: 0.6
+  hold_tol: 0.4
+  formation_scale: 1.0
+  collision_penalty: 10.0
+  collision_radius: 0.25
+  crash_penalty: 10.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 3.0
+  detector_range_frac: 0.10
+  detector_dropout_prob: 0.05
+  detector_fov_deg: 110.0
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

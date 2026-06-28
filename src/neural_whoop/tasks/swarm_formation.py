@@ -40,6 +40,7 @@ from neural_whoop import course as course_mod
 from neural_whoop import target as target_mod
 from neural_whoop.contract import OBS_DIM, world_to_body
 from neural_whoop.envs.registry import DroneTask, register_task
+from neural_whoop.perception.estimator import apply_detector_noise
 from neural_whoop.reward import Bounds, is_crashed, smoothness_penalty
 
 
@@ -55,6 +56,12 @@ class SwarmFormationConfig:
     anchor_radius: float = 1.5       # orbit / lissajous extent (m)
     # Formation geometry.
     formation_radius: float = 1.0    # ring radius of the slots around the anchor (m)
+    # Perception-aware anchor (Flywheel hop-18). When the seam DR detector is ON, the anchor's
+    # body-frame position is observed through the DetectorNoise model (bearing/range/FOV/dropout +
+    # stale-hold) instead of ground truth — the same render-free perception seam as target_follow.
+    # estimate_ema_alpha applies the validated EMA precision filter (long-tree-2976/flat-waterfall-0121)
+    # to the noisy anchor estimate; 0.0 = raw fix (off). The drone's own slot offset is always known.
+    estimate_ema_alpha: float = 0.0
     track_sigma: float = 0.6         # width of the slot-keeping reward bell (m)
     hold_tol: float = 0.4            # m; within this of the slot counts as "in formation" (metric)
     # Reward weights.
@@ -103,6 +110,11 @@ class SwarmFormationTask(DroneTask):
         n, dev = env.n_drones, env.device
         self._dev = dev
         self._offsets = self._offsets_cpu.to(dev)                     # (na, 3)
+        # Per-drone world-frame slot offset (env-major), for the perception-aware obs path.
+        self._offsets_drone = self._offsets.unsqueeze(0).expand(env.n_envs, -1, -1).reshape(n, 3)
+        # Perception-aware anchor estimate state (detector stale-hold + EMA filter), body frame.
+        self.anchor_last_valid = torch.zeros(n, 3, device=dev)
+        self.anchor_est_ema = torch.zeros(n, 3, device=dev)
         # One anchor per env (n_envs == n_drones / n_agents).
         self._field = target_mod.sample_target_field(
             env.n_envs, motion=self.cfg.motion, arena=self._arena,
@@ -146,6 +158,13 @@ class SwarmFormationTask(DroneTask):
         anchor_d = anchor0.repeat_interleave(na, dim=0)
         yaw = torch.atan2(anchor_d[:, 1] - spawn[:, 1], anchor_d[:, 0] - spawn[:, 0])
         env.spawn(d_idx, spawn, yaw=yaw)
+        # Seed the perception-aware anchor estimate (body frame): the drone spawns on its slot facing
+        # the anchor, so the anchor sits ~[formation_radius (horizontal), 0, vertical_diff] in body.
+        seed = torch.zeros(k * na, 3, device=self._dev)
+        seed[:, 0] = self.cfg.formation_radius
+        seed[:, 2] = anchor_d[:, 2] - spawn[:, 2]
+        self.anchor_last_valid[d_idx] = seed
+        self.anchor_est_ema[d_idx] = seed
 
         self.err_sum[d_idx] = 0.0
         self.hold_sum[d_idx] = 0.0
@@ -174,8 +193,21 @@ class SwarmFormationTask(DroneTask):
         pos, vel, R, rpy, w = (
             env.dyn.pos, env.dyn.vel_world, env.dyn.R, env.dyn.rpy, env.dyn.ang_vel_body,
         )
-        slot = self._slots(env, env.sim_time)
-        slot_rel_body = world_to_body(slot - pos, R)
+        # Perception-aware slot estimate: the ANCHOR is observed through the detector seam (+ EMA
+        # filter); the drone's own slot offset is known, so slot_est = anchor_est + offset. With the
+        # detector off this reduces to the ground-truth slot vector (backward compatible). The reward
+        # still uses the TRUE slot (reward_and_done), so detector noise can't be gamed.
+        anchor = self._field.position(env.sim_time)
+        anchor_rel_body = world_to_body(anchor.repeat_interleave(self.cfg.n_agents, 0) - pos, R)
+        det = env.dr.cfg.detector
+        if env.dr.cfg.enabled and not det.is_identity:
+            anchor_rel_body, _ = apply_detector_noise(anchor_rel_body, det, self.anchor_last_valid, env.gen)
+            self.anchor_last_valid = anchor_rel_body
+        a = self.cfg.estimate_ema_alpha
+        if a > 0.0:
+            self.anchor_est_ema = a * self.anchor_est_ema + (1.0 - a) * anchor_rel_body
+            anchor_rel_body = self.anchor_est_ema
+        slot_rel_body = anchor_rel_body + world_to_body(self._offsets_drone, R)
         vel_b = world_to_body(vel, R)
         obs11 = torch.cat([slot_rel_body, vel_b, rpy[..., 0:1], rpy[..., 1:2], w], dim=-1)
         rel_pos_w, rel_vel_w, _ = self._nearest_neighbour(env)
