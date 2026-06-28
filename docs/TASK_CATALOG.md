@@ -91,6 +91,19 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Basis:** the foundation for gesture-controlled flight; a richer gesture vocabulary (come/go/land)
   is a natural extension of the command channel.
 
+### ⚠️ `command_follow` — 3-way command vocabulary (STOP/NEAR/FAR), scales-but-degrades (Flywheel hop-26)
+- **Metric:** `stop_compliance` + `near_hold` (d*=0.7) + `far_hold` (d*=1.8) — a command-ignoring policy
+  cannot score on both near AND far (non-overlapping bands).
+- **Status:** implemented (`tasks/command_follow.py`, subclasses `hand_follow`; `configs/command_follow.yaml`).
+  Extends the gesture channel to a 3-way command via one obs scalar (obs_dim 12). **Result (nuanced):**
+  the channel SCALES — three distinguishable behaviors emerge (nonzero near 0.307 AND far 0.255 at
+  1.1m-apart bands proves the policy reads the command), STOP 0.698, in_view 0.933, crash 2.5e-5 — but
+  per-command PRECISION degrades vs the 2-way `gesture_follow` (stop 0.95→0.70, follow 0.58→0.25-0.31).
+  A [128,128] net holds a 3-command vocabulary LOOSELY: capacity split 3 ways + compounded
+  re-acquisition transients (each command resample jumps the target while the hand keeps moving).
+- **Basis:** characterizes how the command-conditioned capability scales with vocabulary size; bigger
+  net or curriculum is the lever to tighten the per-command precision.
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to
