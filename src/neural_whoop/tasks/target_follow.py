@@ -68,6 +68,13 @@ class TargetFollowConfig:
     # (in-place, so obs-v4 stays length 11 / MCU-clean) trades a little lag for lower per-fix variance,
     # which should let the policy hold closer safely. alpha = weight on history; 0.0 = off (raw fix).
     estimate_ema_alpha: float = 0.0
+    # Predictive alpha-beta filter (Flywheel hop-21). A steady-state constant-velocity Kalman: it
+    # tracks the estimate AND its velocity, predicting one step ahead, so it smooths the noisy fix
+    # WITHOUT the pure-lag penalty a plain EMA pays on a moving target (the wandering-mode-7957
+    # envelope). When ab_alpha>0 it REPLACES the EMA. ab_alpha = position gain (on the residual),
+    # ab_beta = velocity gain. Body-frame approximation (the frame rotates; fine for slow follow).
+    ab_alpha: float = 0.0
+    ab_beta: float = 0.0
     alive_bonus: float = 0.0
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -111,6 +118,9 @@ class TargetFollowTask(DroneTask):
         )
         self.last_valid = torch.zeros(n, 3, device=dev)   # detector stale-hold (body frame)
         self._est_ema = torch.zeros(n, 3, device=dev)     # EMA precision filter state (body frame)
+        self._ab_x = torch.zeros(n, 3, device=dev)        # alpha-beta position estimate (body frame)
+        self._ab_v = torch.zeros(n, 3, device=dev)        # alpha-beta velocity estimate (body frame)
+        self._dt = float(getattr(env, "dt", 0.02))        # sim step for the predictor
         # Episode accumulators (GPU-resident; reset per env, read at log cadence by metrics()).
         self.steps = torch.zeros(n, device=dev, dtype=torch.long)
         self.in_view = torch.zeros(n, device=dev, dtype=torch.long)
@@ -150,6 +160,8 @@ class TargetFollowTask(DroneTask):
         seed[:, 2] = tgt0[:, 2] - spawn[:, 2]
         self.last_valid[d_idx] = seed
         self._est_ema[d_idx] = seed   # seed the precision filter with the spawn estimate
+        self._ab_x[d_idx] = seed      # seed the alpha-beta filter (vel starts at 0)
+        self._ab_v[d_idx] = 0.0
 
         self.steps[d_idx] = 0
         self.in_view[d_idx] = 0
@@ -169,10 +181,20 @@ class TargetFollowTask(DroneTask):
         if env.dr.cfg.enabled and not det.is_identity:
             rel_body, _ = apply_detector_noise(rel_body, det, self.last_valid, env.gen)
             self.last_valid = rel_body
-        # EMA precision filter: smooth successive noisy fixes (Flywheel nameless-bar-9184). In-place,
-        # so obs-v4 stays length 11. A real onboard estimator would do the same temporal smoothing.
-        a = self.cfg.estimate_ema_alpha
-        if a > 0.0:
+        # Precision filtering of the noisy fix (in-place, so obs-v4 stays length 11). Alpha-beta
+        # (predictive) takes precedence over the EMA when enabled.
+        if self.cfg.ab_alpha > 0.0:
+            # Alpha-beta predictor-corrector: predict one step ahead with the velocity estimate, then
+            # correct toward the measurement -- smooths noise WITHOUT the EMA's pure lag on a mover.
+            dt = self._dt
+            x_pred = self._ab_x + self._ab_v * dt
+            resid = rel_body - x_pred
+            self._ab_x = x_pred + self.cfg.ab_alpha * resid
+            self._ab_v = self._ab_v + (self.cfg.ab_beta / dt) * resid
+            rel_body = self._ab_x
+        elif self.cfg.estimate_ema_alpha > 0.0:
+            # EMA precision filter: smooth successive noisy fixes (Flywheel nameless-bar-9184).
+            a = self.cfg.estimate_ema_alpha
             self._est_ema = a * self._est_ema + (1.0 - a) * rel_body
             rel_body = self._est_ema
         vel_b = world_to_body(vel, R)
