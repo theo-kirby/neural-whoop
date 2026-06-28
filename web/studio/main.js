@@ -301,8 +301,7 @@ async function loadSelectors() {
 
     const crs = $("course");
     crs.innerHTML = "";
-    const optgroup = (label) => { const g = document.createElement("optgroup"); g.label = label; return g; };
-    const gPresets = optgroup("presets (random)");
+    const gPresets = optgroup("presets (random)");   // `optgroup` helper declared above (policy picker)
     for (const c of courses.presets) {
       const o = document.createElement("option");
       o.value = c.name;
