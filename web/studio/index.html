@@ -114,22 +114,55 @@
       border: var(--bw) solid var(--line); border-radius: var(--radius-sm); }
     .charts-empty { color: var(--muted); font-size: 12px; }
 
-    /* PiP camera frames (FPV-per-drone + top-down): movable + resizable overlays on the 3D view.
-       The body is transparent — the camera image is scissor-rendered onto the main canvas behind
-       it; only the frame chrome (border + drag header) is DOM. */
-    .cam-frame { position: absolute; display: flex; flex-direction: column;
-      border: var(--bw) solid var(--line-strong); border-radius: var(--radius); overflow: hidden;
-      background: transparent; resize: both; min-width: 130px; min-height: 100px;
-      box-shadow: 0 4px 16px #0007; }
-    .cam-frame.dragging { opacity: .92; }
-    .cam-head { display: flex; align-items: center; justify-content: space-between; gap: 8px;
-      padding: 5px 9px; cursor: move; user-select: none; font-size: 11px; letter-spacing: 1px;
-      color: var(--accent); background: rgba(18,18,18,.78); border-bottom: var(--bw) solid var(--line); }
-    .cam-head .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-    .cam-head .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    /* Body clicks pass through to the canvas (so you can still orbit the scene under a frame);
-       the header drags, and the frame's own bottom-right corner resizes. */
-    .cam-body { flex: 1; min-height: 0; pointer-events: none; }
+    .view3d-editor { position: absolute; inset: 0; }
+
+    /* Hero overlay boxes (FPV / top-down / stats) — the fixed left column matching the exported MP4
+       composition. The camera images are scissor-rendered onto the main canvas behind the box, so
+       the box itself is just chrome (border + label) with pointer-events:none so you can still orbit
+       the scene under it. Positioned each frame in main.js from the CSS-px layout rects. */
+    .hero-box { position: absolute; border: var(--bw) solid var(--line-strong); border-radius: var(--radius);
+      overflow: hidden; pointer-events: none; box-shadow: 0 4px 16px #0006; }
+    .hero-box .hlabel { position: absolute; top: 6px; left: 8px; font-size: 10px; letter-spacing: 1.4px;
+      color: var(--accent); background: rgba(18,18,18,.7); padding: 2px 7px; border-radius: 999px; }
+    .hero-box .hsub { position: absolute; bottom: 6px; right: 8px; font-size: 10px; color: var(--muted);
+      background: rgba(18,18,18,.7); padding: 2px 7px; border-radius: 999px; }
+    /* The stats box is a DOM-only HUD (no WebGL pass behind it) — give it a readable panel bg. */
+    .hero-box.hero-hud { background: rgba(20,20,20,.82); }
+    .hero-hud .hud-body { position: absolute; inset: 26px 12px 12px; display: flex; flex-direction: column;
+      gap: 3px; pointer-events: none; }
+    .hero-hud .title { color: var(--fg); font-weight: 600; margin-bottom: 4px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .hero-hud .row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+    .hero-hud .k { color: var(--muted); } .hero-hud .v { color: var(--fg); font-variant-numeric: tabular-nums; }
+    .hero-hud .v.cmd { font-weight: 700; letter-spacing: .5px; padding: 1px 9px; border-radius: 999px;
+      background: var(--panel-3); color: var(--fg); }
+    .hero-hud .v.cmd-0 { background: #4a2424; color: #ff9d9d; }
+    .hero-hud .v.cmd-1 { background: #163d3d; color: #6ff0f0; }
+    .hero-hud .v.cmd-2 { background: #463a18; color: #ffe08a; }
+
+    /* Tabs (Player / Editor) at the top of the sidebar. */
+    .tabbar { display: flex; border-bottom: var(--bw) solid var(--line); }
+    .tabbar .tab { flex: 1; background: var(--panel); color: var(--muted); border: none;
+      border-bottom: 2px solid transparent; padding: 11px 0; cursor: pointer; font-weight: 600;
+      letter-spacing: .3px; }
+    .tabbar .tab:hover { color: var(--fg); }
+    .tabbar .tab.active { color: var(--on); border-bottom-color: var(--accent); }
+
+    /* Course-editor sidebar widgets. */
+    .hint { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+    .ed-btns { display: flex; gap: 7px; }
+    .ed-btns .btn { flex: 1; padding: 7px 0; text-align: center; }
+    .gate-list { display: flex; flex-direction: column; gap: 4px; max-height: 26vh; overflow: auto; }
+    .gate-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--radius-sm);
+      border: var(--bw) solid var(--line); cursor: pointer; }
+    .gate-row:hover { border-color: var(--line-strong); }
+    .gate-row.sel { border-color: var(--accent-dim); background: var(--panel-2); }
+    .gate-row .idx { color: var(--accent); width: 16px; font-variant-numeric: tabular-nums; }
+    .gate-row .pos { color: var(--muted); flex: 1; font-size: 11px; font-variant-numeric: tabular-nums; }
+    .issue { padding: 4px 8px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 12px; }
+    .issue.error { color: #ffd6d6; background: #3a1c1c; }
+    .issue.warning { color: #fff0c2; background: #38320f; }
+    .issue.ok { color: #8be0b0; }
 
     .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
       background: var(--panel-2); border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
@@ -143,18 +176,37 @@
 <body>
   <div id="shell">
     <div id="view">
+      <!-- Player scene canvas mounts here; editor scene canvas into .view3d-editor (one tab shown). -->
       <div class="view3d"></div>
-      <!-- FPV frames are created per-drone at run time, into here. -->
-      <div data-h="fpvframes"></div>
-      <!-- Single top-down frame (movable + resizable), same default size as an FPV frame. -->
-      <div class="cam-frame" data-h="topframe" style="right: 12px; top: 12px; width: 240px; height: 168px;">
-        <div class="cam-head" data-drag><span class="name">top-down</span></div>
-        <div class="cam-body" data-h="topbody"></div>
+      <div class="view3d-editor hidden"></div>
+      <!-- Hero overlay boxes: fixed left column (FPV top, top-down middle, stats bottom), matching
+           the exported MP4. Positioned each frame from the layout rects (main.js). -->
+      <div id="hero-fpv" class="hero-box"><div class="hlabel">FPV</div><div class="hsub" data-h="fpvcap"></div></div>
+      <div id="hero-top" class="hero-box"><div class="hlabel">TOP-DOWN</div></div>
+      <div id="hero-stats" class="hero-box hero-hud">
+        <div class="hlabel">STATS</div>
+        <div class="hud-body">
+          <div class="title" data-h="title">—</div>
+          <div class="row"><span class="k">drones</span><span class="v" data-h="ndrones">—</span></div>
+          <div class="row"><span class="k">t</span><span class="v"><span data-h="htime">0.00</span> s</span></div>
+          <div class="row"><span class="k">step</span><span class="v" data-h="step">—</span></div>
+          <div class="row" data-h="gaterow"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
+          <div class="row hidden" data-h="cmdrow"><span class="k">command</span><span class="v cmd" data-h="cmd">—</span></div>
+          <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
+          <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
+        </div>
       </div>
     </div>
 
     <div id="sidebar">
       <div class="brand">neural-whoop <small>· studio</small></div>
+      <div class="tabbar">
+        <button class="tab active" data-tab="player">Player</button>
+        <button class="tab" data-tab="editor">Editor</button>
+      </div>
+
+      <!-- ============================ PLAYER ============================ -->
+      <div id="player-controls">
 
       <div class="section">
         <h4>setup</h4>
@@ -196,21 +248,11 @@
         </label>
         <div class="toggles">
           <label class="chk"><input type="checkbox" data-h="follow" /> follow cam</label>
-          <label class="chk"><input type="checkbox" data-h="fpv" checked /> FPV (per drone)</label>
-          <label class="chk"><input type="checkbox" data-h="top" checked /> top-down</label>
+          <label class="chk"><input type="checkbox" data-h="fpv" checked /> FPV box</label>
+          <label class="chk"><input type="checkbox" data-h="top" checked /> top-down box</label>
           <label class="chk"><input type="checkbox" data-h="trail" checked /> trail</label>
         </div>
-      </div>
-
-      <div class="section hud">
-        <h4>telemetry</h4>
-        <div class="title" data-h="title">—</div>
-        <div class="row"><span class="k">drones</span><span class="v" data-h="ndrones">—</span></div>
-        <div class="row"><span class="k">step</span><span class="v" data-h="step">—</span></div>
-        <div class="row" data-h="gaterow"><span class="k">gate</span><span class="v" data-h="gate">—</span></div>
-        <div class="row hidden" data-h="cmdrow"><span class="k">command</span><span class="v cmd" data-h="cmd">—</span></div>
-        <div class="row"><span class="k">speed</span><span class="v" data-h="spd">—</span></div>
-        <div class="row"><span class="k">reward</span><span class="v" data-h="reward">—</span></div>
+        <button class="btn block" data-h="export" disabled>⤓ Export hero MP4</button>
       </div>
 
       <!-- Training curves parsed from the run's TensorBoard event file. -->
@@ -224,6 +266,49 @@
           </div>
         </details>
       </div>
+
+      </div><!-- /#player-controls -->
+
+      <!-- ============================ EDITOR ============================ -->
+      <div id="editor-controls" class="hidden">
+        <div class="section">
+          <h4>course editor</h4>
+          <label class="field"><span>name</span><input data-h="e_name" type="text" value="my-course" /></label>
+          <label class="field"><span>arena preset (validation bounds)</span><select data-h="e_preset"></select></label>
+          <div class="hint">Click the ground to drop a gate. Click a gate to select it, then drag the
+            gizmo arrows (including up/down for height). Edit numbers below for precision.</div>
+        </div>
+
+        <div class="section">
+          <h4>selected gate</h4>
+          <div class="row2">
+            <label class="field"><span>x</span><input data-h="e_gx" type="number" step="0.1" /></label>
+            <label class="field"><span>y</span><input data-h="e_gy" type="number" step="0.1" /></label>
+          </div>
+          <div class="row2">
+            <label class="field"><span>z (height)</span><input data-h="e_gz" type="number" step="0.1" /></label>
+            <label class="field"><span>radius</span><input data-h="e_grad" type="number" step="0.05" min="0.1" /></label>
+          </div>
+          <div class="ed-btns">
+            <button class="btn" data-h="e_add">+ gate</button>
+            <button class="btn" data-h="e_up">↑</button>
+            <button class="btn" data-h="e_down">↓</button>
+            <button class="btn" data-h="e_del">delete</button>
+          </div>
+          <div class="gate-list" data-h="e_gatelist"></div>
+        </div>
+
+        <div class="section">
+          <h4>flyability</h4>
+          <div class="issues" data-h="e_issues"><div class="hint">add gates to validate.</div></div>
+        </div>
+
+        <div class="section">
+          <button class="btn primary block" data-h="e_save">Save course</button>
+          <button class="btn block" data-h="e_fly">Save &amp; fly this course ▶</button>
+        </div>
+      </div>
+
     </div>
   </div>
   <div id="toast" class="toast hidden"></div>

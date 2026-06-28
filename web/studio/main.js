@@ -1,15 +1,18 @@
-// Studio app shell: populate the policy/course selectors, show a picked policy's metadata +
-// training curves, run a fixed-course rollout on the GPU, load the returned v2 replay, and play it
-// back. The replay view carries movable/resizable PiP frames: one onboard-FPV box PER drone plus a
-// top-down chase box. Single-file app — the Editor/Metrics tabs from the lab are deferred.
+// Studio app shell: a Player tab (pick policy + course + drone count, fly a fixed-course rollout on
+// the GPU, watch the v2 replay in a hero-layout viewport that matches the exported MP4) and an
+// Editor tab (author a gate course). The viewport composites a wide main shot with three fixed left
+// cells — FPV (top), top-down (middle), stats HUD (bottom) — via scissor passes, then exports the
+// byte-identical hero MP4 server-side through the sibling nw-viz capture.
 
 import { createScene } from "./scene.js";
 import { Playback } from "./playback.js";
-import { getPolicies, getCourses, getScalars, postRollout } from "./api.js";
+import { createEditor } from "./editor.js";
+import { layoutInsets, layoutInsetsCss } from "./layout.js";
+import { getPolicies, getCourses, getScalars, postRollout, exportVideo, runFileUrl } from "./api.js";
 import { loadRunByPath } from "./run-loader.js";
 
 const $ = (h) => document.querySelector(`[data-h="${h}"]`);
-const hex = (n) => "#" + (n >>> 0).toString(16).padStart(6, "0").slice(-6);
+const MAX_FPV = 6;                  // cap on FPV sub-cells in the grid (busy swarms get a "+N more")
 
 // ---- toast --------------------------------------------------------------------------
 const toastEl = document.getElementById("toast");
@@ -24,69 +27,69 @@ function toast(msg, isErr = false) {
 // ---- scene + playback ---------------------------------------------------------------
 const view = createScene(document.querySelector(".view3d"));
 const playback = new Playback(view);
-let fpvOn = true, topOn = true;     // FPV-per-drone + top-down insets shown by default
-let fpvFrames = [];                 // [{ frame, body, idx }] — one per drone, built per run
+let fpvOn = true, topOn = true;     // FPV + top-down hero cells shown by default
 let sceneInfo = {};                 // meta.scene_info of the loaded run (command labels, standoff…)
+let currentRunPath = null;          // run_path of the loaded replay (the export target)
 const policiesByPath = new Map();   // path -> policy meta (for the details panel + scalars run name)
 
-// Screen-space rect of an element in the WebGL convention (origin = canvas BOTTOM-left).
-function insetRect(el) {
-  const cr = view.renderer.domElement.getBoundingClientRect();
-  const br = el.getBoundingClientRect();
-  return { x: br.left - cr.left, y: cr.height - (br.top - cr.top + br.height), w: br.width, h: br.height };
+const heroFpvEl = document.getElementById("hero-fpv");
+const heroTopEl = document.getElementById("hero-top");
+const heroStatsEl = document.getElementById("hero-stats");
+
+// ---- hero compositor ----------------------------------------------------------------
+// Position a DOM overlay box from a top-origin CSS rect ({left, top, w, h}).
+function placeBox(el, r) {
+  el.style.left = `${r.left}px`; el.style.top = `${r.top}px`;
+  el.style.width = `${r.w}px`; el.style.height = `${r.h}px`;
 }
 
-// ---- movable + resizable PiP frames -------------------------------------------------
-// Drag by a handle (the header); resizing is the element's native CSS `resize: both` corner. We
-// just clamp the drag so a frame can't be flung off the view.
-function makeDraggable(frame, handle) {
-  let sx = 0, sy = 0, ox = 0, oy = 0, id = null;
-  handle.addEventListener("pointerdown", (e) => {
-    id = e.pointerId;
-    handle.setPointerCapture(id);
-    sx = e.clientX; sy = e.clientY;
-    ox = frame.offsetLeft; oy = frame.offsetTop;
-    frame.classList.add("dragging");
-  });
-  handle.addEventListener("pointermove", (e) => {
-    if (id === null) return;
-    const host = frame.parentElement.getBoundingClientRect();
-    const nx = Math.max(0, Math.min(host.width - frame.offsetWidth, ox + e.clientX - sx));
-    const ny = Math.max(0, Math.min(host.height - frame.offsetHeight, oy + e.clientY - sy));
-    frame.style.left = `${nx}px`; frame.style.top = `${ny}px`;
-  });
-  const end = () => { if (id !== null) { handle.releasePointerCapture(id); id = null; frame.classList.remove("dragging"); } };
-  handle.addEventListener("pointerup", end);
-  handle.addEventListener("pointercancel", end);
+// The actors shown in the FPV cell: hero first, then the rest, capped at MAX_FPV.
+function shownActors() {
+  const acts = playback.actors;
+  if (!acts.length) return [];
+  const hero = acts[playback.heroIdx];
+  const rest = acts.filter((_, i) => i !== playback.heroIdx);
+  return [hero, ...rest].slice(0, MAX_FPV).filter(Boolean);
 }
 
-// Build one FPV frame per drone, tiled top-left, each tinted to match its drone glyph.
-function buildFpvFrames() {
-  const host = $("fpvframes");
-  host.innerHTML = "";
-  fpvFrames = [];
-  const W = 232, H = 162, gap = 10, x0 = 12, y0 = 12;
-  const vw = view.mount.clientWidth || 800;
-  const cols = Math.max(1, Math.floor((vw * 0.62) / (W + gap)));
-  playback.actors.forEach((actor, i) => {
-    const col = i % cols, row = Math.floor(i / cols);
-    const frame = document.createElement("div");
-    frame.className = "cam-frame";
-    frame.style.cssText = `left:${x0 + col * (W + gap)}px;top:${y0 + row * (H + gap)}px;width:${W}px;height:${H}px;`;
-    const head = document.createElement("div");
-    head.className = "cam-head";
-    head.dataset.drag = "";
-    const single = playback.actors.length === 1;
-    head.innerHTML = `<span class="dot" style="background:${hex(actor.tint)}"></span>` +
-      `<span class="name">FPV · ${single ? "onboard" : "drone " + i}</span>`;
-    const body = document.createElement("div");
-    body.className = "cam-body";
-    frame.append(head, body);
-    host.appendChild(frame);
-    makeDraggable(frame, head);
-    fpvFrames.push({ frame, body, idx: i });
-  });
-  host.classList.toggle("hidden", !fpvOn);
+// Render the wide main shot full-canvas, then the FPV + top-down hero cells via scissor passes, and
+// track the DOM overlay boxes to the same layout rects.
+function compositeHero() {
+  view.render();
+  const W = view.mount.clientWidth || 1, H = view.mount.clientHeight || 1;
+  const insets = layoutInsets(W, H);      // bottom-origin (WebGL viewports)
+  const css = layoutInsetsCss(W, H);      // top-origin (DOM boxes)
+  placeBox(heroFpvEl, css.fpv);
+  placeBox(heroTopEl, css.top);
+  placeBox(heroStatsEl, css.stats);
+
+  if (fpvOn) {
+    const shown = shownActors();
+    if (shown.length === 1) {
+      const a = shown[0];
+      view.renderInset(a.fpvCamera, insets.fpv, { hide: [a.glyph].filter(Boolean) });
+    } else if (shown.length > 1) {
+      // Subdivide the FPV cell into a near-square grid (top row first, matching reading order).
+      const n = shown.length, cols = Math.ceil(Math.sqrt(n)), rows = Math.ceil(n / cols);
+      const cw = insets.fpv.w / cols, ch = insets.fpv.h / rows;
+      shown.forEach((a, k) => {
+        const col = k % cols, row = Math.floor(k / cols);
+        const rect = { x: insets.fpv.x + col * cw, y: insets.fpv.y + (rows - 1 - row) * ch, w: cw, h: ch };
+        view.renderInset(a.fpvCamera, rect, { hide: [a.glyph].filter(Boolean) });
+      });
+    }
+    const extra = playback.actors.length - shown.length;
+    $("fpvcap").textContent = extra > 0 ? `+${extra} more` : "";
+  }
+  if (topOn && playback.actors.length) view.renderInset(playback.topCamera, insets.top);
+}
+
+// Show/hide the hero boxes per the FPV/top toggles + active tab.
+function syncHeroBoxes() {
+  const player = activeTab === "player";
+  heroStatsEl.classList.toggle("hidden", !player);
+  heroFpvEl.classList.toggle("hidden", !player || !fpvOn);
+  heroTopEl.classList.toggle("hidden", !player || !topOn);
 }
 
 // ---- transport wiring ---------------------------------------------------------------
@@ -106,7 +109,9 @@ playback.onFrame = (f, i) => {
   }
   $("spd").textContent = `${spd.toFixed(2)} m/s`;
   $("reward").textContent = f.cum_reward.toFixed(1);
-  $("tcur").textContent = (i * playback.dt).toFixed(2);
+  const tsec = (i * playback.dt).toFixed(2);
+  $("tcur").textContent = tsec;
+  $("htime").textContent = tsec;            // hero stats HUD time
   $("fcur").textContent = String(i + 1);
   $("scrub").value = String(i);
   // Command chip (gesture/command_follow): label the raw command via meta.scene_info.command_labels.
@@ -127,12 +132,30 @@ $("play").addEventListener("click", () => playback.setPlaying(!playback.playing)
 $("scrub").addEventListener("input", (e) => playback.seek(Number(e.target.value)));
 $("speed").addEventListener("change", (e) => { playback.speed = Number(e.target.value); });
 $("follow").addEventListener("change", (e) => { playback.follow = e.target.checked; });
-$("fpv").addEventListener("change", (e) => { fpvOn = e.target.checked; $("fpvframes").classList.toggle("hidden", !fpvOn); });
-$("top").addEventListener("change", (e) => { topOn = e.target.checked; $("topframe").classList.toggle("hidden", !topOn); });
+$("fpv").addEventListener("change", (e) => { fpvOn = e.target.checked; syncHeroBoxes(); });
+$("top").addEventListener("change", (e) => { topOn = e.target.checked; syncHeroBoxes(); });
 $("trail").addEventListener("change", (e) => playback.setTrailVisible(e.target.checked));
 
-// The top-down frame is movable from the start; FPV frames get wired in buildFpvFrames().
-makeDraggable($("topframe"), $("topframe").querySelector("[data-drag]"));
+// ---- hero MP4 export (server-side nw-viz capture) -----------------------------------
+$("export").addEventListener("click", async () => {
+  if (!currentRunPath) return;
+  const btn = $("export");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spin">⟳</span> exporting…`;
+  try {
+    const { video_path } = await exportVideo(currentRunPath, { width: 1280, height: 720 });
+    const a = document.createElement("a");
+    a.href = runFileUrl(video_path);
+    a.download = video_path.split("/").pop();
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`hero MP4 ready — downloading ${a.download}`);
+  } catch (err) {
+    toast(`export failed: ${err.message}`, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "⤓ Export hero MP4";
+  }
+});
 
 // ---- policy metadata + training charts ----------------------------------------------
 function fmtDate(epoch) {
@@ -299,31 +322,50 @@ async function loadSelectors() {
       onPolicyPicked();             // populate meta + charts for the default selection
     }
 
-    const crs = $("course");
-    crs.innerHTML = "";
-    const gPresets = optgroup("presets (random)");   // `optgroup` helper declared above (policy picker)
-    for (const c of courses.presets) {
-      const o = document.createElement("option");
-      o.value = c.name;
-      o.textContent = `${c.name}  (r=${c.radius}m, hop ${c.step_min}-${c.step_max}m)`;
-      gPresets.appendChild(o);
-    }
-    crs.appendChild(gPresets);
-    if (courses.courses.length) {
-      const gFiles = optgroup("seeded courses");
-      for (const c of courses.courses) {
-        const o = document.createElement("option");
-        o.value = c.name;
-        o.textContent = `${c.name}  (${c.num_gates} gates)`;
-        gFiles.appendChild(o);
-      }
-      crs.appendChild(gFiles);
-    }
-    // Default to a seeded spread course if present, else the spread preset.
-    crs.value = courses.courses[0]?.name || "preset:spread";
+    populateCourses(courses);
   } catch (err) {
     toast(`failed to load lists: ${err.message}`, true);
   }
+}
+
+// (Re)build the course dropdown: random presets, then seeded courses, then browser-authored ones.
+// `preserve` keeps the current selection if it still exists (used after the editor saves a course).
+function populateCourses(courses, preserve) {
+  const crs = $("course");
+  const optgroup = (label) => { const g = document.createElement("optgroup"); g.label = label; return g; };
+  const prev = preserve ? crs.value : null;
+  crs.innerHTML = "";
+  const gPresets = optgroup("presets (random)");
+  for (const c of courses.presets) {
+    const o = document.createElement("option");
+    o.value = c.name;
+    o.textContent = `${c.name}  (r=${c.radius}m, hop ${c.step_min}-${c.step_max}m)`;
+    gPresets.appendChild(o);
+  }
+  crs.appendChild(gPresets);
+  const addGroup = (label, list) => {
+    if (!list.length) return;
+    const g = optgroup(label);
+    for (const c of list) {
+      const o = document.createElement("option");
+      o.value = c.name;
+      o.textContent = `${c.name}  (${c.num_gates} gates)`;
+      g.appendChild(o);
+    }
+    crs.appendChild(g);
+  };
+  addGroup("seeded courses", courses.courses.filter((c) => c.kind !== "web"));
+  addGroup("your courses (editor)", courses.courses.filter((c) => c.kind === "web"));
+  // Keep the prior selection if it survived the refresh, else default to a seeded course / spread.
+  const seeded = courses.courses.find((c) => c.kind !== "web");
+  crs.value = (prev && [...crs.options].some((o) => o.value === prev)) ? prev
+    : (seeded?.name || courses.courses[0]?.name || "preset:spread");
+}
+
+// Refresh just the course dropdown (after the editor saves), preserving the current pick.
+async function refreshCourses() {
+  try { populateCourses(await getCourses(), true); }
+  catch (err) { toast(`couldn't refresh courses: ${err.message}`, true); }
 }
 
 // ---- run (rollout) ------------------------------------------------------------------
@@ -367,13 +409,47 @@ function showRun(doc, summary) {
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
   const ep = doc.episodes[0];
   playback.setEpisode(ep, dt);
-  buildFpvFrames();              // one onboard box per drone in the freshly-loaded episode
   const n = playback.maxFrames;
   $("scrub").max = String(Math.max(0, n - 1));
   $("scrub").value = "0";
   $("fend").textContent = String(n);
   $("tend").textContent = (n * dt).toFixed(2);
+  $("fpvcap").textContent = "";
+  currentRunPath = summary.run_path;     // the export target
+  $("export").disabled = false;
+  syncHeroBoxes();
   syncPlayBtn();
+}
+
+// ---- editor tab ---------------------------------------------------------------------
+const editor = createEditor({
+  mount: document.querySelector(".view3d-editor"),
+  panel: document.getElementById("editor-controls"),
+  toast,
+  onSaved: refreshCourses,               // refresh the Player's course picker after a save
+  onFly: (stem) => {
+    switchTab("player");
+    $("course").value = stem;            // option value == saved stem; refreshCourses ran first
+    $("run").click();
+  },
+});
+
+// ---- tab routing --------------------------------------------------------------------
+let activeTab = "player";
+function switchTab(name) {
+  activeTab = name;
+  const player = name === "player";
+  for (const b of document.querySelectorAll(".tabbar .tab")) b.classList.toggle("active", b.dataset.tab === name);
+  document.getElementById("player-controls").classList.toggle("hidden", !player);
+  document.getElementById("editor-controls").classList.toggle("hidden", player);
+  view.mount.classList.toggle("hidden", !player);
+  editor_mount().classList.toggle("hidden", player);
+  syncHeroBoxes();
+  if (player) view.resize(); else editor.onShow();
+}
+const editor_mount = () => document.querySelector(".view3d-editor");
+for (const b of document.querySelectorAll(".tabbar .tab")) {
+  b.addEventListener("click", () => switchTab(b.dataset.tab));
 }
 
 // ---- single animation loop ----------------------------------------------------------
@@ -382,21 +458,16 @@ function loop(now) {
   requestAnimationFrame(loop);
   const delta = Math.min(0.1, (now - last) / 1000);
   last = now;
+  if (activeTab === "editor") { editor.tick(delta); return; }
   playback.tick(delta);
-  view.render();
-  // Each FPV inset shows that drone's onboard view, hiding only its OWN body so it doesn't occlude
-  // its camera; other drones stay visible so you see them around you.
-  if (fpvOn) {
-    for (const fr of fpvFrames) {
-      const actor = playback.actors[fr.idx];
-      if (!actor) continue;
-      view.renderInset(actor.fpvCamera, insetRect(fr.body), { hide: [actor.glyph].filter(Boolean) });
-    }
-  }
-  if (topOn && playback.actors.length) view.renderInset(playback.topCamera, insetRect($("topbody")));
+  compositeHero();
 }
 requestAnimationFrame(loop);
-addEventListener("resize", () => { view.resize(); if ($("chartfold").open) renderCharts(); });
+addEventListener("resize", () => {
+  if (activeTab === "player") view.resize(); else editor.resize();
+  if ($("chartfold").open) renderCharts();
+});
 
 view.resize();
+syncHeroBoxes();
 loadSelectors();

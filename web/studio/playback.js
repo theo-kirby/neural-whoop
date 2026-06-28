@@ -10,6 +10,7 @@ import {
   buildGates, buildTrail, buildMarker, buildSlot, disposeGroup,
 } from "./geometry.js";
 import { makeDrone } from "./drone-model.js";
+import { frameHeroCamera } from "./cameras.js";
 
 // Body(+X fwd, +Y left, +Z up) -> camera(look down -Z, up +Y): forward = body +X, up = body +Z.
 const BODY_TO_CAM = new THREE.Quaternion().setFromRotationMatrix(
@@ -105,8 +106,9 @@ export class Playback {
       this.view.world.add(glyph);
       const frames = t.frames || [];
       const trail = frames.length ? buildTrail(this.view.world, frames) : null;
-      // One onboard camera per drone (wide, rolls with its body) so every FPV inset is independent.
-      const fpvCamera = new THREE.PerspectiveCamera(95, 16 / 9, 0.02, 400);
+      // One onboard camera per drone (rolls with its body) so every FPV inset is independent. 90°
+      // to match nw-viz's hero FPV (cameras.js / render_fpv); aspect is set per-cell at composite.
+      const fpvCamera = new THREE.PerspectiveCamera(90, 4 / 3, 0.02, 400);
       // Gateless tasks carry per-frame scene markers — build one per key present in this drone's
       // frames (moving target/anchor sphere, slot ring). Updated each frame in applyFrame.
       const sc0 = frames[0] && frames[0].scene;
@@ -136,22 +138,10 @@ export class Playback {
     this.actors = [];
   }
 
-  // Frame the wide cam over the bbox of every drone's path + the gates.
+  // Frame the orbit camera to nw-viz's fixed 3/4 hero shot over the course (gates + all paths), so
+  // the on-screen wide view matches the exported MP4. Stays orbitable afterward.
   frameToCamera() {
-    const { world, camera, controls } = this.view;
-    const box = new THREE.Box3();
-    for (const a of this.actors) {
-      for (const f of a.frames) box.expandByPoint(this._v.set(f.pos[0], f.pos[1], f.pos[2]));
-    }
-    for (const g of (this.episode.gates || [])) {
-      box.expandByPoint(this._v.set(g.pos[0], g.pos[1], g.pos[2]));
-    }
-    if (box.isEmpty()) return;
-    const center = box.getCenter(new THREE.Vector3()).applyMatrix4(world.matrixWorld);
-    const radius = Math.max(box.getSize(new THREE.Vector3()).length() * 0.6, 4);
-    controls.target.copy(center);
-    camera.position.copy(center).add(new THREE.Vector3(radius * 0.8, radius * 0.7, radius));
-    controls.update();
+    frameHeroCamera(this.view, this.actors.map((a) => a.frames), this.episode.gates || []);
   }
 
   // Render the frame at floor(idx). Does NOT write this.idx (it's a fractional accumulator).

@@ -1,16 +1,35 @@
 # neural-whoop Studio
 
-An interactive browser viewer: pick a saved policy, a course, and a drone count, hit **Run**, and
-watch the policy fly that course with playback controls (3D wide shot + **per-drone onboard-FPV**
-and top-down insets, play/pause/scrub). The successor to `neural-whoop-lab`'s studio, ported onto
-this repo's DiffAero env and the v2 group-replay contract. The UI is a flat 2D style (custom-styled
-selects, rounded panels); the drag-to-place gate Editor is deferred.
+An interactive browser viewer with two tabs:
 
-The sidebar surfaces a **policy** panel (task, creation date, training steps, obs/act dims, eval
-metrics) and a collapsible **training charts** panel (2D line plots parsed straight from the run's
-TensorBoard event file). The PiP camera frames are **movable** (drag the header) and **resizable**
-(drag the corner); FPV is split into **one box per drone** so multi-drone runs show every onboard
-view at once.
+- **Player** — pick a saved policy, a course, and a drone count, hit **Run**, and watch the policy
+  fly in a **hero-layout viewport that matches the exported MP4**: a wide 3/4 main shot fills the
+  view, with three fixed 4:3 cells stacked down the left edge — **FPV** (top), **top-down** (middle),
+  **stats HUD** (bottom). If you like what you see, **Export hero MP4** renders the byte-identical
+  clip server-side.
+- **Editor** — author a gate course directly in a 3D scene (click the ground to drop a gate, drag a
+  translate gizmo to move it incl. height, edit a numeric gate list), with **live flyability
+  validation**, **Save** to `assets/courses/_web/`, and **Save & fly** to test it immediately.
+
+The successor to `neural-whoop-lab`'s studio, ported onto this repo's DiffAero env and the v2
+group-replay contract. The UI is a flat 2D greyscale style (custom-styled selects, rounded panels).
+
+The Player sidebar surfaces a **policy** panel (task, creation date, training steps, obs/act dims,
+eval metrics) and a collapsible **training charts** panel (2D line plots parsed straight from the
+run's TensorBoard event file).
+
+## Hero-layout viewport
+
+The viewport is a single canvas composited like `../nw-viz/`'s hero MP4 (`web/studio/layout.js` ports
+`nw-viz/src/layout.js` verbatim): `view.render()` draws the wide main shot full-frame, then the FPV
+and top-down cells are drawn over it via scissor viewports (`scene.js::renderInset`), and DOM overlay
+boxes (borders/labels + the stats HUD) track the same layout rects so they line up on resize. The
+orbit camera is **initialized to nw-viz's fixed 3/4 framing** each run (`web/studio/cameras.js`) so
+the on-screen wide shot matches the export — but stays fully orbitable for inspection (the canonical
+fixed framing is reproduced exactly at capture time by nw-viz). With one drone the FPV cell shows its
+onboard view full-cell; with **N drones the FPV cell splits into a near-square grid** (hero first,
+capped at 6 — a `+N more` chip notes the overflow). The **FPV box** / **top-down box** toggles in the
+playback section show/hide those cells.
 
 ## Run it
 
@@ -30,9 +49,35 @@ Open the URL, choose:
 - **drones** — how many to fly (1–16); **gates** — gate count for preset courses; **DR** — toggle
   seam domain randomization.
 
-Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays.
-Transport: play/pause, scrub, speed, follow-cam, per-drone FPV insets, top-down inset, trail toggle.
-The FPV/top-down frames can be dragged (by their header) and resized (corner grip).
+Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays in the
+hero layout. Transport: play/pause, scrub, speed, follow-cam, FPV box, top-down box, trail toggle.
+
+## Course editor (Editor tab)
+
+Author a gate course in the same shared 3D scene the player uses (so placement matches the replay
+exactly). Workflow:
+
+- **Add** — click the ground plane to drop a gate at that XY (height = the previous gate's z).
+- **Select + move** — click a gate to select it, then drag the **translate gizmo** arrows (including
+  up/down for height); or type exact `x/y/z/radius` in the right panel.
+- **List** — a scrollable gate list with click-to-select, `↑/↓` reorder, delete, and `+ gate`.
+- **Validate** — an **arena preset** select drives the validation bounds (and the dashed arena ring);
+  a 250 ms-debounced call to `/api/courses/validate` flags errors (gate outside the arena / height
+  out of band / non-positive radius) and warnings (spacing), color-tinting each gate by its worst
+  issue. Pure geometry, no sim (`src/neural_whoop/studio/course_validate.py`).
+- **Save** — writes `assets/courses/_web/<slug>.yaml` (validated; a 422 rejects an unflyable course)
+  and refreshes the Player's course picker, where it appears under **your courses (editor)**.
+- **Save & fly** — saves, switches to the Player tab, selects the saved course, and runs it with the
+  current policy/drone count.
+
+## Export hero MP4
+
+With a run loaded, **⤓ Export hero MP4** (Player sidebar) POSTs to `/api/export`, which shells out to
+the sibling `../nw-viz/capture.mjs` (the proven, committed capture pipeline — byte-identical to
+`scripts/viz.py --video`) to render `runs/studio/<stem>.mp4`, then the browser downloads it. It needs
+`node` on PATH and `../nw-viz` installed (`cd ../nw-viz && npm install`); if either is absent the
+route returns **503** with that guidance instead of hanging. Capture is heavy (headless Chromium +
+ffmpeg), so it runs off the event loop under a single-flight lock (HTTP 409 if one is already going).
 
 ## Drone-count semantics
 
@@ -62,29 +107,38 @@ closest (lowest mean distance), since there are no laps to rank by.
 |--------------------------|--------|--------------------------------------------------------------------|
 | `/api/policies`          | GET    | `[{path, name, run, task, family, needs_course, obs_dim, act_dim, step, created, best_lap, eval, has_scalars}]` from `runs/*/ckpt_final.pt` (`family`/`needs_course` drive the gateless-course UI; `created` = ckpt mtime epoch; `eval` = full `eval.json` when present) |
 | `/api/policies/{run}/scalars` | GET | `{run, tags: {tag: {steps, values}}}` — TensorBoard scalar curves for the run (downsampled; `{}` if no event file) |
-| `/api/courses`           | GET    | `{courses: [seeded YAML], presets: [arena presets]}`               |
+| `/api/courses`           | GET    | `{courses: [seeded + authored YAML, tagged kind file/web], presets: [arena presets]}` |
+| `/api/courses/{name}`    | GET    | a single course `{name, gates}` for editing (curated dir or `_web/`, traversal-guarded) |
+| `/api/courses/validate`  | POST   | `{name, gates}` (+ `?preset=`) → `{ok, issues}` flyability report (pure geometry, no sim) |
+| `/api/courses`           | POST   | `{name, gates}` (+ `?preset=`) → saves to `_web/<slug>.yaml` (422 on an unflyable course) |
 | `/api/rollout`           | POST   | `{policy, course, drone_count, dr, max_steps, n_gates, seed}` → run summary (sim-backed; single-flight, HTTP 409 if busy) |
-| `/api/runs/{path}`       | GET    | the replay `.json.gz` (octet-stream, path-jailed to `runs/`)       |
+| `/api/export`            | POST   | `{run_path, width?, height?, fps?, crf?}` → `{video_path}` hero MP4 via nw-viz (503 if node/nw-viz absent; single-flight) |
+| `/api/runs/{path}`       | GET    | the replay `.json.gz` / exported `.mp4` (octet-stream, path-jailed to `runs/`) |
 | `/`                      | GET    | the static `web/studio/` frontend                                  |
 
-A module-level lock serializes rollouts (the batched GPU sim is not re-entrant). The GET listing
-routes import without torch/sim; only `/api/rollout` reaches the sim stack (lazily). The scalars
-route uses `studio/tbscalars.py`, a dependency-free TFRecord/protobuf scalar reader (validated
-against `tbparse`) — so charts need no extra deps beyond the `studio` extra.
+Module-level locks serialize rollouts and exports (the batched GPU sim isn't re-entrant; capture is
+heavy). The GET listing + course-validate/save routes import without torch/sim; only `/api/rollout`
+reaches the sim stack (lazily), and `/api/export` only shells out to node. The scalars route uses
+`studio/tbscalars.py`, a dependency-free TFRecord/protobuf scalar reader (validated against
+`tbparse`) — so charts need no extra deps beyond the `studio` extra.
 
 ## Frontend (`web/studio/`)
 
-Static ES modules; three.js + OrbitControls load from a jsDelivr **importmap** (no Node toolchain in
-this repo). `scene.js`/`geometry.js`/`drone-model.js` are ported near-verbatim from the lab;
-`playback.js` is adapted to the v2 `drones[]` group (one tinted actor per drone, **each with its own
-onboard FPV camera**; a hero actor drives the HUD + top-down cam — the same approach as
-`../nw-viz/src/viewer.js`); `main.js` wires the selectors, the Run button, the transport, the policy
-metadata panel, the canvas line charts (from `/api/policies/{run}/scalars`), and the
-movable/resizable PiP frames (one FPV box per drone, built on each run).
+Static ES modules; three.js + OrbitControls + TransformControls load from a jsDelivr **importmap**
+(no Node toolchain in this repo). `scene.js`/`geometry.js`/`drone-model.js` are ported near-verbatim
+from the lab; `layout.js`/`cameras.js` port the hero composition from `../nw-viz/`; `playback.js` is
+adapted to the v2 `drones[]` group (one tinted actor per drone, **each with its own onboard FPV
+camera**; a hero actor drives the HUD + top-down cam — the same approach as `../nw-viz/src/viewer.js`);
+`editor.js` is the unified-3D course editor; `main.js` wires the tab router, the selectors, the Run
+button, the transport, the policy metadata panel, the canvas line charts, the **hero compositor**
+render loop, and the **export** button.
 
 ## Courses on disk
 
 Seeded courses (`assets/courses/*.yaml`) use the schema `{name, gates: [{pos:[x,y,z], radius}]}` —
 the same shape `env.fixed_course` consumes. `scripts/seed_courses.py` (re)generates a curated set
 from `neural_whoop.course.ARENA_PRESETS` with fixed seeds, so the repo ships shareable,
-bigger-than-default base courses.
+bigger-than-default base courses. **Browser-authored** courses (from the Editor tab) live under
+`assets/courses/_web/<slug>.yaml` — listed in the picker as `kind: "web"`, flyable by stem without a
+restart (`resolve_course` checks both dirs), and validated before write so an unflyable course is
+never persisted.

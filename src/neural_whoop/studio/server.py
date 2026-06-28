@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import anyio
@@ -21,13 +23,19 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from neural_whoop import course as course_mod
 from neural_whoop.studio import courses as courses_mod
 
 #: Repo root (src/neural_whoop/studio/server.py -> repo).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+#: The sibling nw-viz capture entrypoint (../nw-viz/capture.mjs), mirroring scripts/viz.py.
+_NW_VIZ_CAPTURE = _REPO_ROOT.parent / "nw-viz" / "capture.mjs"
+
 #: Single-flight guard: only one rollout runs at a time (the batched GPU sim isn't re-entrant).
 ROLLOUT_LOCK = asyncio.Lock()
+#: Single-flight guard: only one hero-MP4 capture runs at a time (headless Chromium is heavy).
+EXPORT_LOCK = asyncio.Lock()
 
 
 class RolloutRequest(BaseModel):
@@ -40,6 +48,33 @@ class RolloutRequest(BaseModel):
     max_steps: int = Field(default=1200, ge=1, le=4000)
     n_gates: int = Field(default=6, ge=1, le=24)   # for preset courses
     seed: int = 0
+
+
+class GateModel(BaseModel):
+    """One omnidirectional spherical gate (sim frame, meters)."""
+
+    pos: list[float] = Field(min_length=3, max_length=3)
+    radius: float = 0.35
+
+
+class CourseModel(BaseModel):
+    """An authored course payload (name + gate list) for validate/save."""
+
+    name: str = "course"
+    gates: list[GateModel] = Field(default_factory=list)
+
+    def gate_dicts(self) -> list[dict]:
+        return [{"pos": list(g.pos), "radius": float(g.radius)} for g in self.gates]
+
+
+class ExportRequest(BaseModel):
+    """Render a loaded replay to a hero MP4 via the sibling nw-viz capture pipeline."""
+
+    run_path: str                                   # runs-relative replay path (from /api/rollout)
+    width: int = Field(default=1280, ge=320, le=3840)
+    height: int = Field(default=720, ge=240, le=2160)
+    fps: float | None = Field(default=None, ge=1, le=120)
+    crf: int = Field(default=18, ge=0, le=51)
 
 
 def create_app(
@@ -79,6 +114,31 @@ def create_app(
             "courses": courses_mod.list_courses(courses_dir),
             "presets": courses_mod.list_presets(),
         }
+
+    @app.get("/api/courses/{name}")
+    def get_course(name: str) -> dict:
+        """Load a single course (curated or authored ``_web/``) as ``{name, gates}`` for editing."""
+        try:
+            return courses_mod.load_course_named(courses_dir, name)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/courses/validate")
+    def validate_course(course: CourseModel, preset: str = "tight") -> dict:
+        """Flyability check against an arena preset's bounds — pure geometry, no sim."""
+        from neural_whoop.studio import course_validate
+
+        return course_validate.validate_gates(course.gate_dicts(), _arena_for(preset))
+
+    @app.post("/api/courses")
+    def save_course(course: CourseModel, preset: str = "tight") -> dict:
+        """Validate + persist an authored course under ``assets/courses/_web/<slug>.yaml``."""
+        try:
+            return courses_mod.save_course(
+                courses_dir, course.name, course.gate_dicts(), _arena_for(preset),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # ----------------------------------------------------------------- training scalars (TB)
     @app.get("/api/policies/{run}/scalars")
@@ -126,6 +186,36 @@ def create_app(
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         return summary
 
+    # ----------------------------------------------------------------- export (hero MP4 via nw-viz)
+    @app.post("/api/export")
+    async def export_video(req: ExportRequest) -> dict:
+        try:
+            replay_abs = _resolve_run(runs_dir, req.run_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        node = shutil.which("node")
+        if node is None or not _NW_VIZ_CAPTURE.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=("video export needs node + ../nw-viz; "
+                        "run `cd ../nw-viz && npm install` (and install node) to enable it"),
+            )
+        if EXPORT_LOCK.locked():
+            raise HTTPException(status_code=409, detail="a video export is already running")
+
+        stem = replay_abs.name
+        for ext in (".json.gz", ".json"):
+            if stem.endswith(ext):
+                stem = stem[: -len(ext)]
+                break
+        out_mp4 = replay_abs.with_name(f"{stem}.mp4")
+        async with EXPORT_LOCK:
+            await anyio.to_thread.run_sync(
+                lambda: _run_capture(node, replay_abs, out_mp4, req)
+            )
+        return {"video_path": out_mp4.resolve().relative_to(runs_dir.resolve()).as_posix()}
+
     # ----------------------------------------------------------------- static studio (LAST)
     if studio_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(studio_dir), html=True), name="studio")
@@ -142,6 +232,27 @@ def app_factory() -> FastAPI:
 
 
 # --------------------------------------------------------------------------- helpers
+def _arena_for(preset: str) -> course_mod.ArenaSpec:
+    """Arena bounds for a validation preset name; unknown names fall back to the tight default."""
+    return course_mod.ARENA_PRESETS.get(preset, course_mod.ArenaSpec())
+
+
+def _run_capture(node: str, replay_abs: Path, out_mp4: Path, req: "ExportRequest") -> None:
+    """Shell out to ``node ../nw-viz/capture.mjs`` to render the hero MP4 (blocking; off-thread).
+
+    Mirrors ``scripts/viz.py::_maybe_render_video`` — byte-identical to the committed pipeline.
+    Raises ``RuntimeError`` (-> 500) with the captured stderr tail on a non-zero exit.
+    """
+    cmd = [node, str(_NW_VIZ_CAPTURE), "--replay", str(replay_abs), "--out", str(out_mp4),
+           "--width", str(req.width), "--height", str(req.height), "--crf", str(req.crf)]
+    if req.fps is not None:
+        cmd += ["--fps", str(req.fps)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(_NW_VIZ_CAPTURE.parent))
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
+        raise RuntimeError("nw-viz capture failed:\n" + "\n".join(tail))
+
+
 def _rel(path: Path, root: Path) -> str:
     """Repo-relative POSIX path, falling back to the absolute path if outside the repo."""
     try:
