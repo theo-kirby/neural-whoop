@@ -154,8 +154,8 @@ function renderMeta(p) {
   if (!p) { box.innerHTML = `<div class="charts-empty">pick a policy to see its details.</div>`; return; }
   const ev = p.eval || {};
   const rows = [
-    kvRow("name", p.name),
-    kvRow("task", p.task || "—"),
+    kvRow("name", `${p.recommended ? "★ " : ""}${p.name}`),
+    kvRow("task", `${p.task || "—"}${p.family_label ? ` · ${p.family_label}` : ""}`),
     kvRow("created", fmtDate(p.created)),
     kvRow("trained", `${fmtSteps(p.step)} steps`),
     kvRow("obs / act", `${p.obs_dim ?? "—"} / ${p.act_dim ?? "—"}`),
@@ -260,16 +260,44 @@ async function loadSelectors() {
     const pol = $("policy");
     pol.innerHTML = "";
     policiesByPath.clear();
-    for (const p of policies) {
-      policiesByPath.set(p.path, p);
+    for (const p of policies) policiesByPath.set(p.path, p);
+
+    // Group the picker so it isn't a flat wall of experiment runs: a "★ recommended" group first
+    // (the curated known-good policy per family), then one group per family. Within a group, sort
+    // best-lap first (gate tasks) then by name.
+    const FAM_ORDER = ["gate", "gate_swarm", "follow", "formation"];
+    const optgroup = (label) => { const g = document.createElement("optgroup"); g.label = label; return g; };
+    const optionFor = (p, star) => {
       const o = document.createElement("option");
       o.value = p.path;
       const lap = p.best_lap != null ? ` · ${p.best_lap.toFixed(2)}s` : "";
-      o.textContent = `${p.name} [${p.task}]${lap}`;
-      pol.appendChild(o);
+      o.textContent = `${star ? "★ " : ""}${p.name}${lap}`;
+      return o;
+    };
+    const sortKey = (p) => [p.best_lap == null ? 1 : 0, p.best_lap ?? 0, p.name];
+    const byKey = (a, b) => { const ka = sortKey(a), kb = sortKey(b);
+      for (let i = 0; i < ka.length; i++) { if (ka[i] < kb[i]) return -1; if (ka[i] > kb[i]) return 1; } return 0; };
+
+    const recommended = policies.filter((p) => p.recommended)
+      .sort((a, b) => FAM_ORDER.indexOf(a.family) - FAM_ORDER.indexOf(b.family) || byKey(a, b));
+    if (recommended.length) {
+      const g = optgroup("★ recommended (start here)");
+      for (const p of recommended) g.appendChild(optionFor(p, true));
+      pol.appendChild(g);
+    }
+    const byFamily = new Map();
+    for (const p of policies) (byFamily.get(p.family) ?? byFamily.set(p.family, []).get(p.family)).push(p);
+    const fams = [...byFamily.keys()].sort((a, b) => FAM_ORDER.indexOf(a) - FAM_ORDER.indexOf(b));
+    for (const fam of fams) {
+      const g = optgroup(byFamily.get(fam)[0]?.family_label || fam);
+      for (const p of byFamily.get(fam).sort(byKey)) g.appendChild(optionFor(p, p.recommended));
+      pol.appendChild(g);
     }
     if (!policies.length) toast("No policies found under runs/*/ckpt_final.pt", true);
-    else onPolicyPicked();          // populate meta + charts for the default selection
+    else {
+      pol.value = (recommended[0] || policies[0]).path;   // land on a known-good policy
+      onPolicyPicked();             // populate meta + charts for the default selection
+    }
 
     const crs = $("course");
     crs.innerHTML = "";

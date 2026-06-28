@@ -49,6 +49,30 @@ def task_family(task_name: str) -> str:
     return "gate"
 
 
+#: Human labels for the families (frontend optgroup headers / chips).
+FAMILY_LABELS = {
+    "gate": "gate racing",
+    "gate_swarm": "swarm racing",
+    "follow": "target / hand following",
+    "formation": "swarm formation",
+}
+
+#: Curated **recommended** run per family — the canonical "start here / known-good" policy the
+#: Studio surfaces first, so the picker isn't a flat wall of experiment runs. These are the GREEN
+#: representatives from the Flywheel record (gate: the 120M scale-generalist; follow: the EMA-precision
+#: target_follow + EMA hand_follow; the command-conditioned policies; the formation baseline). Update
+#: when a better baseline lands; an entry that no longer exists is simply ignored.
+RECOMMENDED_RUNS = frozenset({
+    "gate_race_big128_120M_s0",   # best lap time, scale-generalist (studio baseline)
+    "swarm_race_s1",              # shared-track swarm
+    "target_follow_ema085",       # EMA precision filter closes the standoff back-off (GREEN)
+    "hand_follow_ema",            # EMA generalizes to the jerky hand (GREEN)
+    "gesture_follow",             # first command-conditioned policy (STOP/GO)
+    "command_follow",             # 3-way command vocabulary (STOP/NEAR/FAR)
+    "swarm_formation",            # ring formation around a moving anchor (GREEN)
+})
+
+
 def _read_ckpt_meta(policy_path: Path) -> dict:
     """Read the sidecar ``<ckpt>.pt.meta.json`` (task, obs_dim, act_dim, step)."""
     meta_path = policy_path.with_suffix(policy_path.suffix + ".meta.json")

@@ -58,6 +58,15 @@ def create_app(
 
     app = FastAPI(title="neural-whoop studio", version="0.1.0")
 
+    @app.middleware("http")
+    async def _no_store_static(request, call_next):
+        """Serve the static frontend with no-store so a code/browser-cache mismatch can't show a
+        stale `playback.js` (the static dir isn't reload-watched; the API is untouched)."""
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
+
     # ----------------------------------------------------------------- policies
     @app.get("/api/policies")
     def get_policies() -> list[dict]:
@@ -193,11 +202,16 @@ def _list_policies(runs_dir: Path, root: Path) -> list[dict]:
                             act_dim=m.get("act_dim"), step=m.get("step"))
             except Exception:  # noqa: BLE001 - skip an unreadable sidecar
                 pass
-        # Family flag drives the UI (gateless tasks hide the course selector). Derived from the task
-        # so the frontend never hardcodes task names.
-        from neural_whoop.studio.rollout import GATELESS_TASKS, task_family
-        info["family"] = task_family(info["task"])
+        # Family flag drives the UI (gateless tasks hide the course selector; the picker groups by
+        # family and floats the recommended runs). Derived from the task — no hardcoded task names.
+        from neural_whoop.studio.rollout import (
+            FAMILY_LABELS, GATELESS_TASKS, RECOMMENDED_RUNS, task_family,
+        )
+        fam = task_family(info["task"])
+        info["family"] = fam
+        info["family_label"] = FAMILY_LABELS.get(fam, fam)
         info["needs_course"] = info["task"] not in GATELESS_TASKS
+        info["recommended"] = run_name in RECOMMENDED_RUNS
         # Eval metrics from a recorded eval.json (runs/<run>/eval.json or viz/eval.json).
         for cand in (ckpt.parent / "eval.json", ckpt.parent / "viz" / "eval.json"):
             if cand.is_file():

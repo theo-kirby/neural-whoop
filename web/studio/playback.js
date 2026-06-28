@@ -168,8 +168,10 @@ export class Playback {
       this._updateMarkers(a, f.scene);          // moving target/anchor/slot (gateless tasks)
     }
     const hero = this.actors[this.heroIdx];
+    if (!hero || !hero.frames.length) return;   // a 0-frame hero (immediate crash) has no HUD frame
     const hi = Math.max(0, Math.min(hero.frames.length - 1, Math.floor(idx)));
     const hf = hero.frames[hi];
+    if (!hf) return;
     // Only `gate_idx` (hero's next gate) actually counts — make that sphere pop, fade the rest.
     // Gateless tasks have no gate lines (the loop is a no-op there).
     for (let g = 0; g < this.gateLines.length; g++) {
