@@ -124,6 +124,14 @@ def create_app(
     return app
 
 
+def app_factory() -> FastAPI:
+    """Import-string factory for ``uvicorn --reload`` (needs a re-importable target, not an app
+    instance). Device comes from ``NW_STUDIO_DEVICE`` (set by ``scripts/serve.py``), default cuda."""
+    import os
+
+    return create_app(device=os.environ.get("NW_STUDIO_DEVICE", "cuda"))
+
+
 # --------------------------------------------------------------------------- helpers
 def _rel(path: Path, root: Path) -> str:
     """Repo-relative POSIX path, falling back to the absolute path if outside the repo."""
