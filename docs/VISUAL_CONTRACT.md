@@ -131,6 +131,7 @@ dir — exactly what the autonomous loop uploads to a Flywheel node:
 |------|---------|------------------------|
 | `replay.json.gz` | the replay document (portable, durable) | `json` |
 | `eval.json` | aggregate metric dict | `json` |
+| `run.json` | reproducibility manifest — how the run was produced (see below) | `json` |
 | `trajectory.png` | top-down + side flown path, gates, gate-loop reference, laps | `image` |
 | `fpv_*.png` | synthetic onboard keyframes (start / gate passes / end) | `image` |
 | `fpv.gif` | optional stitched FPV loop (`--gif`, needs `imageio`) | `binary` |
@@ -141,6 +142,28 @@ dir — exactly what the autonomous loop uploads to a Flywheel node:
 
 Renderers degrade gracefully: no TB events → no curves; no baseline → no comparison; no `imageio`
 → no GIF (PNGs are the durable artifact).
+
+### `run.json` — the reproducibility manifest
+
+A single durable artifact pinning **exactly how the run was produced**, so a node is reproducible
+from text alone. Assembled by `build_run_meta()` in `eval/pack.py` and written when a `run_meta` is
+passed to `build_pack()` (`scripts/viz.py`, `scripts/eval.py --viz`). Every field is best-effort —
+a missing `git` binary or torch import degrades to `null`/`{}`, never an error (matching the
+renderer's graceful style):
+
+| key | meaning |
+|-----|---------|
+| `command` | the invoking command (`sys.argv`) |
+| `config` / `checkpoint` / `task` | config path, source checkpoint, registry task name |
+| `policy` | human-readable policy label (param count), when supplied |
+| `seed` | RNG seed |
+| `eval` | the eval protocol: `{n_envs, steps, dr: "on"/"off"}` |
+| `git` | `{sha, dirty}` — current commit + working-tree-dirty flag (`{}` if git unavailable) |
+| `versions` | `{torch, diffaero}` — `torch.__version__` + the pinned DiffAero upstream commit |
+
+This is the "if it isn't reproducible it didn't happen" artifact: it lets any later reader rebuild
+the exact run that produced the rest of the pack. It does **not** touch the portable replay schema
+(no contract `version` bump).
 
 ## Artifact-type mapping + naming (Flywheel)
 

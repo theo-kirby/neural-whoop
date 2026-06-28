@@ -15,16 +15,93 @@ A pack is a directory of files mapped to Flywheel artifact types (see
 - ``replay.json.gz`` -> ``json`` (gzipped replay; the durable, portable record)
 - ``trajectory.png`` / ``fpv_*.png`` / ``training_curves.png`` / ``comparison.png`` -> ``image``
 - ``eval.json`` -> ``json`` (aggregate metrics)
+- ``run.json`` -> ``json`` (reproducibility manifest: command / config / ckpt / seed / git SHA / versions)
 - ``table.csv`` -> ``table`` (leaderboard vs the baseline)
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 from neural_whoop.eval.rollout import evaluate_and_record, select_heroes, select_swarm_heroes
 from neural_whoop.viz.replay import RunRecorder, build_meta
+
+#: Pinned DiffAero upstream commit (see ``CLAUDE.md`` / ``third_party/diffaero/NEURAL_WHOOP_FORK.md``).
+#: Recorded in the run manifest so a node pins the exact substrate it was produced on.
+DIFFAERO_PIN = "291ea14196aefbebcf7387dd71f7e096c83878b7"
+
+
+def _git_state() -> dict:
+    """Best-effort current commit SHA + dirty flag; ``{}`` if git is unavailable.
+
+    Non-fatal by design (matches the renderer's graceful-degradation style): a missing git
+    binary or a non-repo checkout must never break the pack.
+    """
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+        )
+        return {"sha": sha, "dirty": dirty}
+    except Exception:
+        return {}
+
+
+def _torch_version() -> str | None:
+    """``torch.__version__`` if torch imports, else ``None`` (best-effort)."""
+    try:
+        import torch
+
+        return str(torch.__version__)
+    except Exception:
+        return None
+
+
+def build_run_meta(
+    *,
+    config: str | None = None,
+    ckpt: str | None = None,
+    seed: int | None = None,
+    n_envs: int | None = None,
+    steps: int | None = None,
+    dr: bool | None = None,
+    policy: str | None = None,
+    task: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """Assemble the ``run.json`` reproducibility manifest — how this run was produced.
+
+    Pins the invoking command, the exact config/checkpoint/seed, the eval protocol
+    (envs x steps, DR on/off), the git state, and key library versions (torch + the pinned
+    DiffAero upstream commit). Every field is best-effort; nothing here raises. The result is
+    written verbatim as ``run.json`` and uploaded as a ``json`` artifact (see
+    :func:`build_pack` and ``docs/VISUAL_CONTRACT.md``).
+    """
+    meta: dict = {
+        "command": list(sys.argv),
+        "config": config,
+        "checkpoint": ckpt,
+        "task": task,
+        "policy": policy,
+        "seed": seed,
+        "eval": {
+            "n_envs": n_envs,
+            "steps": steps,
+            "dr": (None if dr is None else ("on" if dr else "off")),
+        },
+        "git": _git_state(),
+        "versions": {"torch": _torch_version(), "diffaero": DIFFAERO_PIN},
+    }
+    if extra:
+        meta.update(extra)
+    return meta
 
 
 def policy_label(agent, ckpt: str | None = None) -> str:
@@ -75,6 +152,7 @@ def build_pack(
     run_dir: str | Path | None = None,
     baseline: str | Path | None = None,
     eval_metrics: dict | None = None,
+    run_meta: dict | None = None,
     fpv: bool = True,
     gif: bool = False,
 ) -> dict[str, str]:
@@ -86,6 +164,7 @@ def build_pack(
         run_dir: A training run dir (with ``events.out.tfevents.*``) for the curves plot.
         baseline: A baseline replay to compare against (-> ``comparison.png`` + ``table.csv``).
         eval_metrics: Aggregate metrics to dump as ``eval.json``.
+        run_meta: Reproducibility manifest (see :func:`build_run_meta`) dumped as ``run.json``.
         fpv: Render synthetic FPV keyframes.
         gif: Stitch the FPV keyframes into a GIF (needs ``imageio``).
 
@@ -105,6 +184,10 @@ def build_pack(
     if eval_metrics is not None:
         (out_dir / "eval.json").write_text(json.dumps(eval_metrics, indent=2))
         artifacts["eval.json"] = "json"
+
+    if run_meta is not None:
+        (out_dir / "run.json").write_text(json.dumps(run_meta, indent=2))
+        artifacts["run.json"] = "json"
 
     render.plot_trajectory(replay_path, out_dir / "trajectory.png")
     artifacts["trajectory.png"] = "image"

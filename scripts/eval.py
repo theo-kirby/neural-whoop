@@ -58,7 +58,7 @@ def main() -> int:
     do_record = args.viz or (args.record is not None)
     ckpt_dir = Path(args.ckpt).parent
     if do_record:
-        from neural_whoop.eval.pack import build_pack, record_rollout
+        from neural_whoop.eval.pack import build_pack, build_run_meta, record_rollout
 
         config_name = cfg.get("run", {}).get("name", cfg["task"]["name"])
         replay_path = Path(args.record) if args.record else (ckpt_dir / "replay.json.gz")
@@ -69,9 +69,13 @@ def main() -> int:
         )
         print(f"[record] replay -> {replay_path}")
         if args.viz:
+            run_meta = build_run_meta(
+                config=args.config, ckpt=args.ckpt, seed=args.seed, n_envs=args.n_envs,
+                steps=args.steps, dr=(not args.no_dr), task=cfg["task"]["name"],
+            )
             artifacts = build_pack(
                 replay_path, ckpt_dir / "viz",
-                run_dir=ckpt_dir, baseline=args.baseline, eval_metrics=metrics,
+                run_dir=ckpt_dir, baseline=args.baseline, eval_metrics=metrics, run_meta=run_meta,
             )
             print(f"[viz] {len(artifacts)} artifacts -> {ckpt_dir / 'viz'}")
     else:

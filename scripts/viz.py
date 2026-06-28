@@ -76,7 +76,7 @@ def main() -> int:
                    help="Also render a hero MP4 via the sibling nw-viz tool (no-op if absent).")
     args = p.parse_args()
 
-    from neural_whoop.eval.pack import build_pack, record_rollout
+    from neural_whoop.eval.pack import build_pack, build_run_meta, record_rollout
     from neural_whoop.experiment import build_env, load_config
     from neural_whoop.training.ppo import load_agent
 
@@ -109,9 +109,13 @@ def main() -> int:
     for k, v in metrics.items():
         print(f"  {k:24s} {v:.4f}" if isinstance(v, float) else f"  {k:24s} {v}")
 
+    run_meta = build_run_meta(
+        config=args.config, ckpt=args.ckpt, seed=args.seed, n_envs=args.n_envs,
+        steps=args.steps, dr=(not args.no_dr), task=cfg["task"]["name"],
+    )
     artifacts = build_pack(
         replay_path, out_dir,
-        run_dir=run_dir, baseline=args.baseline, eval_metrics=metrics,
+        run_dir=run_dir, baseline=args.baseline, eval_metrics=metrics, run_meta=run_meta,
         fpv=not args.no_fpv, gif=args.gif,
     )
     print(f"[pack] {len(artifacts)} artifacts -> {out_dir}")
