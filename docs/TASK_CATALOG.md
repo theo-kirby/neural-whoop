@@ -86,8 +86,17 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Sim2real basis:** same CTBR + body-frame obs + airframe/seam DR as `gate_race`; a real cheap
   range/relative-bearing estimate stands in for the neighbour vector. Shared policy across agents.
 
-### ⬜ `swarm_formation` — N-drone formation / coverage
-- **Metric:** formation error ↓ + inter-agent collisions → 0.
+### ✅ `swarm_formation` — N-drone ring formation around a moving anchor (second swarm task, Flywheel hop-15)
+- **Metric:** `mean_formation_error` (dist to assigned slot) ↓ + `formation_hold_rate` (frac within
+  `hold_tol`) ↑ at bounded `collision_rate_per_step`.
+- **Status:** implemented (`tasks/swarm_formation.py`, `configs/swarm_formation.yaml`). N drones each
+  hold their **own** slot on a ring around a slowly-moving anchor (reuses the `target.py` mover);
+  shared policy + nearest-neighbour obs (obs 17) + collision penalty; no shared track. **First result
+  (Flywheel `raspy-moon-0909`, GREEN):** the ring forms+holds tightly — formation_error 0.17 m,
+  hold_rate **0.997**, **ZERO collisions**, DR-robust. Confirms the density-curve prediction
+  (`proud-wood-6049`): own-slot formation sidesteps the shared-track congestion that capped
+  `swarm_race` (0.34 completion / 0.002 collisions/step). Caveat: collisions don't arise here, so it's
+  a weak collision-avoidance stress — that lives in shared-track racing / denser formations.
 - **Basis:** exercises the `n_agents>1` path (agent-flattened dynamics; relative-observation coupling
   in the task layer). Shared policy across agents. The relative-position-target sibling of
   `swarm_race` (track a desired offset instead of racing a shared track).
