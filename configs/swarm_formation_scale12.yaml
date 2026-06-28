@@ -1,0 +1,61 @@
+# Hop-17 (Flywheel, builds-on rapid-smoke-6696): FORMATION N-SCALING. The density curve showed
+# formation collapses geometrically when slots crowd the 0.25m radius. Here we hold slot spacing
+# FIXED at ~0.6m (2.4x radius, geometrically feasible) and scale n_agents=12 by GROWING the ring
+# (formation_radius=1.16), n_drones held 12288 (n_envs=1024). Tests whether ONE tiny shared policy
+# holds a large feasible-spacing formation -> is own-slot formation the scalable swarm regime?
+# Hop-15 (Flywheel) — swarm_formation: SECOND swarm task (the formation half of the catalog).
+# N drones hold a ring formation around a slowly-moving anchor (their OWN assigned slot each, no
+# shared track) under a shared policy + nearest-neighbour obs + collision avoidance. The density
+# curve (proud-wood-6049) flagged this as sidestepping shared-track congestion. Pure task-layer
+# (no env changes). Decision metric = mean_formation_error DOWN + formation_hold_rate UP at bounded
+# collision_rate. Builds on the single-drone racing net ([128,128]@120M) + swarm_race machinery.
+
+run:
+  name: swarm_formation_scale12
+
+task:
+  name: swarm_formation
+  n_agents: 12
+  episode_len: 600
+  motion: mixed
+  anchor_speed: 1.0
+  anchor_radius: 1.0
+  formation_radius: 1.159
+  track_sigma: 0.6
+  hold_tol: 0.4
+  formation_scale: 1.0
+  collision_penalty: 10.0
+  collision_radius: 0.25
+  crash_penalty: 10.0
+
+env:
+  n_envs: 1024
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100
