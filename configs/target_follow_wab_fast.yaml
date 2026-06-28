@@ -1,0 +1,67 @@
+# Hop-22 (Flywheel, builds-on autumn-cherry-1696): WORLD-FRAME predictive filter. The body-frame
+# alpha-beta was NO-GO (rotating frame corrupts velocity). This filters the target estimate in the
+# INERTIAL WORLD frame (meaningful velocity) -> the proper predictive filter. target_speed 3.0.
+# Does it beat the EMA (recover more of the clean ceiling)?
+# Perception beachhead: single-drone moving-target following through a NOISY detector.
+# The first catalog task that exercises the perception seam (DetectorNoise) rather than a perfect
+# oracle. Reuses the [128,128]@120M baseline net + full seam DR; the new ingredient is the detector
+# error model (bearing/range/FOV/dropout + stale-hold) turned ON, so the policy must learn to keep
+# the target in view and at standoff despite a real detector's failure modes.
+# Flywheel: realizes idea node 96fbd7ef (close the perception sim2real gap).
+
+run:
+  name: target_follow_wab_fast
+
+task:
+  name: target_follow
+  episode_len: 600        # steps; dt=0.02s -> 12s of tracking
+  motion: mixed           # static / orbit / lissajous / mixed (per-env)
+  target_speed: 3.0       # m/s held-target speed
+  target_radius: 1.5      # orbit / lissajous extent (m)
+  d_desired: 1.5          # desired standoff distance (m)
+  track_sigma: 0.6        # standoff reward bell width (m)
+  fov_deg: 110.0          # camera FOV (full angle) for the in-view reward — match dr.detector_fov_deg
+  track_scale: 1.0
+  in_view_bonus: 0.5
+  center_scale: 0.3
+  world_ab_alpha: 0.3   # world-frame alpha-beta position gain
+  world_ab_beta: 0.1    # world-frame alpha-beta velocity gain
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Seam-level DR with the DETECTOR error model ON (the whole point of this task).
+dr:
+  enabled: true
+  wind_accel_mps2: 1.5
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  detector_bearing_deg: 3.0     # ~3 deg bearing noise std
+  detector_range_frac: 0.10     # 10% multiplicative range error
+  detector_dropout_prob: 0.05   # 5% per-step dropout -> stale-hold
+  detector_fov_deg: 110.0       # forward camera cone; target outside -> stale-hold
+
+whoop: {}
+
+ppo:
+  total_steps: 120_000_000  # match the racing baseline budget knee (Flywheel shrill-limit-5398)
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  ckpt_interval_updates: 100

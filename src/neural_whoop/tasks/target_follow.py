@@ -75,6 +75,13 @@ class TargetFollowConfig:
     # ab_beta = velocity gain. Body-frame approximation (the frame rotates; fine for slow follow).
     ab_alpha: float = 0.0
     ab_beta: float = 0.0
+    # World-frame alpha-beta (Flywheel hop-22). The body-frame predictor (autumn-cherry-1696) was a
+    # NO-GO because the body frame rotates -> velocity is corrupted by ego-motion. This filters the
+    # target estimate in the INERTIAL WORLD frame (convert the noisy body fix to a world target-pos
+    # estimate, alpha-beta on world pos+vel, transform back to body for the obs). World velocity is
+    # smooth, so the prediction is meaningful -- the proper way to beat the EMA's lag. Takes precedence.
+    world_ab_alpha: float = 0.0
+    world_ab_beta: float = 0.0
     alive_bonus: float = 0.0
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -120,6 +127,8 @@ class TargetFollowTask(DroneTask):
         self._est_ema = torch.zeros(n, 3, device=dev)     # EMA precision filter state (body frame)
         self._ab_x = torch.zeros(n, 3, device=dev)        # alpha-beta position estimate (body frame)
         self._ab_v = torch.zeros(n, 3, device=dev)        # alpha-beta velocity estimate (body frame)
+        self._wx = torch.zeros(n, 3, device=dev)          # world-frame target position estimate
+        self._wv = torch.zeros(n, 3, device=dev)          # world-frame target velocity estimate
         self._dt = float(getattr(env, "dt", 0.02))        # sim step for the predictor
         # Episode accumulators (GPU-resident; reset per env, read at log cadence by metrics()).
         self.steps = torch.zeros(n, device=dev, dtype=torch.long)
@@ -162,6 +171,8 @@ class TargetFollowTask(DroneTask):
         self._est_ema[d_idx] = seed   # seed the precision filter with the spawn estimate
         self._ab_x[d_idx] = seed      # seed the alpha-beta filter (vel starts at 0)
         self._ab_v[d_idx] = 0.0
+        self._wx[d_idx] = tgt0        # seed the world-frame filter at the true target world pos
+        self._wv[d_idx] = 0.0
 
         self.steps[d_idx] = 0
         self.in_view[d_idx] = 0
@@ -181,9 +192,19 @@ class TargetFollowTask(DroneTask):
         if env.dr.cfg.enabled and not det.is_identity:
             rel_body, _ = apply_detector_noise(rel_body, det, self.last_valid, env.gen)
             self.last_valid = rel_body
-        # Precision filtering of the noisy fix (in-place, so obs-v4 stays length 11). Alpha-beta
-        # (predictive) takes precedence over the EMA when enabled.
-        if self.cfg.ab_alpha > 0.0:
+        # Precision filtering of the noisy fix (in-place, so obs-v4 stays length 11). Precedence:
+        # world-frame alpha-beta > body-frame alpha-beta > EMA.
+        if self.cfg.world_ab_alpha > 0.0:
+            # Convert the noisy body-frame fix to a WORLD target-position estimate, run alpha-beta on
+            # world pos+vel (velocity is meaningful in the inertial frame), then back to body for obs.
+            dt = self._dt
+            world_meas = pos + torch.matmul(R, rel_body.unsqueeze(-1)).squeeze(-1)  # body_to_world + pos
+            x_pred = self._wx + self._wv * dt
+            resid = world_meas - x_pred
+            self._wx = x_pred + self.cfg.world_ab_alpha * resid
+            self._wv = self._wv + (self.cfg.world_ab_beta / dt) * resid
+            rel_body = world_to_body(self._wx - pos, R)
+        elif self.cfg.ab_alpha > 0.0:
             # Alpha-beta predictor-corrector: predict one step ahead with the velocity estimate, then
             # correct toward the measurement -- smooths noise WITHOUT the EMA's pure lag on a mover.
             dt = self._dt
