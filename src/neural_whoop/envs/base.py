@@ -113,18 +113,23 @@ class MultiAgentDroneEnv:
         vel: Tensor | None = None,
         yaw: Tensor | None = None,
         ang_vel: Tensor | None = None,
+        roll: Tensor | None = None,
+        pitch: Tensor | None = None,
     ) -> None:
         """Set the spawn state for the given flat ``drone_idx``.
 
-        ``pos`` is ``(k, 3)``; ``vel``/``ang_vel`` default to zero; ``yaw`` (``(k,)`` rad)
-        sets the initial heading (roll/pitch zero). Quaternions are real-last (xyzw).
+        ``pos`` is ``(k, 3)``; ``vel``/``ang_vel`` default to zero; ``yaw`` (``(k,)`` rad) sets the
+        initial heading. ``roll``/``pitch`` (``(k,)`` rad) default to zero (level) — the hover task
+        passes a randomized tilt so the policy trains recovery. Quaternions are real-last (xyzw).
         """
         k = drone_idx.numel()
         z = torch.zeros(k, device=self.device)
         vel = vel if vel is not None else torch.zeros(k, 3, device=self.device)
         ang_vel = ang_vel if ang_vel is not None else torch.zeros(k, 3, device=self.device)
         yaw = yaw if yaw is not None else z
-        quat = euler_to_quaternion(z, z, yaw)  # (k, 4) xyzw
+        roll = roll if roll is not None else z
+        pitch = pitch if pitch is not None else z
+        quat = euler_to_quaternion(roll, pitch, yaw)  # (k, 4) xyzw
         self.dyn.set_state(drone_idx, pos, vel, quat, ang_vel)
 
     # --- DR curriculum ---
@@ -193,6 +198,10 @@ class MultiAgentDroneEnv:
         ctbr = self.dr.perturb_ctbr(ctbr)
         self.dyn.step(ctbr)
         self.dyn.add_velocity(self.dr.wind_dv())
+        # Random shoves/tumbles (push + dropped-block), the SAME seam the live Studio editor drives:
+        # training against them is what makes the hover policy survive the editor's disturbances.
+        self.dyn.add_velocity(self.dr.impulse_dv())
+        self.dyn.add_body_rate(self.dr.impulse_dw())
         self.dyn.detach()  # PPO: dynamics graph is not differentiated across steps
 
         self.t += 1

@@ -34,7 +34,7 @@ SWARM_TASKS = frozenset({"swarm_race", "swarm_formation"})
 #: Tasks with no gate course — they supply their own arena and a moving target/anchor instead, so
 #: course resolution + gate sizing is skipped (the ``scene`` channel carries what they track).
 GATELESS_TASKS = frozenset(
-    {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation"}
+    {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation", "hover"}
 )
 
 
@@ -226,6 +226,7 @@ def studio_rollout(
             "time_in_view_rate", "mean_track_error", "mean_distance", "follow_hold_rate",
             "stop_compliance", "near_hold", "far_hold",
             "mean_formation_error", "formation_hold_rate", "collision_rate_per_step",
+            "mean_pos_error", "hold_rate", "mean_speed", "mean_tilt_deg",
         )
         studio_metrics = {k: metrics[k] for k in keys if k in metrics}
     else:

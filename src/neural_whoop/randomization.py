@@ -42,6 +42,10 @@ class DomainRandomizationConfig:
         detector_range_frac: Detector multiplicative range-error std; 0 = off.
         detector_dropout_prob: Per-step detector dropout probability.
         detector_fov_deg: Detector forward field-of-view (full angle, deg).
+        impulse_prob: Per-step Bernoulli probability of a random kick (push / dropped block);
+            0 = off. The hover task trains against these so a live editor's shoves are survivable.
+        impulse_vel_mps: Max world-frame linear-velocity kick magnitude (m/s) when one fires.
+        impulse_rate_rps: Max body-rate kick magnitude (rad/s) — the tumble a dropped block adds.
     """
 
     enabled: bool = True
@@ -54,6 +58,9 @@ class DomainRandomizationConfig:
     detector_range_frac: float = 0.0
     detector_dropout_prob: float = 0.0
     detector_fov_deg: float = 360.0
+    impulse_prob: float = 0.0
+    impulse_vel_mps: float = 0.0
+    impulse_rate_rps: float = 0.0
 
     @property
     def detector(self) -> DetectorNoise:
@@ -158,6 +165,38 @@ class DomainRandomizer:
         if not self.cfg.enabled or self.cfg.wind_accel_mps2 <= 0.0:
             return torch.zeros(self.n, 3, device=self.dev)
         return self.wind * self.dt
+
+    def _impulse_mask(self) -> Tensor:
+        """Per-drone Bernoulli mask of which drones get kicked this step, shape ``(n, 1)``."""
+        p = self.cfg.impulse_prob * self.scale
+        return (self._rand(self.n, 1) < p).float()
+
+    def impulse_dv(self) -> Tensor:
+        """Random world-frame velocity kick this step (push / dropped block), shape ``(n, 3)``.
+
+        A per-drone Bernoulli mask × random unit direction × random magnitude (curriculum-scaled),
+        so the policy trains against the same shoves the live Studio editor throws at it. Mostly
+        zeros. Returns zeros when disabled — mirrors :meth:`wind_dv`.
+        """
+        if not self.cfg.enabled or self.cfg.impulse_prob <= 0.0 or self.cfg.impulse_vel_mps <= 0.0:
+            return torch.zeros(self.n, 3, device=self.dev)
+        direction = torch.randn(self.n, 3, device=self.dev, generator=self.gen)
+        direction = direction / direction.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        mag = self._rand(self.n, 1, lo=0.0, hi=self.cfg.impulse_vel_mps * self.scale)
+        return self._impulse_mask() * direction * mag
+
+    def impulse_dw(self) -> Tensor:
+        """Random body-rate kick this step (the dropped-block tumble), shape ``(n, 3)``.
+
+        Same Bernoulli incidence as :meth:`impulse_dv` but an independent mask/direction (a kick
+        need not always tumble). Returns zeros when disabled.
+        """
+        if not self.cfg.enabled or self.cfg.impulse_prob <= 0.0 or self.cfg.impulse_rate_rps <= 0.0:
+            return torch.zeros(self.n, 3, device=self.dev)
+        direction = torch.randn(self.n, 3, device=self.dev, generator=self.gen)
+        direction = direction / direction.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+        mag = self._rand(self.n, 1, lo=0.0, hi=self.cfg.impulse_rate_rps * self.scale)
+        return self._impulse_mask() * direction * mag
 
     def add_obs_noise(self, obs: Tensor) -> Tensor:
         """Add Gaussian observation noise (no-op if disabled / std==0 / curriculum scale==0)."""

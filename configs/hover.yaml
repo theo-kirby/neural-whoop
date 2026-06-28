@@ -1,0 +1,69 @@
+# Reliability beachhead: single-drone auto-stabilization / station-keeping with disturbance recovery.
+# The policy holds a world-frame setpoint and rejects wind + impulse shoves (push) + dropped-block
+# tumbles (linear + body-rate kicks). Crucially it trains against the SAME impulse seam the live
+# Studio editor drives (randomization.impulse_dv/impulse_dw -> dyn.add_velocity/add_body_rate), so
+# the editor's pokes are survivable. Tiny [64,64] net (hover is easy; keep it MCU-clean).
+# Flywheel: opens the auto-stabilization workstream (cluster: reliability-dr).
+
+run:
+  name: hover_base
+
+task:
+  name: hover
+  episode_len: 500        # steps; dt=0.02s -> 10s of holding
+  pos_sigma: 0.45         # position-bell width (m)
+  pos_scale: 1.0
+  upright_scale: 0.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.02
+  alive_bonus: 0.1
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+  hold_radius: 0.35       # within this of the setpoint counts as holding (m)
+  arena_radius: 3.5       # setpoint sampling disk (m)
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.35     # fraction of episodes spawned on-setpoint (pure hold); rest recover
+  spawn_offset: 1.5       # fly-to-point offset (m)
+  spawn_vel: 1.5          # initial speed for the recovery cohort (m/s)
+  spawn_tilt_deg: 30.0    # initial tilt for the recovery cohort (deg)
+  spawn_rate: 2.0         # initial body-rate for the recovery cohort (rad/s)
+
+env:
+  n_envs: 4096
+  seed: 0
+
+# Seam-level DR with WIND + the IMPULSE seam ON (the disturbances the editor throws). Curriculum-
+# ramped via ppo.dr_curriculum_frac so early training isn't crippled by constant shoves.
+dr:
+  enabled: true
+  wind_accel_mps2: 2.0          # steady wind to lean into
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 1
+  impulse_prob: 0.02            # ~2% per-step chance of a kick (push / dropped block)
+  impulse_vel_mps: 2.5          # max linear shove magnitude (m/s)
+  impulse_rate_rps: 4.0         # max body-rate tumble (rad/s)
+
+whoop: {}
+
+ppo:
+  total_steps: 40_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.3       # ramp seam-DR (incl. impulses) 0->full over the first 30% of training
+  ckpt_interval_updates: 100

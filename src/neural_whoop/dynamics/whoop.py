@@ -185,6 +185,17 @@ class WhoopDynamics:
         with torch.no_grad():
             self.model._state[:, 7:10] += dv
 
+    def add_body_rate(self, dw: Tensor) -> None:
+        """Add a body-frame angular-velocity delta (e.g. an impulse tumble), shape ``(n, 3)``.
+
+        Mirrors :meth:`add_velocity` for the rate channel, then re-clamps to ``±w_max`` so a kick
+        can't push the rates past the saturation guard :meth:`step` enforces.
+        """
+        with torch.no_grad():
+            st = self.model._state
+            st[:, 10:13] += dw
+            st[:, 10:13] = st[:, 10:13].clamp(-self._w_max, self._w_max)
+
     # --- reset ---
     def set_state(
         self, idx: Tensor, pos: Tensor, vel: Tensor, quat_xyzw: Tensor, ang_vel: Tensor
