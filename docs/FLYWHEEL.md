@@ -82,7 +82,7 @@ GREEN"). A bare title is not a summary.
 
 **Body skeleton.** **Hypothesis → Setup → Results (with the Δ vs parent/baseline) → Verdict /
 Honesty → Lineage.** Negative/refuted results use the same shape — be honest, an RED/NO-GO that
-closes a branch is real progress. Canonical exemplar: the `command_follow` node (`morning-base-2167`).
+closes a branch is real progress. Canonical exemplar: the `time_penalty` node (`morning-base-2167`).
 
 **`stop_reason` vocabulary** (every resolved empirical node; the one definition — `AGENTS.md` and
 `CLAUDE.md` point here):

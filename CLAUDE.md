@@ -41,7 +41,7 @@ result, it didn't happen.* A bare title is not a summary.
   text alone (e.g. "[128,128] policy: 3.29→2.91 s best lap, −12%, GREEN").
 - **Body skeleton:** **Hypothesis → Setup → Results (with the Δ vs parent/baseline) → Verdict /
   Honesty → Lineage.** Record negative/refuted results in the same shape. Canonical exemplar:
-  `morning-base-2167` (the `command_follow` node).
+  the `time_penalty` reward-shaping node (`morning-base-2167`).
 - **Definition of done / verify:** after committing a node, **re-read it** (`flywheel_get_node`,
   `projection=full`) and confirm artifacts attached + summary written + tags set (`kind:` ×1,
   `outcome:` if resolved, `cluster:` ≥1) before moving on. Apply this to your own work.
