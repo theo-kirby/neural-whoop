@@ -7,6 +7,7 @@
 import { createScene } from "./scene.js";
 import { Playback } from "./playback.js";
 import { createEditor } from "./editor.js";
+import { createLive } from "./live.js";
 import { layoutInsets, layoutInsetsCss } from "./layout.js";
 import { getPolicies, getCourses, getScalars, postRollout, exportVideo, runFileUrl } from "./api.js";
 import { loadRunByPath } from "./run-loader.js";
@@ -434,20 +435,32 @@ const editor = createEditor({
   },
 });
 
+// ---- live tab -----------------------------------------------------------------------
+const live = createLive({
+  mount: document.querySelector(".view3d-live"),
+  panel: document.getElementById("live-controls"),
+  toast,
+  getPolicies,
+});
+
 // ---- tab routing --------------------------------------------------------------------
 let activeTab = "player";
 function switchTab(name) {
   activeTab = name;
-  const player = name === "player";
   for (const b of document.querySelectorAll(".tabbar .tab")) b.classList.toggle("active", b.dataset.tab === name);
-  document.getElementById("player-controls").classList.toggle("hidden", !player);
-  document.getElementById("editor-controls").classList.toggle("hidden", player);
-  view.mount.classList.toggle("hidden", !player);
-  editor_mount().classList.toggle("hidden", player);
+  document.getElementById("player-controls").classList.toggle("hidden", name !== "player");
+  document.getElementById("live-controls").classList.toggle("hidden", name !== "live");
+  document.getElementById("editor-controls").classList.toggle("hidden", name !== "editor");
+  view.mount.classList.toggle("hidden", name !== "player");
+  live_mount().classList.toggle("hidden", name !== "live");
+  editor_mount().classList.toggle("hidden", name !== "editor");
   syncHeroBoxes();
-  if (player) view.resize(); else editor.onShow();
+  if (name === "player") view.resize();
+  else if (name === "live") live.onShow();
+  else editor.onShow();
 }
 const editor_mount = () => document.querySelector(".view3d-editor");
+const live_mount = () => document.querySelector(".view3d-live");
 for (const b of document.querySelectorAll(".tabbar .tab")) {
   b.addEventListener("click", () => switchTab(b.dataset.tab));
 }
@@ -459,12 +472,15 @@ function loop(now) {
   const delta = Math.min(0.1, (now - last) / 1000);
   last = now;
   if (activeTab === "editor") { editor.tick(delta); return; }
+  if (activeTab === "live") { live.tick(delta); return; }
   playback.tick(delta);
   compositeHero();
 }
 requestAnimationFrame(loop);
 addEventListener("resize", () => {
-  if (activeTab === "player") view.resize(); else editor.resize();
+  if (activeTab === "player") view.resize();
+  else if (activeTab === "live") live.resize();
+  else editor.resize();
   if ($("chartfold").open) renderCharts();
 });
 

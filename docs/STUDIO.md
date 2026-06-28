@@ -1,12 +1,16 @@
 # neural-whoop Studio
 
-An interactive browser viewer with two tabs:
+An interactive browser viewer with three tabs:
 
 - **Player** — pick a saved policy, a course, and a drone count, hit **Run**, and watch the policy
   fly in a **hero-layout viewport that matches the exported MP4**: a wide 3/4 main shot fills the
   view, with three fixed 4:3 cells stacked down the left edge — **FPV** (top), **top-down** (middle),
   **stats HUD** (bottom). If you like what you see, **Export hero MP4** renders the byte-identical
   clip server-side.
+- **Live** — connect to a policy and **interact with it in real time** over a websocket: blow **wind**
+  at it (a top-down direction pad + a vertical slider), **Push** it (a one-shot shove), **Drop block**
+  on it (a modeled impulse + body-rate tumble), and — for a `hover` policy — **click the floor to
+  relocate its hover point** and watch it fly there and re-settle. Plus pause/reset/speed. See below.
 - **Editor** — author a gate course directly in a 3D scene (click the ground to drop a gate, drag a
   translate gizmo to move it incl. height, edit a numeric gate list), with **live flyability
   validation**, **Save** to `assets/courses/_web/`, and **Save & fly** to test it immediately.
@@ -51,6 +55,34 @@ Open the URL, choose:
 
 Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays in the
 hero layout. Transport: play/pause, scrub, speed, follow-cam, FPV box, top-down box, trail toggle.
+
+## Live interaction (Live tab)
+
+Where the Player records a whole rollout and plays it back, the **Live** tab steps a policy in real
+time and lets you disturb it. Pick a **policy** (the picker floats `hover` policies first — the
+family this is built for) and a **drone** count, then **Connect**. The browser opens a websocket to
+`/ws/live`; the server builds a `LiveSession` (the same `build_session` substrate as a rollout) and
+streams a frame per control step at ~50 Hz. The frame wire-format is the **same per-frame replay
+schema** (`pos`/`quat`/`vel`/`scene`, see `docs/VISUAL_CONTRACT.md`) — the live and recorded paths
+share one extractor (`eval/rollout.py::hero_pose_snapshot`) so they can't drift.
+
+Controls:
+- **Wind** — a top-down direction pad (drag to set the horizontal wind vector, center = calm) plus a
+  **vertical** slider. Continuous; the policy leans in and holds.
+- **Push** — a one-shot velocity shove on the selected drone (watch it arrest the velocity).
+- **Drop block** — a modeled dropped block: a downward + lateral velocity kick **and** a body-rate
+  tumble (impulse-only, no real collision). Watch it recover from the spin.
+- **Click the floor** (hover policies) — raycasts onto the hover-altitude plane and relocates the
+  **setpoint**; the drone flies there and re-settles. The setpoint rides the same `target` scene
+  marker the follow tasks use.
+- **Target drone** selector (which drone push/drop/click apply to; or *all*), **Pause/Reset**, **speed**.
+
+All disturbances ride the **same physics seam the policy trained against** — wind, push, and the
+dropped-block tumble are impulses through `WhoopDynamics.add_velocity`/`add_body_rate`, the very seam
+`randomization.py` drives during training (`impulse_dv`/`impulse_dw`). So what the editor throws is
+exactly what the `hover` policy was hardened to reject. The GPU sim isn't re-entrant, so a live
+session and `/api/rollout` are mutually exclusive via a shared single-flight lock (either rejects the
+other with 409 / a socket error); disconnecting frees the session.
 
 ## Course editor (Editor tab)
 

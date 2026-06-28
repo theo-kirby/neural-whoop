@@ -135,7 +135,12 @@ Taichi renderer (deferred — Blackwell camera path).
 same v2 group-episode path), and serves the replay to a static Three.js frontend that plays it back
 (3D wide + **per-drone** FPV/top-down insets in movable/resizable PiP frames, play/pause/scrub, plus
 a policy-metadata panel and TensorBoard training charts parsed via the dependency-free
-`studio/tbscalars.py`). You pick a **policy**, a **course** (a seeded
+`studio/tbscalars.py`). A **Live** tab (`studio/live.py` + `/ws/live` websocket + `web/studio/live.js`)
+steps a policy in real time and lets you disturb it from the browser — blow wind, push, drop a
+(modeled) block, and click to relocate a `hover` policy's setpoint — all riding the **same impulse
+seam** (`add_velocity`/`add_body_rate`) the policy trained against; single-flight with `/api/rollout`
+via the shared lock. The env+agent construction is shared via `studio/rollout.py::build_session`; the
+live frame schema is the recorder's via `eval/rollout.py::hero_pose_snapshot`. You pick a **policy**, a **course** (a seeded
 `assets/courses/*.yaml` or an arena **preset**), and a **drone count**. Drone-count maps to the
 substrate per the policy's **task family**: gated single-drone (`gate_race`) → `n_envs = drone_count,
 n_agents = 1` (independent racers on one fixed track); gated swarm (`swarm_race`) → `n_envs = 1,
@@ -145,8 +150,9 @@ each its own moving target); gateless **formation** (`swarm_formation`) → `n_e
 drone_count` (ring around one moving anchor). The gateless families have **no course** (the
 `/api/policies` `family`/`needs_course` flag hides the course selector); what they track rides in the
 replay's `scene` channel, drawn as a target/anchor/slot marker (+ command chip). The frontend loads three.js from a CDN importmap (no Node toolchain in this
-repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab from
-the lab studio is deferred. See `docs/STUDIO.md`.
+repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab
+(author/validate/save a course) and the Live interaction tab are both implemented. See
+`docs/STUDIO.md`.
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).

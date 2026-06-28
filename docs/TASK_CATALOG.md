@@ -104,6 +104,21 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Basis:** characterizes how the command-conditioned capability scales with vocabulary size; bigger
   net or curriculum is the lever to tighten the per-command precision.
 
+### ✅ `hover` — auto-stabilization / station-keeping with disturbance recovery
+- **Metric:** `mean_pos_error` (|setpoint − pos|) ↓ + `hold_rate` (frac of steps within `hold_radius`)
+  ↑ + `crash_rate_per_step` (guardrail); `mean_speed`/`mean_tilt_deg` characterize the hold.
+- **Obs/oracle:** obs-v4 (11), unchanged — the body-frame vector to a world-frame **setpoint**
+  replaces the gate/target vector; gateless, single-drone, state-based (no pixels).
+- **Status:** implemented (`tasks/hover.py`, `configs/hover.yaml`, tiny `[64,64]` net). Reward =
+  position bell + upright + velocity/spin damping + alive − smoothness − crash; mixed
+  hold/fly-to-point/recover spawns. Trained against **wind + the impulse DR seam** (push + dropped-
+  block tumble) so it survives the live Studio editor's disturbances.
+- **Baseline (40M):** clean hold `pos_error` 0.15 m / `hold_rate` 0.91 / tilt 1.7°; under full DR
+  (wind 2 + impulses) `pos_error` 0.28 m / `hold_rate` 0.75 / ~0 crashes — leans into wind, arrests
+  shoves, recovers from dropped-block tumbles. The policy the **Live** Studio tab pokes at.
+- **Sim2real basis:** the impulse seam (`add_velocity`/`add_body_rate`) drives both training and the
+  editor, so what the editor throws is exactly what the policy was hardened to reject.
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to

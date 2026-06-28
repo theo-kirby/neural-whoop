@@ -115,6 +115,21 @@
     .charts-empty { color: var(--muted); font-size: 12px; }
 
     .view3d-editor { position: absolute; inset: 0; }
+    .view3d-live { position: absolute; inset: 0; }
+
+    /* Live wind pad: a square top-down map; drag to set the horizontal wind vector. */
+    .windpad { position: relative; width: 100%; aspect-ratio: 1; max-width: 168px; margin: 2px auto 0;
+      background: var(--panel-2); border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
+      cursor: crosshair; touch-action: none;
+      background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 25% 25%; }
+    .windpad .winddot { position: absolute; width: 12px; height: 12px; border-radius: 50%;
+      background: var(--on); border: 1.5px solid #000; transform: translate(-50%, -50%); left: 50%; top: 50%;
+      pointer-events: none; box-shadow: 0 0 8px #000a; }
+    .windpad .axis { position: absolute; color: var(--muted); font-size: 9px; pointer-events: none; }
+    .windread { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
+    .live-hud { color: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; min-height: 16px; }
+    .btn-row { display: flex; gap: 9px; } .btn-row .btn { flex: 1; }
 
     /* Hero overlay boxes (FPV / top-down / stats) — the fixed left column matching the exported MP4
        composition. The camera images are scissor-rendered onto the main canvas behind the box, so
@@ -179,6 +194,7 @@
       <!-- Player scene canvas mounts here; editor scene canvas into .view3d-editor (one tab shown). -->
       <div class="view3d"></div>
       <div class="view3d-editor hidden"></div>
+      <div class="view3d-live hidden"></div>
       <!-- Hero overlay boxes: fixed left column (FPV top, top-down middle, stats bottom), matching
            the exported MP4. Positioned each frame from the layout rects (main.js). -->
       <div id="hero-fpv" class="hero-box"><div class="hlabel">FPV</div><div class="hsub" data-h="fpvcap"></div></div>
@@ -202,6 +218,7 @@
       <div class="brand">neural-whoop <small>· studio</small></div>
       <div class="tabbar">
         <button class="tab active" data-tab="player">Player</button>
+        <button class="tab" data-tab="live">Live</button>
         <button class="tab" data-tab="editor">Editor</button>
       </div>
 
@@ -268,6 +285,59 @@
       </div>
 
       </div><!-- /#player-controls -->
+
+      <!-- ============================ LIVE ============================ -->
+      <div id="live-controls" class="hidden">
+        <div class="section">
+          <h4>live session</h4>
+          <label class="field"><span>policy</span><select data-h="l_policy"></select></label>
+          <label class="field"><span>drones</span><input data-h="l_drones" type="number" min="1" max="8" value="1" /></label>
+          <button class="btn primary block" data-h="l_connect">Connect</button>
+          <div class="status" data-h="l_status"></div>
+          <div class="live-hud" data-h="l_hud"></div>
+          <div class="hint hidden" data-h="l_hint">This policy isn't a hover policy — wind / push / drop
+            still work, but click-to-move (setpoint) only applies to the hover task.</div>
+        </div>
+
+        <div class="section">
+          <h4>disturb</h4>
+          <label class="field"><span>target drone</span><select data-h="l_drone" disabled></select></label>
+          <div class="btn-row">
+            <button class="btn" data-h="l_push" disabled>Push ⇢</button>
+            <button class="btn" data-h="l_drop" disabled>Drop block ⬇</button>
+          </div>
+          <div class="hint">Click the floor in the scene to relocate the hover point (hover policy).</div>
+        </div>
+
+        <div class="section">
+          <h4>wind</h4>
+          <div class="windpad" data-h="l_windpad">
+            <div class="winddot" data-h="l_winddot"></div>
+            <span class="axis" style="top:2px;left:50%;transform:translateX(-50%)">+y</span>
+            <span class="axis" style="bottom:2px;left:50%;transform:translateX(-50%)">−y</span>
+            <span class="axis" style="right:3px;top:50%;transform:translateY(-50%)">+x</span>
+            <span class="axis" style="left:3px;top:50%;transform:translateY(-50%)">−x</span>
+          </div>
+          <div class="windread" data-h="l_windread">wind (0.0, 0.0, 0.0) m/s²</div>
+          <label class="field"><span>vertical wind (m/s²)</span>
+            <input data-h="l_windz" type="range" min="-5" max="5" step="0.5" value="0" /></label>
+          <button class="btn block" data-h="l_windcalm">calm (zero wind)</button>
+        </div>
+
+        <div class="section">
+          <h4>transport</h4>
+          <div class="btn-row">
+            <button class="btn" data-h="l_pause" disabled>⏸ Pause</button>
+            <button class="btn" data-h="l_reset" disabled>⟲ Reset</button>
+          </div>
+          <label class="field"><span>speed</span>
+            <select data-h="l_speed" disabled>
+              <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option><option value="2">2×</option>
+            </select>
+          </label>
+        </div>
+      </div><!-- /#live-controls -->
 
       <!-- ============================ EDITOR ============================ -->
       <div id="editor-controls" class="hidden">
