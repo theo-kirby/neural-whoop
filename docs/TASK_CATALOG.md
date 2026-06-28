@@ -74,6 +74,23 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Basis:** same perception seam; the "target" is a hand-held marker. The `KIND_ZIGZAG` mover is the
   first non-smooth motion in `target.py`.
 
+### ✅ `gesture_follow` — command-conditioned hand following (STOP/GO gesture channel) (Flywheel hop-25)
+- **Metric:** `follow_hold_rate` (frac of GO steps within `hold_tol` of d*) + `stop_compliance` (frac
+  of STOP steps with speed < `stop_speed_thresh`) — a good policy scores high on **both**.
+- **Status:** implemented (`tasks/gesture_follow.py`, subclasses `hand_follow`; `configs/gesture_follow.yaml`).
+  Appends a discrete **STOP/GO command bit** to the obs (**obs_dim 11→12**, the first follow-seam obs
+  growth — MCU note: +1 channel); the shared policy follows the jerky hand on GO and hovers in place on
+  STOP. The command is a piecewise-constant per-env bit that flips at random, so within one episode the
+  policy must read `obs[-1]` and switch behaviours. **Result (Flywheel `gesture_follow`, GREEN):** the
+  first **command-conditioned** policy in the lab works — `stop_compliance` **0.947** (hovers on
+  command), `follow_hold_rate` **0.583** (follows on command), balanced exposure (go_fraction 0.495),
+  crash 1.6e-5 (safest in the catalog). The policy genuinely *uses* the channel (a pure follower scores
+  ~0 stop_compliance; a pure hoverer ~0 follow_hold). Honest cost: GO-follow precision drops vs pure
+  `hand_follow` (0.583 vs 0.985) — a **re-acquisition tax** (the hand drifts away during each STOP, so
+  resumed-GO steps spend time catching up) plus the tiny net splitting capacity across two behaviours.
+- **Basis:** the foundation for gesture-controlled flight; a richer gesture vocabulary (come/go/land)
+  is a natural extension of the command channel.
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to
