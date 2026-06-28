@@ -41,12 +41,17 @@ class HoverConfig:
 
     episode_len: int = 500          # steps; at dt=0.02 -> 10 s of holding
     # Reward weights.
-    pos_sigma: float = 0.45         # width of the position bell exp(-(dist/σ)²) (m)
-    pos_scale: float = 1.0          # weight on the position bell
-    upright_scale: float = 0.5      # weight on the level reward exp(-((roll²+pitch²)/σ_up²))
+    pos_sigma: float = 0.6          # width of the position bell exp(-(dist/σ)²) (m)
+    pos_scale: float = 2.0          # weight on the position bell (fine holding, peaks on-setpoint) —
+                                    # made dominant so position beats the cheap upright+alive floor
+    dist_penalty: float = 0.4       # −kd·dist linear pull-in: a gradient toward the setpoint at ANY
+                                    # range (the bell is flat far out, so without this an offset
+                                    # spawn never learns to approach — it just sits level and still)
+    upright_scale: float = 0.3      # weight on the level reward exp(-((roll²+pitch²)/σ_up²)) — kept
+                                    # below pos_scale so leveling never competes with holding station
     upright_sigma: float = 0.5      # width of the upright bell (rad of combined tilt)
-    vel_penalty: float = 0.05       # −kv·|vel| velocity-damping penalty
-    spin_penalty: float = 0.02      # −kw·|ω| body-rate (spin) penalty
+    vel_penalty: float = 0.02       # −kv·|vel| velocity-damping penalty (small: don't deter approach)
+    spin_penalty: float = 0.01      # −kw·|ω| body-rate (spin) penalty
     alive_bonus: float = 0.1        # per-step alive bonus
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -168,6 +173,7 @@ class HoverTask(DroneTask):
         spin = w.norm(dim=-1)
 
         reward = c.pos_scale * pos_bell + c.upright_scale * upright + c.alive_bonus
+        reward = reward - c.dist_penalty * dist
         reward = reward - c.vel_penalty * speed - c.spin_penalty * spin
         reward = reward - smoothness_penalty(action, env.prev_action, c.smoothness_penalty)
 

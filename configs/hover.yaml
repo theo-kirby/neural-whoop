@@ -11,12 +11,13 @@ run:
 task:
   name: hover
   episode_len: 500        # steps; dt=0.02s -> 10s of holding
-  pos_sigma: 0.45         # position-bell width (m)
-  pos_scale: 1.0
-  upright_scale: 0.5
+  pos_sigma: 0.6          # position-bell width (m)
+  pos_scale: 2.0          # position dominates the cheap upright+alive floor
+  dist_penalty: 0.4       # linear pull-in toward the setpoint (gradient at any range)
+  upright_scale: 0.3
   upright_sigma: 0.5
-  vel_penalty: 0.05
-  spin_penalty: 0.02
+  vel_penalty: 0.02
+  spin_penalty: 0.01
   alive_bonus: 0.1
   smoothness_penalty: 0.001
   crash_penalty: 10.0
