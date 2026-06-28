@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 import anyio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -185,6 +185,84 @@ def create_app(
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
         return summary
+
+    # ----------------------------------------------------------------- live (interactive sim)
+    @app.websocket("/ws/live")
+    async def live(ws: WebSocket) -> None:
+        """Drive a live :class:`LiveSession`: build from a setup message, then step at ~50 Hz while
+        applying browser disturbance commands and streaming frames back.
+
+        Single-flight via :data:`ROLLOUT_LOCK` (the batched GPU sim isn't re-entrant) — shared with
+        ``/api/rollout`` so a rollout and a live session can't run at once (either rejects the other).
+        All sim work (build / step / commands) runs off the event loop via ``anyio.to_thread``.
+        """
+        await ws.accept()
+        if ROLLOUT_LOCK.locked():
+            await ws.send_json({"type": "error", "detail": "the GPU sim is busy (a rollout or live "
+                                                           "session is already running)"})
+            await ws.close()
+            return
+        async with ROLLOUT_LOCK:
+            try:
+                setup = await ws.receive_json()
+            except (WebSocketDisconnect, ValueError):
+                return
+            from neural_whoop.studio.live import LiveSession
+
+            policy_abs = _resolve_under(root, str(setup.get("policy", "")))
+            if not policy_abs.is_file():
+                await ws.send_json({"type": "error", "detail": f"no such policy: {setup.get('policy')}"})
+                await ws.close()
+                return
+            try:
+                session = await anyio.to_thread.run_sync(lambda: LiveSession.build(
+                    policy_abs, drone_count=int(setup.get("drone_count", 1)),
+                    dr=bool(setup.get("dr", False)), seed=int(setup.get("seed", 0)),
+                    course=setup.get("course"), device=device,
+                    courses_dir=courses_dir, runs_dir=runs_dir,
+                ))
+            except Exception as exc:  # noqa: BLE001 - report any build error to the client
+                await ws.send_json({"type": "error", "detail": str(exc)})
+                await ws.close()
+                return
+            await ws.send_json({"type": "ready", "info": session.info()})
+
+            cmds: asyncio.Queue = asyncio.Queue()
+
+            async def _reader() -> None:
+                """Drain inbound command messages into the queue until the socket closes."""
+                try:
+                    while True:
+                        await cmds.put(await ws.receive_json())
+                except (WebSocketDisconnect, ValueError, RuntimeError):
+                    await cmds.put({"type": "_disconnect"})
+
+            reader = asyncio.create_task(_reader())
+            speed = 1.0
+            try:
+                while True:
+                    disconnect = False
+                    while not cmds.empty():
+                        msg = cmds.get_nowait()
+                        mtype = msg.get("type")
+                        if mtype == "_disconnect":
+                            disconnect = True
+                            break
+                        if mtype == "speed":
+                            speed = max(0.1, min(8.0, float(msg.get("value", 1.0))))
+                        else:
+                            await anyio.to_thread.run_sync(lambda m=msg: session.command(m))
+                    if disconnect:
+                        break
+                    if not session.paused:
+                        frame = await anyio.to_thread.run_sync(session.step)
+                        await ws.send_json({"type": "frame", **frame})
+                    await asyncio.sleep(session.dt / max(0.1, speed))
+            except WebSocketDisconnect:
+                pass
+            finally:
+                reader.cancel()
+                await anyio.to_thread.run_sync(session.close)
 
     # ----------------------------------------------------------------- export (hero MP4 via nw-viz)
     @app.post("/api/export")

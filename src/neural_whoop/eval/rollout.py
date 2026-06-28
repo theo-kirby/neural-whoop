@@ -105,6 +105,31 @@ def select_swarm_heroes(env: MultiAgentDroneEnv, env_idx: int = 0) -> list[int]:
     return [e * na + a for a in range(na)]
 
 
+def hero_pose_snapshot(env: MultiAgentDroneEnv, action, h) -> dict:
+    """CPU snapshots of the generic per-hero pose/action/scene fields for hero drones ``h``.
+
+    The single source of the per-frame pose/action/scene extraction, shared by the recorder
+    (:func:`evaluate_and_record`) and the live Studio session (:mod:`neural_whoop.studio.live`)
+    so the on-the-wire frame fields can't drift from the recorded replay schema
+    (``docs/VISUAL_CONTRACT.md`` / :mod:`neural_whoop.viz.replay`). ``h`` is a ``LongTensor`` of
+    flat drone indices; returns a dict of CPU tensors (row ``j`` = hero ``j``) keyed
+    ``pos``/``quat``/``rpy``/``vel``/``angvel``/``action``/``action_diffaero`` plus ``scene`` (a
+    dict of per-hero CPU tensors, or ``None`` for gate tasks with no scene channel).
+    """
+    ctbr = action_to_diffaero(action[h], env.limits)
+    scene_raw = env.task.scene_objects(env)
+    return {
+        "pos": env.dyn.pos[h].cpu(),
+        "quat": env.dyn.quat_xyzw[h].cpu(),
+        "rpy": env.dyn.rpy[h].cpu(),
+        "vel": env.dyn.vel_world[h].cpu(),
+        "angvel": env.dyn.ang_vel_body[h].cpu(),
+        "action": action[h].cpu(),
+        "action_diffaero": ctbr.cpu(),
+        "scene": {k: v[h].cpu() for k, v in scene_raw.items()} if scene_raw else None,
+    }
+
+
 def _dr_dict(env: MultiAgentDroneEnv, d: int) -> dict | None:
     """Serialize the live per-drone seam DR params for drone ``d``, or ``None`` if DR is off."""
     dr = env.dr
@@ -220,15 +245,13 @@ def evaluate_and_record(
         if not any(open_ep):
             continue
 
-        # Per-hero CPU snapshots (small: only the hero rows).
-        ctbr = action_to_diffaero(action[h], env.limits)
-        pos = env.dyn.pos[h].cpu()
-        quat = env.dyn.quat_xyzw[h].cpu()
-        rpy = env.dyn.rpy[h].cpu()
-        vel = env.dyn.vel_world[h].cpu()
-        angvel = env.dyn.ang_vel_body[h].cpu()
-        act_n = action[h].cpu()
-        act_d = ctbr.cpu()
+        # Per-hero CPU snapshots (small: only the hero rows). The generic pose/action/scene fields
+        # come from the shared extractor so the recorded schema and the live wire-format can't drift.
+        snap = hero_pose_snapshot(env, action, h)
+        pos, quat, rpy, vel, angvel = (
+            snap["pos"], snap["quat"], snap["rpy"], snap["vel"], snap["angvel"],
+        )
+        act_n, act_d = snap["action"], snap["action_diffaero"]
         rew_h = reward[h].cpu()
         sim_t = float(env.sim_time[0]) if env.sim_time.numel() else step * env.dt
         done = (term | trunc)[h].cpu()
@@ -239,10 +262,9 @@ def evaluate_and_record(
         laps_h = task.laps[h].cpu() if hasattr(task, "laps") else torch.zeros(n_h, dtype=torch.long)
         bl_h = task.best_lap[h].cpu() if hasattr(task, "best_lap") else torch.full((n_h,), float("inf"))
         obs_h = obs[h].cpu() if record_obs else None
-        # Optional per-drone scene markers (moving target/anchor/slot + command) for gateless tasks.
-        # Sliced to the hero rows exactly like the pose snapshots; empty dict for gate tasks.
-        scene_raw = task.scene_objects(env)
-        scene_h = {k: v[h].cpu() for k, v in scene_raw.items()} if scene_raw else None
+        # Per-drone scene markers (moving target/anchor/slot + command) for gateless tasks, already
+        # sliced to the hero rows by the shared extractor; None for gate tasks.
+        scene_h = snap["scene"]
 
         for j in range(n_h):
             if not open_ep[j]:
