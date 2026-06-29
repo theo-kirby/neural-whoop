@@ -38,9 +38,14 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--device", default="cuda")
     p.add_argument("--dr", action="store_true", help="Eval with DR on (default off).")
+    p.add_argument("--config", default=None,
+                   help="Optional YAML config: use its `whoop` airframe + `dr` so the eval matches "
+                        "the policy's training env (e.g. a sim2real re-centered airframe + latency). "
+                        "`--dr` still toggles whether seam DR is enabled.")
     p.add_argument("--json", action="store_true")
     args = p.parse_args()
 
+    import dataclasses
     from neural_whoop.envs.base import MultiAgentDroneEnv
     from neural_whoop.envs.registry import make_task
     import neural_whoop.tasks  # noqa: F401 - register tasks
@@ -48,14 +53,25 @@ def main() -> int:
     from neural_whoop.randomization import DomainRandomizationConfig
     from neural_whoop.training.ppo import load_agent
 
+    # Airframe + DR: default whoop/DR, or pulled from a config so the eval env matches training.
+    whoop_params = None
+    if args.config is not None:
+        from neural_whoop.experiment import load_config, make_whoop, make_dr
+        cfg = load_config(args.config)
+        whoop_params = make_whoop(cfg)
+        dr_cfg = dataclasses.replace(make_dr(cfg), enabled=args.dr)
+    else:
+        dr_cfg = DomainRandomizationConfig(enabled=args.dr)
+
     agent = load_agent(args.ckpt, device=args.device)
     out: dict[str, dict] = {}
     rows = []
     for name, kw in SCALES.items():
         task = make_task("gate_race", n_gates=args.n_gates, gate_radius=args.gate_radius,
                          episode_len=args.episode_len, **kw)
+        env_kw = {} if whoop_params is None else {"whoop_params": whoop_params}
         env = MultiAgentDroneEnv(task, n_envs=args.n_envs, device=args.device, seed=args.seed,
-                                 dr_cfg=DomainRandomizationConfig(enabled=args.dr))
+                                 dr_cfg=dr_cfg, **env_kw)
         m = evaluate(env, agent, steps=args.steps)
         out[name] = m
         rows.append((name, m["lap_completion_rate"], m["best_lap_time"],
