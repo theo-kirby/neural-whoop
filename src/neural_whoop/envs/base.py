@@ -70,7 +70,7 @@ class MultiAgentDroneEnv:
         self.dt = self.dyn.dt
         self.dr = DomainRandomizer(
             dr_cfg or DomainRandomizationConfig(), self.n_drones, self.act_dim, self.dt,
-            self.device, self.gen,
+            self.device, self.gen, uplink_slices=task.uplink_slices(),
         )
 
         self.t = torch.zeros(n_envs, device=self.device, dtype=torch.long)
@@ -152,8 +152,12 @@ class MultiAgentDroneEnv:
 
     # --- observation (with optional frame stacking) ---
     def _raw_obs(self) -> Tensor:
-        """One noisy observation frame ``(n_drones, base_obs_dim)``."""
-        return self.dr.add_obs_noise(self.task.observe(self))
+        """One noisy observation frame ``(n_drones, base_obs_dim)``.
+
+        Noise first, then the uplink delay: measurement noise travels with the uplinked packet
+        (frozen across zero-order holds) while the local state channels get fresh noise.
+        """
+        return self.dr.delay_uplink(self.dr.add_obs_noise(self.task.observe(self)))
 
     def _flat_frames(self) -> Tensor:
         """Concatenate the frame stack into the policy obs ``(n_drones, obs_dim)`` (oldest->newest)."""

@@ -38,6 +38,11 @@ class DomainRandomizationConfig:
         thrust_scale_frac: Per-drone collective-thrust command scale drawn from ``1 ± frac``.
         obs_noise_std: Std of Gaussian noise added to the observation vector.
         action_latency_steps: Max actuation delay in control steps (per-drone 0..max).
+        uplink_latency_steps: Max staleness (control steps, per-drone 0..max) of the task's
+            *uplinked* obs channels (``DroneTask.uplink_slices``) — the onboard-hybrid split
+            where state obs are locally fresh but the target channel rides a radio uplink.
+        uplink_interval_steps: Uplink sender period in control steps (zero-order hold between
+            arrivals); 1 = every step (no hold). ~30 Hz uplink at 50 Hz control -> 2.
         detector_bearing_deg: Detector bearing-noise std (deg); 0 = off.
         detector_range_frac: Detector multiplicative range-error std; 0 = off.
         detector_dropout_prob: Per-step detector dropout probability.
@@ -54,6 +59,8 @@ class DomainRandomizationConfig:
     thrust_scale_frac: float = 0.10
     obs_noise_std: float = 0.01
     action_latency_steps: int = 1
+    uplink_latency_steps: int = 0
+    uplink_interval_steps: int = 1
     detector_bearing_deg: float = 0.0
     detector_range_frac: float = 0.0
     detector_dropout_prob: float = 0.0
@@ -83,6 +90,8 @@ class DomainRandomizer:
         dt: Control timestep (s), for the wind acceleration integral.
         device: Torch device.
         generator: Optional torch ``Generator`` for reproducibility.
+        uplink_slices: Obs channel slices that ride the radio uplink (``DroneTask.uplink_slices``);
+            empty -> the uplink hooks are no-ops.
     """
 
     def __init__(
@@ -93,6 +102,7 @@ class DomainRandomizer:
         dt: float,
         device: torch.device | str = "cpu",
         generator: torch.Generator | None = None,
+        uplink_slices: tuple[slice, ...] = (),
     ):
         self.cfg = cfg
         self.n = n_drones
@@ -113,6 +123,23 @@ class DomainRandomizer:
         # Action ring buffer: (max_lat + 1, n, act_dim).
         self._buf = torch.zeros(self._max_lat + 1, n_drones, act_dim, device=self.dev)
         self._step = 0
+
+        # Uplink obs staleness (onboard-hybrid split): the task-declared uplink channels are
+        # delayed per-drone and zero-order-held between sender periods, while every other obs
+        # channel stays fresh. Mirrors the action ring buffer.
+        self._max_ulat = max(0, int(cfg.uplink_latency_steps)) if cfg.enabled else 0
+        self._uint = max(1, int(cfg.uplink_interval_steps)) if cfg.enabled else 1
+        self._uslices = tuple(uplink_slices) if (self._max_ulat > 0 or self._uint > 1) else ()
+        self._udim = sum(s.stop - s.start for s in self._uslices)
+        self.uplink_lat = torch.zeros(n_drones, device=self.dev, dtype=torch.long)
+        if self._udim > 0:
+            # Buffer depth covers the max age = max_lat + (interval - 1).
+            self._ubuf = torch.zeros(self._max_ulat + self._uint, n_drones, self._udim, device=self.dev)
+            # Per-drone floor: never read across an episode reset (fresh episodes hold their
+            # first computed value until the first delayed packet "arrives").
+            self._ufloor = torch.zeros(n_drones, device=self.dev, dtype=torch.long)
+            self._ustep = 0
+
         self.reset(torch.arange(n_drones, device=self.dev))
 
     def _rand(self, *shape: int, lo: float = 0.0, hi: float = 1.0) -> Tensor:
@@ -138,6 +165,13 @@ class DomainRandomizer:
                 lat = lat * (self._rand(n) < s).long()
             self.latency[idx] = lat
         self._buf[:, idx, :] = 0.0
+        if self._udim > 0:
+            if self._max_ulat > 0:
+                ulat = torch.randint(0, self._max_ulat + 1, (n,), device=self.dev, generator=self.gen)
+                if s < 1.0:  # same incidence ramp as action latency (interval is not ramped)
+                    ulat = ulat * (self._rand(n) < s).long()
+                self.uplink_lat[idx] = ulat
+            self._ufloor[idx] = self._ustep
 
     def delay_action(self, action: Tensor) -> Tensor:
         """Push ``action`` (n, act_dim) into the ring buffer and return the per-drone delayed one."""
@@ -150,6 +184,32 @@ class DomainRandomizer:
         delayed = self._buf[read, torch.arange(self.n, device=self.dev)]
         self._step += 1
         return delayed
+
+    def delay_uplink(self, obs: Tensor) -> Tensor:
+        """Replace the uplink obs channels with their delayed + zero-order-held values.
+
+        Push the current (already noised — measurement noise travels with the packet and is
+        frozen across holds) uplink channels into the ring buffer, then read back, per drone,
+        the value the uplink sender computed at ``floor((t - lat) / interval) * interval``
+        (clamped to this drone's episode start). No-op when no uplink channels or DR disabled.
+        """
+        if self._udim == 0 or not self.cfg.enabled:
+            return obs
+        vals = torch.cat([obs[:, sl] for sl in self._uslices], dim=-1)
+        L = self._ubuf.shape[0]
+        t = self._ustep
+        self._ubuf[t % L] = vals
+        src = ((t - self.uplink_lat) // self._uint) * self._uint  # per-drone sender step
+        src = torch.maximum(src, self._ufloor)
+        stale = self._ubuf[src % L, torch.arange(self.n, device=self.dev)]
+        self._ustep = t + 1
+        out = obs.clone()
+        ofs = 0
+        for sl in self._uslices:
+            w = sl.stop - sl.start
+            out[:, sl] = stale[:, ofs : ofs + w]
+            ofs += w
+        return out
 
     def perturb_ctbr(self, ctbr: Tensor) -> Tensor:
         """Scale the DiffAero-convention action: thrust by ``thrust_scale``, rates by ``rate_gain``."""

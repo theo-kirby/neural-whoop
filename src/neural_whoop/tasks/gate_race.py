@@ -232,6 +232,12 @@ class GateRaceTask(DroneTask):
         nxt = self.gate_pos[ar, (idx + 1) % self.cfg.n_gates]
         return cur, nxt
 
+    def uplink_slices(self) -> tuple[slice, ...]:
+        # Onboard-hybrid split (docs/ONBOARD_COMPUTE.md): the gate target encoding + next-gate
+        # lookahead come from the offboard localization uplink; vel/attitude/rates are local.
+        enc = 6 if self.cfg.dual_scale_obs else 3
+        return (slice(0, enc), slice(self.obs_dim - 3, self.obs_dim))
+
     def observe(self, env) -> Tensor:
         pos, vel, R, rpy, w = (
             env.dyn.pos, env.dyn.vel_world, env.dyn.R, env.dyn.rpy, env.dyn.ang_vel_body,

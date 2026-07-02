@@ -96,6 +96,17 @@ class DroneTask(ABC):
         """Optional richer eval metrics (defaults to empty)."""
         return {}
 
+    def uplink_slices(self) -> tuple[slice, ...]:
+        """Obs channel slices that ride a radio uplink in the onboard-hybrid deployment.
+
+        Default empty: every channel is locally sensed. Tasks whose goal channels are computed
+        *offboard* (gate_race's target vector + lookahead) override this so the uplink DR
+        (``uplink_latency_steps`` / ``uplink_interval_steps``) can delay + zero-order-hold exactly
+        those channels while the state channels (vel/attitude/rates) stay fresh — the sim2real
+        seam for an onboard policy fed by a ~30 Hz offboard target uplink (docs/ONBOARD_COMPUTE.md).
+        """
+        return ()
+
     def scene_objects(self, env: "MultiAgentDroneEnv") -> dict:
         """Per-drone, world-frame scene markers for this control step (the replay ``scene`` channel).
 

@@ -100,7 +100,7 @@ policy (TinyPolicy MLP, obs-v4 -> act-v2 CTBR)
    v
 MultiAgentDroneEnv  (src/neural_whoop/envs/base.py)
    ├─ WhoopDynamics  (dynamics/whoop.py)  -> DiffAero QuadrotorModel (batched, differentiable)
-   ├─ DomainRandomizer (randomization.py) -> wind / rate-gain / thrust / latency / obs-noise
+   ├─ DomainRandomizer (randomization.py) -> wind / rate-gain / thrust / action+uplink latency / obs-noise
    ├─ perception oracle (perception/)     -> body-frame target vector (+ optional detector noise)
    └─ DroneTask (envs/registry.py)        -> obs / reward / termination / curriculum / metrics
         └─ gate_race (tasks/gate_race.py)
