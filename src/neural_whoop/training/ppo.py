@@ -36,6 +36,18 @@ class PPOConfig:
     # "adam" (default) or "muon" (Newton-Schulz orthogonalized momentum, training/muon.py).
     # Muon wants a ~10-30x higher lr than Adam for the same net.
     optimizer: str = "adam"
+    # PufferLib-style "puff" update (idea-import, Flywheel cluster:system-comparison): replaces
+    # the epoch/minibatch loop with V-trace-rho/c-clipped GAE recomputed per minibatch from a
+    # live importance-ratio buffer + advantage-prioritized SEGMENT sampling (a segment = one
+    # drone's num_steps trajectory) with (N*p)^-beta importance correction. replay_ratio plays
+    # update_epochs' role (total sample reuse = replay_ratio x batch); target_kl is ignored in
+    # this mode (V-trace absorbs staleness instead of early-stopping).
+    puff_update: bool = False
+    replay_ratio: float = 4.0       # match update_epochs=4 reuse so the delta is vtrace+prio
+    vtrace_rho_clip: float = 1.5
+    vtrace_c_clip: float = 2.9
+    prio_alpha: float = 0.2
+    prio_beta0: float = 0.75
     gamma: float = 0.99
     gae_lambda: float = 0.95
     update_epochs: int = 4
@@ -225,41 +237,69 @@ def train_ppo(
                 adv[t] = lastgae
             returns = adv + val_buf
 
-        # --- flatten + PPO update ---
-        b_obs = obs_buf.reshape(-1, obs_dim)
-        b_act = act_buf.reshape(-1, act_dim)
-        b_logp = logp_buf.reshape(-1)
-        b_adv = adv.reshape(-1)
-        b_ret = returns.reshape(-1)
-        b_val = val_buf.reshape(-1)
+        if cfg.puff_update:
+            # --- PufferLib-style update: V-trace-clipped advantages recomputed per minibatch
+            # + advantage-prioritized segment sampling (see PPOConfig.puff_update). ---
+            T = cfg.num_steps
+            mb_seg = max(1, mb_size // T)
+            num_mb = max(1, int(cfg.replay_ratio * batch / (mb_seg * T)))
+            beta = cfg.prio_beta0 + (1.0 - cfg.prio_beta0) * cfg.prio_alpha * update / num_updates
+            ratio_buf = torch.ones(T, N, device=dev)
+            done_all = (term_buf + trunc_buf).clamp(max=1.0)
+            # Fold the truncation bootstrap into rewards so the V-trace recurrence only needs
+            # the done flag (equivalent to our GAE's boot handling).
+            r_eff = rew_buf + cfg.gamma * boot_val * trunc_buf
+            approx_kl = torch.zeros((), device=dev)
+            pg_loss = v_loss = ent_loss = torch.zeros((), device=dev)
+            stop = False
+            for _mb in range(num_mb):
+                with torch.no_grad():
+                    padv = torch.zeros_like(rew_buf)
+                    lastgae = torch.zeros(N, device=dev)
+                    for t in reversed(range(T)):
+                        nextval = next_value if t == T - 1 else val_buf[t + 1]
+                        boot = torch.where(term_buf[t].bool(), torch.zeros_like(nextval), nextval)
+                        boot = torch.where(trunc_buf[t].bool(), torch.zeros_like(nextval), boot)
+                        rho_t = ratio_buf[t].clamp(max=cfg.vtrace_rho_clip)
+                        c_t = ratio_buf[t].clamp(max=cfg.vtrace_c_clip)
+                        delta = rho_t * r_eff[t] + cfg.gamma * boot - val_buf[t]
+                        lastgae = delta + cfg.gamma * cfg.gae_lambda * c_t * (1.0 - done_all[t]) * lastgae
+                        padv[t] = lastgae
+                    # Prioritized segment draw (segment = one drone's T-step trajectory).
+                    w = padv.abs().sum(dim=0).pow(cfg.prio_alpha)
+                    w = torch.nan_to_num(w, 0.0, 0.0, 0.0)
+                    p = (w + 1e-6) / (w.sum() + 1e-6)
+                    seg = torch.multinomial(p, mb_seg, replacement=True)
+                    is_w = (N * p[seg]).pow(-beta)  # importance correction, (1, mb_seg) after unsqueeze
 
-        idx = torch.randperm(batch, device=dev)
-        approx_kl = torch.zeros((), device=dev)
-        pg_loss = v_loss = ent_loss = torch.zeros((), device=dev)
-        stop = False
-        for _epoch in range(cfg.update_epochs):
-            for start in range(0, batch, mb_size):
-                mb = idx[start:start + mb_size]
-                _, newlogp, entropy, newval = agent.get_action_and_value(b_obs[mb], b_act[mb])
-                logratio = newlogp - b_logp[mb]
+                mb_obs = obs_buf[:, seg].reshape(T * mb_seg, obs_dim)
+                mb_act = act_buf[:, seg].reshape(T * mb_seg, act_dim)
+                _, newlogp, entropy, newval = agent.get_action_and_value(mb_obs, mb_act)
+                newlogp = newlogp.view(T, mb_seg)
+                newval = newval.view(T, mb_seg)
+                logratio = newlogp - logp_buf[:, seg]
                 ratio = logratio.exp()
                 with torch.no_grad():
                     approx_kl = ((ratio - 1) - logratio).mean()
+                    ratio_buf[:, seg] = ratio.detach()
 
-                mb_adv = b_adv[mb]
+                mb_adv = padv[:, seg]
                 if cfg.norm_adv:
                     mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                mb_adv = is_w.unsqueeze(0) * mb_adv
                 pg1 = -mb_adv * ratio
                 pg2 = -mb_adv * ratio.clamp(1 - cfg.clip_coef, 1 + cfg.clip_coef)
                 pg_loss = torch.max(pg1, pg2).mean()
 
+                mb_ret = padv[:, seg] + val_buf[:, seg]
                 if cfg.clip_vloss:
-                    v_unclipped = (newval - b_ret[mb]) ** 2
-                    v_clipped = b_val[mb] + (newval - b_val[mb]).clamp(-cfg.clip_coef, cfg.clip_coef)
-                    v_clipped = (v_clipped - b_ret[mb]) ** 2
+                    old_v = val_buf[:, seg]
+                    v_unclipped = (newval - mb_ret) ** 2
+                    v_clipped = old_v + (newval - old_v).clamp(-cfg.clip_coef, cfg.clip_coef)
+                    v_clipped = (v_clipped - mb_ret) ** 2
                     v_loss = 0.5 * torch.max(v_unclipped, v_clipped).mean()
                 else:
-                    v_loss = 0.5 * ((newval - b_ret[mb]) ** 2).mean()
+                    v_loss = 0.5 * ((newval - mb_ret) ** 2).mean()
 
                 ent_loss = entropy.mean()
                 loss = pg_loss - cfg.ent_coef * ent_loss + cfg.vf_coef * v_loss
@@ -268,10 +308,56 @@ def train_ppo(
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), cfg.max_grad_norm)
                 opt.step()
+                with torch.no_grad():
+                    val_buf[:, seg] = newval.detach()
+        else:
+            # --- flatten + PPO update ---
+            b_obs = obs_buf.reshape(-1, obs_dim)
+            b_act = act_buf.reshape(-1, act_dim)
+            b_logp = logp_buf.reshape(-1)
+            b_adv = adv.reshape(-1)
+            b_ret = returns.reshape(-1)
+            b_val = val_buf.reshape(-1)
 
-            if cfg.target_kl is not None and float(approx_kl) > cfg.target_kl:
-                stop = True
-                break
+            idx = torch.randperm(batch, device=dev)
+            approx_kl = torch.zeros((), device=dev)
+            pg_loss = v_loss = ent_loss = torch.zeros((), device=dev)
+            stop = False
+            for _epoch in range(cfg.update_epochs):
+                for start in range(0, batch, mb_size):
+                    mb = idx[start:start + mb_size]
+                    _, newlogp, entropy, newval = agent.get_action_and_value(b_obs[mb], b_act[mb])
+                    logratio = newlogp - b_logp[mb]
+                    ratio = logratio.exp()
+                    with torch.no_grad():
+                        approx_kl = ((ratio - 1) - logratio).mean()
+
+                    mb_adv = b_adv[mb]
+                    if cfg.norm_adv:
+                        mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                    pg1 = -mb_adv * ratio
+                    pg2 = -mb_adv * ratio.clamp(1 - cfg.clip_coef, 1 + cfg.clip_coef)
+                    pg_loss = torch.max(pg1, pg2).mean()
+
+                    if cfg.clip_vloss:
+                        v_unclipped = (newval - b_ret[mb]) ** 2
+                        v_clipped = b_val[mb] + (newval - b_val[mb]).clamp(-cfg.clip_coef, cfg.clip_coef)
+                        v_clipped = (v_clipped - b_ret[mb]) ** 2
+                        v_loss = 0.5 * torch.max(v_unclipped, v_clipped).mean()
+                    else:
+                        v_loss = 0.5 * ((newval - b_ret[mb]) ** 2).mean()
+
+                    ent_loss = entropy.mean()
+                    loss = pg_loss - cfg.ent_coef * ent_loss + cfg.vf_coef * v_loss
+
+                    opt.zero_grad(set_to_none=True)
+                    loss.backward()
+                    nn.utils.clip_grad_norm_(agent.parameters(), cfg.max_grad_norm)
+                    opt.step()
+
+                if cfg.target_kl is not None and float(approx_kl) > cfg.target_kl:
+                    stop = True
+                    break
 
         # --- logging ---
         if update % cfg.log_interval == 0:
