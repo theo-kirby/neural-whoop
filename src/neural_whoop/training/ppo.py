@@ -33,6 +33,9 @@ class PPOConfig:
     total_steps: int = 30_000_000  # total environment steps (across all drones)
     lr: float = 3e-4
     anneal_lr: bool = True
+    # "adam" (default) or "muon" (Newton-Schulz orthogonalized momentum, training/muon.py).
+    # Muon wants a ~10-30x higher lr than Adam for the same net.
+    optimizer: str = "adam"
     gamma: float = 0.99
     gae_lambda: float = 0.95
     update_epochs: int = 4
@@ -125,7 +128,14 @@ def train_ppo(
     agent = ActorCritic(obs_dim, act_dim, cfg).to(dev)
     _layer_init(agent.actor)
     _layer_init(agent.critic)
-    opt = torch.optim.Adam(agent.parameters(), lr=cfg.lr, eps=1e-5)
+    if cfg.optimizer == "muon":
+        from neural_whoop.training.muon import Muon
+
+        opt = Muon(agent.parameters(), lr=cfg.lr)
+    elif cfg.optimizer == "adam":
+        opt = torch.optim.Adam(agent.parameters(), lr=cfg.lr, eps=1e-5)
+    else:
+        raise ValueError(f"unknown optimizer {cfg.optimizer!r} (expected 'adam' or 'muon')")
 
     batch = N * cfg.num_steps
     mb_size = max(1, batch // cfg.num_minibatches)

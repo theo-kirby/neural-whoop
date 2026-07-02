@@ -102,6 +102,14 @@ class GateRaceConfig:
     # Ring spawn radius used only when a Studio fixed course is flown by >1 drone (so the racers
     # don't start coincident). The training path (per-env random courses) keeps the small jitter.
     spawn_spread: float = 0.6
+    # Dual-scale target encoding (PufferLib idea-import, Flywheel cluster:system-comparison):
+    # replace the raw body-frame current-gate vector with [tanh(ds_coarse*v), tanh(ds_fine*v)]
+    # — a coarse far-range channel plus a fine near-gate channel (obs 14 -> 17). Defaults match
+    # PufferLib's drone env (0.1 => ±10 m range, 10.0 => ±10 cm resolution). Experiment-gated:
+    # off = exact obs-v4 contract.
+    dual_scale_obs: bool = False
+    ds_coarse: float = 0.1
+    ds_fine: float = 10.0
 
 
 @register_task("gate_race")
@@ -114,6 +122,8 @@ class GateRaceTask(DroneTask):
     def __init__(self, **kwargs):
         self.cfg = GateRaceConfig(**kwargs)
         self.episode_len = self.cfg.episode_len
+        if self.cfg.dual_scale_obs:
+            self.obs_dim = OBS_DIM + 3 + 3  # coarse(3) + fine(3) replace the raw gate vector
         self._oracle = OracleEstimator()
         self._arena = course_mod.ArenaSpec(
             radius=self.cfg.arena_radius, z_min=self.cfg.z_min, z_max=self.cfg.z_max,
@@ -235,8 +245,15 @@ class GateRaceTask(DroneTask):
             cur_rel_body, _ = apply_detector_noise(cur_rel_body, det, self.last_valid, env.gen)
             self.last_valid = cur_rel_body
         # obs-v4 (rebuild from the body-frame target vector + the rest of the state).
+        if self.cfg.dual_scale_obs:
+            cur_enc = torch.cat(
+                [torch.tanh(self.cfg.ds_coarse * cur_rel_body), torch.tanh(self.cfg.ds_fine * cur_rel_body)],
+                dim=-1,
+            )
+        else:
+            cur_enc = cur_rel_body
         vel_b = world_to_body(vel, R)
-        obs11 = torch.cat([cur_rel_body, vel_b, rpy[..., 0:1], rpy[..., 1:2], w], dim=-1)
+        obs11 = torch.cat([cur_enc, vel_b, rpy[..., 0:1], rpy[..., 1:2], w], dim=-1)
         nxt_rel_body = world_to_body(nxt - pos, R)
         return torch.cat([obs11, nxt_rel_body], dim=-1).to(torch.float32)
 
