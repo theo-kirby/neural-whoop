@@ -65,6 +65,8 @@ doesn't model:
 | `thrust_scale_frac` | 0.10 | motor-strength / battery-sag spread |
 | `obs_noise_std` | 0.01 | noisy onboard estimates |
 | `action_latency_steps` | 1 | sense→infer→actuate delay (per-drone ring buffer) |
+| `uplink_latency_steps` | 0 | staleness of the task's *uplinked* obs channels (`DroneTask.uplink_slices`) — the onboard-hybrid split where state obs are fresh but the target channel rides a ~30 Hz radio uplink (per-drone ring buffer + hold) |
+| `uplink_interval_steps` | 1 | uplink sender period (zero-order hold between packets); ~30 Hz at 50 Hz control → 2 |
 | `detector_*` | off (baseline) | blob/depth detector error: bearing / range / FOV / dropout (in `perception/`) |
 
 Detector noise is **off for the state-based racing baseline** (first beachhead avoids the camera
