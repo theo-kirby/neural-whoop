@@ -99,8 +99,16 @@ Removes the video downlink entirely → full autonomy, no host in the loop.
   with fresh local state obs.
 - **O-2 (parallel, no hardware):** build the Air65 II Betaflight target from source, measure
   flash headroom with/without the 79 KB (f32) and ~23 KB (int8) policy → go/no-go data for Path A.
-- **O-3:** hybrid-obs retrain — split latency DR (fresh state obs, 30 Hz stale target channel)
-  and re-evaluate; this is the sim-side counterpart of the onboard architecture.
+- **O-3 (done):** hybrid-obs retrain — split latency DR (fresh state obs, 30 Hz stale target channel)
+  and re-evaluate; this is the sim-side counterpart of the onboard architecture. Result
+  (Flywheel `soft-moon-6755`): ~6% faster everywhere at equal completion — offboard's cost is a
+  conservatism tax that onboard execution removes.
+- **Deploy recipe of record (sim-validated, 3 seeds — Flywheel `muddy-mouse-2952`):**
+  `configs/gate_race_air65_hybrid_mrel.yaml` = onboard split-latency DR × Muon lr 2.5e-3 ×
+  reliability shaping (crash_penalty 30 + near-miss band 1.0/0.4). Best lap 2.32–2.54 s clean at
+  95.5–98.3% completion; own-DR-on completion 0.85–0.90 (above the adam floor 0.79–0.81). Key
+  interaction: Muon's DR-on collapse under offboard action latency (0.55–0.60) disappears under
+  the onboard split — Muon needs fresh actuation; with it, it is both faster and more robust.
 - **O-4 (end-state):** Path A inside Betaflight with the tensaur-style RL/PID param toggle;
   Path C when onboard perception becomes the frontier.
 
