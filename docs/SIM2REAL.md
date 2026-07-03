@@ -1,7 +1,8 @@
 # SIM2REAL.md — closing the gap to a real tiny-whoop
 
 Plan of record for taking neural-whoop policies onto real hardware. Companion to `docs/CONTRACT.md`
-(the obs/act/DR seam this leans on). Status: **planning** — no hardware in hand yet.
+(the obs/act/DR seam this leans on). Status: **hardware purchased** — Air65 II bought 2026-07-03;
+bring-up starts at Stage 0 when it arrives.
 
 ## Locked architecture (decided 2026-06-29 with the user)
 
@@ -67,6 +68,53 @@ Real gates with visual markers; lap-time metric vs sim.
 ### Later (deferred)
 Onboard quantized policy in firmware (G473); honest camera-only perception without the flow deck; swarm.
 
+## Control/compute-path branch map (2026-07-03, hardware purchased)
+
+Where the policy runs × how commands reach the FC. Researched (web, sources in the Flywheel node)
+now that the Air65 II is bought. Verified I/O facts first:
+
+- **FC I/O (Matrix 1S 5IN1 II, STM32G473CEU6):** 4 UARTs — UART2=VTX, UART3=onboard ELRS RX
+  (removable via a resistor), **UART1 + UART4 free** for a companion. Ships with a BF 2026.6.0
+  custom build.
+- **Betaflight external-control seams:** (a) **MSP override** (`msp_override_channels_mask` +
+  MSPRCOVERRIDE mode) — real and current; `msp_override_failsafe` (BF 4.5+, PR #13380) fixes the
+  RC-loss failsafe trap; per-channel **300 ms freshness window**; serviced at ~**100 Hz** default
+  (`serial_update_rate_hz` raises it). (b) Companion **emulating a CRSF receiver** into the RX
+  UART — electrically plausible (416 kbaud, 250 Hz+), **no confirmed working writeup** (BF
+  discussion #14064 failed unanswered); treat as unproven. (c) **MAVLink serial-receiver provider**
+  (BF 2025.12+, pairs with ELRS MAVLink mode at 460800) — genuine bidirectional RC+telemetry on one
+  link.
+- **Offboard ELRS uplink is proven:** host/RPi driving an ELRS TX module's CRSF pin directly
+  (RC_CHANNELS_PACKED at ~250 Hz, e.g. RadioMaster Ranger Micro at 460800) binds and flies a BF
+  quad; single-digit-ms OTA at 250–500 Hz. `elrs-joystick-control` does gamepad→CRSF→module.
+- **ESP32 companion (Seeed XIAO ESP32-S3 / Sense):** ~3–5 g class (weigh on arrival — unverified),
+  8 MB PSRAM/flash, camera on Sense (OV2640/OV3660, detection-class vision ~3–10 fps CNN, maybe
+  15–30 fps for cheap blob/marker — unbenchmarked). **ESP-NOW ≈ 5.6 ms median** link latency
+  (100–200 Hz plausible), WiFi UDP ~9 ms tuned (jittery untuned), BLE floor 7.5 ms. **BLE-only (no
+  BT Classic)**: Xbox Series pads pair via Bluepad32 (fw 5.15+ is BLE); PS4/PS5/Switch pads need BT
+  Classic (original ESP32). TinyPolicy-size int8 MLP ≈ 0.1–0.4 ms via esp-nn (extrapolated).
+  Prior art: DroneBridge/ESP32 (MSP over ESP-NOW/WiFi, the exact companion pattern), esp-drone,
+  esp-fc. Payload cost: +4–6 g → ~29–31 g AUW, TWR ~3.5–4:1 — flyable, ironically back inside the
+  old Meteor75-massed DR band.
+
+The branches (all share the Stage-0 bench work; latency band is the DR knob that differs):
+
+| Branch | Path | Command seam / rate | Latency band | Status |
+|---|---|---|---|---|
+| **A. Offboard ELRS** *(plan of record)* | host policy → ELRS TX module → onboard RX | CRSF 250 Hz | ~40–100 ms end-to-end (camera loop) | First flight path — proven, real failsafe, manual takeover on same link |
+| **B. ESP32 bridge** | host policy → ESP-NOW → XIAO on UART1 → MSP/CRSF into FC | MSP ~100 Hz (default) | ~20–50 ms | Solves the flow-deck **downlink** (companion reads flow+ToF, ships telemetry back); gateway to D |
+| **C1. Gamepad via host** | Xbox pad → PC → CRSF → ELRS module | 250 Hz | ~10–20 ms | The manual-fallback rig; build immediately with A |
+| **C2. Gamepad direct-to-drone** | Xbox pad → BLE → onboard XIAO → FC | BLE ≥7.5 ms interval (~133 Hz) | ~15–30 ms | Fun demo (no radio, no PC); off critical path |
+| **D1. Fully onboard** | XIAO runs int8 policy; flow (+Sense camera) obs; UART to FC | MSP/CRSF local | ~5–20 ms (**lowest**) | Post-Stage-2 branch: **onboard `hover` needs no camera** — flow+FC-attitude obs only |
+| D2. Policy in BF firmware (G473) | — | — | lowest | Stays deferred (RAM-tight) |
+
+Notes: (1) The uplink/action **split-latency DR seam** already in the env (`uplink_latency_steps` /
+`uplink_interval_steps`, `docs/CONTRACT.md`) is exactly how these branches differ in sim — each
+branch is a DR config, not new code. (2) Branch B directly resolves the "flow forwarding may need a
+tiny companion MCU" open risk below. (3) D1's obs problem decomposes: `hover`/position-hold needs
+only flow-velocity + attitude (no perception), so "fully onboard hover" is a realistic near-term
+milestone; onboard gate perception is the hard tail.
+
 ## Sim-side work startable now (no hardware)
 1. Air65 II airframe DR re-center (mass/inertia/arm/TWR) — config + `whoop.py`.
 2. Widen `action_latency` DR to a realistic offboard range; consider 100 Hz control.
@@ -85,6 +133,10 @@ Onboard quantized policy in firmware (G473); honest camera-only perception witho
 - Analog 5.8 GHz VRX with USB/AV out + USB capture card (host-side video in).
 - Optical-flow + ToF module: **Matek 3901-L0X** (UART, MSP V2) or a Bitcraze Flow Deck v2 (PMW3901+VL53L1x, ~1.6 g) for the raw-SPI route. Wire to the free **UART1**.
 - Gate markers (AprilTags / LED rings / colored gates) for robust low-res detection.
+
+**Branches B/C2/D1 (companion, optional — order when branch opens):**
+- Seeed **XIAO ESP32-S3 Sense** (~3–5 g w/ camera; weigh it) + a plain XIAO ESP32-S3 as the
+  host-side ESP-NOW peer. Xbox Series controller (fw ≥5.15, BLE) for C2.
 
 ## Open risks / unknowns
 - **Flow on a whoop:** Betaflight won't fuse it — we own the estimator host-side; mounting a downward sensor unobstructed by battery/frame is fiddly; may need a tiny companion MCU if UART forwarding is messy.
