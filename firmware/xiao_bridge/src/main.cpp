@@ -80,8 +80,9 @@ void loop() {
     }
   }
 
+  // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
-  digitalWrite(LED_BUILTIN, fresh ? HIGH : ((millis() >> 9) & 1));
+  digitalWrite(LED_BUILTIN, fresh ? LOW : (((millis() >> 9) & 1) ? LOW : HIGH));
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
 }
