@@ -46,6 +46,11 @@ studio = [
     "uvicorn[standard]>=0.29",
     "pyyaml>=6.0",
 ]
+# Stage-0 bench tooling (scripts/bench.py): USB serial to the real flight controller.
+# The MSP codec itself is pure stdlib; only the live client needs pyserial.
+bench = [
+    "pyserial>=3.5",
+]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",

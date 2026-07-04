@@ -1,0 +1,80 @@
+# hover_air65_bridge: the FIRST-FLIGHT candidate — hover/station-keeping re-centered for the real
+# Air65 II carrying the XIAO ESP32-S3 companion (sim2real branch B, docs/SIM2REAL.md branch map).
+# Fork of hover.yaml; what differs and why:
+#   - whoop: Air65 II + companion payload AUW ~30 g (17 g dry + 8 g 1S + ~2 g flow deck + ~4 g
+#     XIAO/wiring), mass DR 26-34 g spanning battery choice + build tolerance; inertia ~0.9x the
+#     32 g defaults (65 mm geometry, centered payload). Pin by weighing at Stage 0.
+#   - action_latency_steps 3 (0-60 ms at 50 Hz): the ESP-bridge loop lumped on the action side —
+#     FC telemetry -> XIAO -> WiFi/ESP-NOW -> host policy -> uplink -> MSP override (~20-50 ms
+#     measured band + margin). Hover declares no uplink_slices (its whole loop is offboard), so
+#     the split-latency seam keys would be no-ops here; the lumped knob is the honest one.
+#   - keeps hover_base's wind + impulse seam ON: recover from pokes/gusts before we fly for real.
+# Net stays [64,64] tanh — MCU-clean, doubles as the branch-D1 onboard candidate.
+# Flywheel: branch-B first-flight training (cluster: deploy-hw).
+
+run:
+  name: hover_air65_bridge
+
+task:
+  name: hover
+  episode_len: 500
+  pos_sigma: 0.6
+  pos_scale: 2.0
+  dist_penalty: 0.4
+  upright_scale: 0.3
+  upright_sigma: 0.5
+  vel_penalty: 0.02
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.35
+  spawn_offset: 1.5
+  spawn_vel: 1.5
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 2.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.10
+  obs_noise_std: 0.01
+  action_latency_steps: 3       # ESP-bridge round trip lumped: 0-60 ms at 50 Hz
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion (~30 g AUW). Inertia between the clean-Air65 (~0.8x) and the 32 g
+# defaults: centered payload adds mass faster than moment.
+whoop:
+  mass: [0.030, 0.026, 0.034]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 40_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.3
+  ckpt_interval_updates: 100
