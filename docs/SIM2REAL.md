@@ -138,6 +138,28 @@ milestone; onboard gate perception is the hard tail.
 - Seeed **XIAO ESP32-S3 Sense** (~3–5 g w/ camera; weigh it) + a plain XIAO ESP32-S3 as the
   host-side ESP-NOW peer. Xbox Series controller (fw ≥5.15, BLE) for C2.
 
+## Idea backlog: apartment-scan environment via Meta Quest 3 (2026-07-04)
+
+User owns a Quest 3 — scan the apartment, train against the real geometry, then fly the *same*
+course in the *same* room (collapses the Stage-3 sim↔real course gap to ~zero). Sketch:
+
+1. **Export the scan.** Quest 3 Scene Mesh (depth-sensor room mesh) via a small in-headset app →
+   OBJ/GLTF; fallback: walk-around video → photogrammetry/splatting on the 5090.
+2. **Mesh → SDF.** Bake a voxel signed-distance field (~5 cm, a torch tensor) — batched
+   GPU-friendly collision the way the env already works; keep the GLTF for viz.
+3. **Env seam: obstacle field.** New DR-compatible collision seam (termination + distance penalty +
+   spawn validity) sampled from the SDF; course YAML authored in apartment coordinates.
+4. **Viz.** Apartment mesh as the Studio / nw-viz backdrop (three.js loads GLTF natively) — hero
+   MP4s of the policy flying through *your actual living room*, pre-flight.
+5. **Real flight** (branch A offboard) on the matching physical course.
+
+Sub-ideas: Quest controller as a **gate-authoring wand** (touch a point in the room → gate pose in
+the scan frame — solves course registration); MR ground station (telemetry overlaid on the real
+drone); Quest hand-tracking as the real counterpart of the `hand_follow`/`gesture_follow` tasks.
+Open problems: mesh-export friction (Scene Mesh needs an app with scene permission), scan accuracy
+(~2–3 cm class), and **frame registration** — aligning the drone's world frame to the scan frame is
+the real work (the wand idea + a known takeoff point is the likely answer).
+
 ## Open risks / unknowns
 - **Flow on a whoop:** Betaflight won't fuse it — we own the estimator host-side; mounting a downward sensor unobstructed by battery/frame is fiddly; may need a tiny companion MCU if UART forwarding is messy.
 - **MSP override + failsafe:** known Betaflight pain (issues #12790/#13374); must keep a manual-pilot fallback.
