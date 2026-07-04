@@ -87,7 +87,13 @@ now that the Air65 II is bought. Verified I/O facts first:
 - **Offboard ELRS uplink is proven:** host/RPi driving an ELRS TX module's CRSF pin directly
   (RC_CHANNELS_PACKED at ~250 Hz, e.g. RadioMaster Ranger Micro at 460800) binds and flies a BF
   quad; single-digit-ms OTA at 250–500 Hz. `elrs-joystick-control` does gamepad→CRSF→module.
-- **ESP32 companion (Seeed XIAO ESP32-S3 / Sense):** ~3–5 g class (weigh on arrival — unverified),
+- **Pinned weights (BetaFPV spec tables, 2026-07-04):** Air65 II dry = **17.7 g Racing** / 17.8 g
+  Freestyle / 16.6 g Champion; LAVA II 1S = **8.2 g (320 mAh)** / 6.8 g (280 mAh), BT2.0. So base
+  AUW ≈ 25.9 g (Racing + 320), and the bridge stack ≈ **29.5–31.5 g** (+ ~2 g flow deck + plain
+  XIAO ~3 g — the camera-less XIAO suffices for branch B; the Sense (~5 g w/ camera) is a branch-D
+  part). No published bare-board XIAO weight exists (retail "14.68 g" is packaged); ~3 g is
+  inferred from same-size boards — the one number still worth a real scale eventually.
+- **ESP32 companion (Seeed XIAO ESP32-S3 / Sense):** ~3–5 g class (see pinned weights above),
   8 MB PSRAM/flash, camera on Sense (OV2640/OV3660, detection-class vision ~3–10 fps CNN, maybe
   15–30 fps for cheap blob/marker — unbenchmarked). **ESP-NOW ≈ 5.6 ms median** link latency
   (100–200 Hz plausible), WiFi UDP ~9 ms tuned (jittery untuned), BLE floor 7.5 ms. **BLE-only (no
