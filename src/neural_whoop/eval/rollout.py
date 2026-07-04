@@ -46,6 +46,7 @@ def evaluate(
     rew_sum = torch.zeros(env.n_drones, device=dev)
     crashes = torch.zeros(env.n_drones, device=dev)
     gates = torch.zeros(env.n_drones, device=dev)
+    task_sums: dict[str, torch.Tensor] = {}
     for _ in range(steps):
         mean = agent.actor(obs)
         action = mean.clamp(-1.0, 1.0) if deterministic else agent.get_action_and_value(obs)[0]
@@ -55,8 +56,15 @@ def evaluate(
             crashes += info["crashed"].float()
         if "passed" in info:
             gates += info["passed"].float()
+        for k, v in info.get("metrics", {}).items():
+            task_sums[k] = task_sums[k] + v if k in task_sums else v.clone()
 
     m = dict(env.task.metrics(env))
+    # Rollout-wide per-step means override the task's episode-windowed values: the task's own
+    # accumulators zero on episode reset, so with a lockstep population (no crashes) and a horizon
+    # that's a multiple of episode_len, the final auto-reset clobbers them right before the read.
+    for k, v in task_sums.items():
+        m[k] = (v / steps).mean().item()
     m["mean_reward"] = (rew_sum / steps).mean().item()
     m["crash_rate_per_step"] = (crashes / steps).mean().item()
     m["gates_passed_total"] = gates.sum().item()
@@ -228,6 +236,7 @@ def evaluate_and_record(
     rew_sum = torch.zeros(env.n_drones, device=dev)
     crashes = torch.zeros(env.n_drones, device=dev)
     gates = torch.zeros(env.n_drones, device=dev)
+    task_sums: dict[str, torch.Tensor] = {}
 
     for step in range(steps):
         mean = agent.actor(obs)
@@ -241,6 +250,8 @@ def evaluate_and_record(
             crashes += crashed.float()
         if passed is not None:
             gates += passed.float()
+        for k, v in info.get("metrics", {}).items():
+            task_sums[k] = task_sums[k] + v if k in task_sums else v.clone()
 
         if not any(open_ep):
             continue
@@ -345,6 +356,8 @@ def evaluate_and_record(
             recorder.end_episode(_summary(j))
 
     m = dict(env.task.metrics(env))
+    for k, v in task_sums.items():  # rollout-wide means (see evaluate() for why they override)
+        m[k] = (v / steps).mean().item()
     m["mean_reward"] = (rew_sum / steps).mean().item()
     m["crash_rate_per_step"] = (crashes / steps).mean().item()
     m["gates_passed_total"] = gates.sum().item()

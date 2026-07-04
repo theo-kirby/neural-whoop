@@ -181,15 +181,28 @@ class HoverTask(DroneTask):
         reward = reward - c.crash_penalty * crashed.float()
 
         # Episode accumulators (ground truth).
+        held = dist < c.hold_radius
+        tilt = tilt_sq.clamp_min(0.0).sqrt()
         self.steps = self.steps + 1
-        self.held = self.held + (dist < c.hold_radius).long()
+        self.held = self.held + held.long()
         self.pos_err_sum = self.pos_err_sum + dist
         self.speed_sum = self.speed_sum + speed
-        self.tilt_sum = self.tilt_sum + tilt_sq.clamp_min(0.0).sqrt()
+        self.tilt_sum = self.tilt_sum + tilt
         self.crash_sum = self.crash_sum + crashed.long()
 
         terminated_env = crashed  # n_agents == 1 -> per-drone == per-env
-        info = {"crashed": crashed}
+        # Per-step metric tensors (no CPU sync): the eval rollout aggregates these over the FULL
+        # horizon, immune to the accumulator zeroing at episode auto-resets (which otherwise
+        # garbles metrics() when a lockstep no-crash population resets right at the eval horizon).
+        info = {
+            "crashed": crashed,
+            "metrics": {
+                "mean_pos_error": dist,
+                "mean_speed": speed,
+                "mean_tilt_deg": tilt * (180.0 / math.pi),
+                "hold_rate": held.float(),
+            },
+        }
         return reward, terminated_env, info
 
     # --- visual scene (replay `scene` channel) ---

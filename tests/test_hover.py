@@ -89,6 +89,43 @@ def test_metrics_keys():
     assert math.isfinite(m["mean_tilt_deg"])
 
 
+def test_step_info_exposes_per_step_metric_tensors():
+    env = _env(n_envs=8, dr_cfg=DomainRandomizationConfig(enabled=False))
+    env.reset_all()
+    _, _, _, _, info = env.step(torch.zeros(env.n_drones, env.act_dim))
+    m = info["metrics"]
+    for key in ("mean_pos_error", "mean_speed", "mean_tilt_deg", "hold_rate"):
+        assert m[key].shape == (8,)
+        assert torch.isfinite(m[key]).all()
+    assert ((m["hold_rate"] == 0.0) | (m["hold_rate"] == 1.0)).all()
+
+
+def test_evaluate_metrics_survive_lockstep_truncation_boundary():
+    # Regression: the task's episode accumulators zero on auto-reset. With no crashes (huge
+    # bounds) every env truncates in lockstep, and a horizon that's an exact multiple of
+    # episode_len used to clobber the accumulators right before evaluate() read them,
+    # reporting ~0 pos error / ~0 hold rate. The rollout-wide info["metrics"] aggregation
+    # must report the real (nonzero) falling-drone position error instead.
+    from neural_whoop.eval.rollout import evaluate
+
+    env = _env(
+        n_envs=8,
+        episode_len=5,
+        bound_xy=1e6,
+        bound_z_min=-1e6,
+        bound_z_max=1e6,
+        dr_cfg=DomainRandomizationConfig(enabled=False),
+    )
+
+    class _ZeroAgent:
+        def actor(self, obs):
+            return torch.zeros(obs.shape[0], env.act_dim)
+
+    m = evaluate(env, _ZeroAgent(), steps=10)  # 2 lockstep episodes exactly
+    assert m["mean_pos_error"] > 0.05  # drones drift/fall: real error, not the post-reset zeros
+    assert m["crash_rate_per_step"] == 0.0
+
+
 # --- the shared impulse seam (training + live editor) ---
 
 
