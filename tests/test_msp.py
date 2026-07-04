@@ -81,6 +81,35 @@ def test_decode_analog_prefers_high_res_voltage():
     assert out["amps"] == pytest.approx(2.5)
 
 
+def test_udp_client_roundtrip_against_fake_bridge():
+    # The xiao_bridge is a transparent proxy, so a UDP socket that answers MSP requests IS a
+    # faithful stand-in: this exercises MspUdpClient end-to-end without hardware.
+    import socket
+    import threading
+
+    from neural_whoop.bench.msp import MspParser, MspUdpClient
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    srv.bind(("127.0.0.1", 0))
+    srv.settimeout(2.0)
+    port = srv.getsockname()[1]
+
+    def fake_fc():
+        parser = MspParser()
+        data, addr = srv.recvfrom(2048)
+        for frame in parser.feed(data):
+            if frame.cmd == MSP_ATTITUDE:
+                srv.sendto(_response(MSP_ATTITUDE, struct.pack("<hhh", 150, -30, 90)), addr)
+
+    t = threading.Thread(target=fake_fc, daemon=True)
+    t.start()
+    with MspUdpClient("127.0.0.1", port=port) as fc:
+        att = fc.attitude()
+    t.join(2.0)
+    srv.close()
+    assert att == {"roll_deg": 15.0, "pitch_deg": -3.0, "yaw_deg": 90.0}
+
+
 def test_decode_raw_imu_keeps_raw_units():
     payload = struct.pack("<9h", 1, -2, 512, 10, -20, 30, 0, 0, 0)
     out = decode_raw_imu(payload)

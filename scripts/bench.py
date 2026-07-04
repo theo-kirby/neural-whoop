@@ -32,13 +32,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from neural_whoop.bench import MSP_ATTITUDE, MspClient  # noqa: E402
+from neural_whoop.bench import MSP_ATTITUDE, MspClient, MspUdpClient  # noqa: E402
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
 NEUTRAL_RC = [1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000]  # R,P,Y centered; T + aux low
 
 
-def _client(args: argparse.Namespace) -> MspClient:
+def _client(args: argparse.Namespace):
+    if args.udp:
+        host, _, port = args.udp.partition(":")
+        return MspUdpClient(host, port=int(port) if port else 14550)
     return MspClient(args.port, baud=args.baud)
 
 
@@ -169,6 +172,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyACM0", help="FC serial port (default /dev/ttyACM0)")
     ap.add_argument("--baud", type=int, default=115200, help="baud (USB VCP ignores it)")
+    ap.add_argument("--udp", default=None, metavar="HOST[:PORT]",
+                    help="talk through the xiao_bridge WiFi proxy instead of serial "
+                         "(firmware/xiao_bridge/, default port 14550)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("info", help="FC identity + battery")

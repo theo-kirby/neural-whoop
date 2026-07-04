@@ -157,21 +157,31 @@ def pack_rc_channels(channels: list[int] | tuple[int, ...]) -> bytes:
     return struct.pack(f"<{len(clamped)}H", *clamped)
 
 
-class MspClient:
-    """Blocking request/response MSP client over a serial port (pyserial, lazy import)."""
+class _MspEndpoint:
+    """Blocking request/response MSP logic, transport-agnostic.
 
-    def __init__(self, port: str, baud: int = 115200, timeout_s: float = 0.5) -> None:
-        import serial  # the `bench` extra; deferred so the codec imports without it
+    Subclasses provide ``_write(raw)`` and ``_read() -> bytes`` (may return ``b""``); this
+    base owns framing, matching, retries and the typed convenience getters. The same host
+    code therefore drives the FC over USB serial (:class:`MspClient`) or through the
+    xiao_bridge WiFi proxy (:class:`MspUdpClient`) — see ``firmware/xiao_bridge/``.
+    """
 
-        self._ser = serial.Serial(port, baudrate=baud, timeout=0.02)
+    timeout_s: float = 0.5
+
+    def __init__(self) -> None:
         self._parser = MspParser()
         self._pending: list[MspFrame] = []
-        self.timeout_s = timeout_s
 
-    def close(self) -> None:
-        self._ser.close()
+    def _write(self, raw: bytes) -> None:
+        raise NotImplementedError
 
-    def __enter__(self) -> "MspClient":
+    def _read(self) -> bytes:
+        raise NotImplementedError
+
+    def close(self) -> None:  # pragma: no cover - transport-specific
+        pass
+
+    def __enter__(self) -> "_MspEndpoint":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -179,7 +189,7 @@ class MspClient:
 
     def send(self, cmd: int, payload: bytes = b"") -> None:
         """Fire-and-forget write (the SET_RAW_RC streaming path)."""
-        self._ser.write(encode_msp_v1(cmd, payload))
+        self._write(encode_msp_v1(cmd, payload))
 
     def request(self, cmd: int, payload: bytes = b"", *, retries: int = 2) -> bytes:
         """Send and wait for the matching response frame; returns its payload."""
@@ -198,8 +208,7 @@ class MspClient:
     def _drain(self) -> list[MspFrame]:
         frames = self._pending
         self._pending = []
-        waiting = self._ser.in_waiting
-        data = self._ser.read(waiting if waiting else 1)
+        data = self._read()
         if data:
             frames.extend(self._parser.feed(data))
         return frames
@@ -235,3 +244,56 @@ class MspClient:
         if len(values) != 8:
             raise ValueError("MSP_SET_MOTOR wants exactly 8 u16 values (1000=stop)")
         self.send(MSP_SET_MOTOR, struct.pack("<8H", *[int(v) for v in values]))
+
+
+class MspClient(_MspEndpoint):
+    """MSP over a USB serial port (pyserial — the ``bench`` extra, imported lazily)."""
+
+    def __init__(self, port: str, baud: int = 115200, timeout_s: float = 0.5) -> None:
+        import serial  # deferred so the codec imports without the bench extra
+
+        super().__init__()
+        self._ser = serial.Serial(port, baudrate=baud, timeout=0.02)
+        self.timeout_s = timeout_s
+
+    def close(self) -> None:
+        self._ser.close()
+
+    def _write(self, raw: bytes) -> None:
+        self._ser.write(raw)
+
+    def _read(self) -> bytes:
+        waiting = self._ser.in_waiting
+        return self._ser.read(waiting if waiting else 1)
+
+
+class MspUdpClient(_MspEndpoint):
+    """MSP through the xiao_bridge WiFi proxy (raw MSP frames in UDP datagrams).
+
+    Stdlib-only. The bridge replies to whichever host:port last commanded it, so a single
+    socket per session both sends and receives. Default port matches the firmware's 14550.
+    """
+
+    def __init__(self, host: str, port: int = 14550, timeout_s: float = 0.5) -> None:
+        import socket
+
+        super().__init__()
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.settimeout(0.02)
+        self._addr = (host, port)
+        self.timeout_s = timeout_s
+
+    def close(self) -> None:
+        self._sock.close()
+
+    def _write(self, raw: bytes) -> None:
+        self._sock.sendto(raw, self._addr)
+
+    def _read(self) -> bytes:
+        import socket
+
+        try:
+            data, _ = self._sock.recvfrom(2048)
+            return data
+        except (TimeoutError, socket.timeout, BlockingIOError):
+            return b""

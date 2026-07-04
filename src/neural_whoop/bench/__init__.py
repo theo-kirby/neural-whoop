@@ -20,6 +20,7 @@ from neural_whoop.bench.msp import (  # noqa: F401
     MspError,
     MspParser,
     MspTimeout,
+    MspUdpClient,
     decode_analog,
     decode_attitude,
     decode_fc_version,

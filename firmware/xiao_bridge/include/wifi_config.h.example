@@ -1,0 +1,16 @@
+// Copy to wifi_config.h (gitignored) and fill in. The bridge joins your LAN as a station.
+#pragma once
+
+#define WIFI_SSID "your-ssid"
+#define WIFI_PASS "your-password"
+
+// UDP port the bridge listens on; the host sends raw MSP frames here.
+#define UDP_PORT 14550
+
+// FC UART baud. Betaflight MSP ports default to 115200.
+#define FC_BAUD 115200
+
+// XIAO ESP32-S3 pins wired to the flight controller's free UART pads (UART1 on the
+// Matrix 1S 5IN1 II). XIAO TX -> FC RX pad, XIAO RX -> FC TX pad, GND -> GND.
+#define FC_TX_PIN 43  // XIAO silkscreen D6/TX
+#define FC_RX_PIN 44  // XIAO silkscreen D7/RX

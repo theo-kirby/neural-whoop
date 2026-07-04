@@ -226,3 +226,6 @@ runs/
 # Vendored DiffAero bytecode (the source fork itself is committed and pinned).
 third_party/**/__pycache__/
 .ruff_cache/
+# Firmware (PlatformIO) build outputs + per-machine WiFi credentials.
+firmware/**/.pio/
+firmware/**/include/wifi_config.h
