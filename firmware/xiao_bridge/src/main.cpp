@@ -12,10 +12,15 @@
 // LED: solid while command packets are flowing (<250 ms old), slow blink when idle/linkless.
 
 #include <Arduino.h>
+#include <ESPmDNS.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 
 #include "wifi_config.h"
+
+#ifndef MDNS_NAME
+#define MDNS_NAME "whoop-bridge"
+#endif
 
 namespace {
 
@@ -32,16 +37,35 @@ uint32_t last_cmd_ms = 0;
 uint8_t rx_buf[kBufSize];  // UDP -> UART
 uint8_t tx_buf[kBufSize];  // UART -> UDP
 
-void connectWifi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);  // power save adds 100 ms+ latency spikes; this link flies a drone
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
+// Try one network for ~8 s; return true if joined.
+bool tryNetwork(const char* ssid, const char* pass) {
+  Serial.printf("joining %s ", ssid);
+  WiFi.begin(ssid, pass);
+  for (int i = 0; i < 32; i++) {
+    if (WiFi.status() == WL_CONNECTED) return true;
     delay(250);
     Serial.print(".");
   }
-  Serial.printf("\nbridge up: %s:%u -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)\n",
-                WiFi.localIP().toString().c_str(), UDP_PORT, FC_BAUD, FC_TX_PIN, FC_RX_PIN);
+  Serial.println(" no");
+  WiFi.disconnect(true);
+  return false;
+}
+
+void connectWifi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);  // power save adds 100 ms+ latency spikes; this link flies a drone
+  // Primary first (the flying-spot hotspot), then the fallback (home LAN), forever.
+  while (true) {
+    if (tryNetwork(WIFI_SSID, WIFI_PASS)) break;
+#ifdef WIFI_SSID2
+    if (tryNetwork(WIFI_SSID2, WIFI_PASS2)) break;
+#endif
+  }
+  // mDNS: reachable as whoop-bridge.local regardless of what DHCP handed out.
+  MDNS.begin(MDNS_NAME);
+  Serial.printf("\nbridge up: %s (%s.local):%u -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)  RSSI %d dBm  BSSID %s\n",
+                WiFi.localIP().toString().c_str(), MDNS_NAME, UDP_PORT, FC_BAUD, FC_TX_PIN,
+                FC_RX_PIN, WiFi.RSSI(), WiFi.BSSIDstr().c_str());
 }
 
 }  // namespace
@@ -83,6 +107,16 @@ void loop() {
   // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
   digitalWrite(LED_BUILTIN, fresh ? LOW : (((millis() >> 9) & 1) ? LOW : HIGH));
+
+  // 5 s status heartbeat on USB: link quality at the actual flying spot, mesh node identity
+  // (BSSID changes when a repeater steals the association), and whether commands are flowing.
+  static uint32_t last_status_ms = 0;
+  if (millis() - last_status_ms > 5000) {
+    last_status_ms = millis();
+    Serial.printf("status: %s  RSSI %d dBm  BSSID %s  %s\n",
+                  WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.BSSIDstr().c_str(),
+                  fresh ? "commands flowing" : "idle");
+  }
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
 }

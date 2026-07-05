@@ -1,8 +1,17 @@
 // Copy to wifi_config.h (gitignored) and fill in. The bridge joins your LAN as a station.
 #pragma once
 
+// Primary network — for flights, make this a dedicated phone hotspot at the flying spot
+// (one clean AP beats a busy home mesh: no repeater duplicates, no neighbor congestion).
 #define WIFI_SSID "your-ssid"
 #define WIFI_PASS "your-password"
+
+// Optional fallback network (e.g. the home LAN for bench work). Comment out if unused.
+// #define WIFI_SSID2 "home-ssid"
+// #define WIFI_PASS2 "home-password"
+
+// mDNS hostname: scripts reach the bridge as whoop-bridge.local, whatever DHCP does.
+#define MDNS_NAME "whoop-bridge"
 
 // UDP port the bridge listens on; the host sends raw MSP frames here.
 #define UDP_PORT 14550
