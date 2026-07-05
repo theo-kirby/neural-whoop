@@ -40,8 +40,8 @@ void connectWifi() {
     delay(250);
     Serial.print(".");
   }
-  Serial.printf("\nbridge up: %s:%u -> FC UART%d @%d\n", WiFi.localIP().toString().c_str(),
-                UDP_PORT, 1, FC_BAUD);
+  Serial.printf("\nbridge up: %s:%u -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)\n",
+                WiFi.localIP().toString().c_str(), UDP_PORT, FC_BAUD, FC_TX_PIN, FC_RX_PIN);
 }
 
 }  // namespace

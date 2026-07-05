@@ -9,10 +9,15 @@ controller and ships the FC's replies back. Protocol-transparent by design — t
 
 | XIAO | FC |
 |---|---|
-| D6 / TX (GPIO43) | UART1 RX pad |
-| D7 / RX (GPIO44) | UART1 TX pad |
+| D6 / TX (GPIO43) | UART1 RX pad (R1) |
+| D8 (GPIO7) | UART1 TX pad (T1) |
 | GND | GND |
 | 5V | 5V pad (FC BEC) |
+
+The natural RX choice would be D7/GPIO44, but on our unit that input is dead (line idles at a
+healthy 3.3 V, yet neither UART1-matrix nor native-UART0 reception ever sees a byte — presumed
+ESD/heat casualty). Any free GPIO works as UART RX via the ESP32-S3 matrix; we use D8. Match
+`FC_RX_PIN` in `wifi_config.h` to wherever the FC's T1 wire actually lands.
 
 Mount with the antenna clear of the frame; the plain (camera-less) XIAO is enough for the
 bridge (~3 g + wiring).
@@ -33,11 +38,27 @@ pio run -t upload && pio device monitor                   # prints the bridge IP
 
 ## Smoke test (props off)
 
+`--udp` is a global flag (before the subcommand). The UDP path is pure stdlib — plain
+`python3` works on machines that can't install the CUDA venv (e.g. a macOS laptop):
+
 ```bash
-uv run python scripts/bench.py info --udp <bridge-ip>          # FC identity over WiFi
-uv run python scripts/bench.py latency --udp <bridge-ip>       # the REAL link budget number
-uv run python scripts/bench.py rc-test --udp <bridge-ip> --ack-props-off
+python3 scripts/bench.py --udp <bridge-ip> info          # FC identity over WiFi
+python3 scripts/bench.py --udp <bridge-ip> latency       # the REAL link budget number
+python3 scripts/bench.py --udp <bridge-ip> rc-test --ack-props-off
 ```
+
+First-flight bench (2026-07-05, Air65 II + XIAO on the same LAN): median RTT 2.4 ms,
+p99 24 ms over 500 requests — far inside Betaflight's 300 ms MSP-RC freshness window.
+
+## Debugging the link
+
+Two helper firmwares share `wifi_config.h`: `pio run -e blink_test -t upload` (WiFi/UDP
+smoke test, no FC needed: `printf on | nc -u -w1 <ip> 14550` toggles the LED) and
+`pio run -e uart_probe -t upload` (sends `ping N` out the FC UART once a second and
+hex-dumps received bytes to USB). Pair the probe with Betaflight CLI
+`serialpassthrough uart1 115200` — note named port ids — to test each wire direction
+independently. If `serial` in the CLI shows no `uart1` row with function 1, the Ports-tab
+MSP setting never saved; fix in CLI: `serial uart1 1 115200 57600 0 115200` + `save`.
 
 ## Safety model
 

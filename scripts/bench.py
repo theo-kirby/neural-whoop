@@ -110,7 +110,10 @@ def cmd_latency(args: argparse.Namespace) -> int:
         f"median {statistics.median(times_ms):.2f} ms  p90 {p(0.90):.2f}  p99 {p(0.99):.2f}  "
         f"max {times_ms[-1]:.2f}"
     )
-    print("(this is the USB serial floor; the radio/WiFi bridge adds its own budget on top)")
+    if args.udp:
+        print("(measured through the WiFi bridge: this IS the real offboard link budget)")
+    else:
+        print("(this is the USB serial floor; the radio/WiFi bridge adds its own budget on top)")
     return 0
 
 
