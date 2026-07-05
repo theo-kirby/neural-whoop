@@ -32,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from neural_whoop.bench import MSP_ATTITUDE, MspClient, MspUdpClient  # noqa: E402
+from neural_whoop.bench import MSP_ATTITUDE, MSP_RAW_IMU, MspClient, MspUdpClient  # noqa: E402
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
 # MSP_SET_RAW_RC frames are in WIRE order and the FC applies its channel map (AETR on our
@@ -99,17 +99,21 @@ def cmd_monitor(args: argparse.Namespace) -> int:
 
 
 def cmd_latency(args: argparse.Namespace) -> int:
+    # Alternate two commands so a late/duplicate reply from request N can never satisfy
+    # request N+1 (MSP has no sequence ids; UDP duplicates are real — seen on this LAN).
+    # Otherwise stale matches report fake sub-ms round-trips and smear the distribution.
     times_ms: list[float] = []
+    cmds = (MSP_ATTITUDE, MSP_RAW_IMU)
     with _client(args) as fc:
         fc.request(MSP_ATTITUDE)  # warm up
-        for _ in range(args.n):
+        for i in range(args.n):
             t0 = time.perf_counter()
-            fc.request(MSP_ATTITUDE)
+            fc.request(cmds[i % 2])
             times_ms.append((time.perf_counter() - t0) * 1e3)
     times_ms.sort()
     p = lambda q: times_ms[min(len(times_ms) - 1, int(q * len(times_ms)))]  # noqa: E731
     print(
-        f"MSP_ATTITUDE round-trip over {args.n} requests: "
+        f"MSP round-trip over {args.n} requests (alternating ATTITUDE/RAW_IMU): "
         f"median {statistics.median(times_ms):.2f} ms  p90 {p(0.90):.2f}  p99 {p(0.99):.2f}  "
         f"max {times_ms[-1]:.2f}"
     )
