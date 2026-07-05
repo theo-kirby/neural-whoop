@@ -135,6 +135,10 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   floor-exit median 4 s. One scalar trim (+0.0616 on act[0]) → pure-hold 30 s survival 0→**100%**
   no-DR. Deployment MUST bench-calibrate thrust trim; no constant trim survives full thrust/mass DR
   (open-loop physics).
+- **Deploy checkpoint (3.2B `hover_blind_air65_long`, 2026-07-05):** after the effective-mean fix
+  (`5c735cd`) + 80× steps with episode_len 1500: σ_thrust 0.478→0.032, steady v_z +0.01 m/s,
+  pure-hold 30 s survival **91%** no-DR (0.087 crash), drift speed 0.069 m/s, tilt 1.68°. THE
+  first-flight checkpoint; exports are deployment-correct as-is.
 
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.

@@ -79,8 +79,17 @@ optional.** A single scalar trim (+0.0616 on act[0], zeroing v_z at nominal) tak
 within 30 s) — that is open-loop physics (±5% thrust × ±7% mass), and it is exactly why the
 bench-measured hover throttle (~1410 µs @ 3.6–3.7 V) must anchor the real trim: on the bench,
 trim until the commanded hover matches true hover, then fly the policy around that anchor.
-Longer-term training-side fixes: tanh-squashed action head (no clip bias) or deploying the
-effective-mean correction E[clip(N(μ,σ))] per channel.
+
+**Fix shipped (2026-07-05, commit `5c735cd`): all deterministic paths (eval, DeployPolicy
+export, Studio Live) now output the closed-form effective mean E[clip(N(μ,σ))]**
+(`training/ppo.py::clipped_gaussian_mean`, erf/exp only — TorchScript/ONNX-clean, σ baked into
+the export as a buffer). On the 40M checkpoint this alone took pure-hold 30 s survival 0→57%
+with no retraining. The **3.2B-step run** (`hover_blind_air65_long`: episode_len 1500 so trim
+error integrates to floor exits in-episode, 8192 envs, ~50 min on the 5090) then closed the
+rest: exploration σ anneals 0.478→0.032 (clip bias gone at the source), steady-state v_z
++0.01 m/s, **pure-hold 30 s survival 91% no-DR**, median DR-on exit 3.2→8.7 s. The exported
+`policy.pt`/`policy.onnx` are now deployment-correct as-is; bench trim calibration remains the
+answer to *real* thrust uncertainty (battery sag, prop wear), not to a policy bias.
 - Analog VRX → USB capture → gate detector → body-frame target vector; measure detector noise → fold into `DetectorNoise`.
 - Flow deck → host-side flow+ToF→velocity estimator; measure error → new flow-velocity DR seam.
 - Measure full end-to-end latency → widen `action_latency` DR.
