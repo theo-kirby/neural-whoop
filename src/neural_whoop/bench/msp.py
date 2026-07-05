@@ -10,10 +10,11 @@ inject RC via ``MSP_SET_RAW_RC`` (the offboard-control seam), spin motors props-
 The codec half of this module is pure stdlib and unit-tested without hardware; only
 :class:`MspClient` touches pyserial (the ``bench`` extra), imported lazily.
 
-Channel order note: Betaflight's ``rcData`` (what ``MSP_SET_RAW_RC`` writes and ``MSP_RC``
-reads) is ``ROLL, PITCH, YAW, THROTTLE, AUX1..`` — MultiWii legacy, NOT the AETR wire order of
-serial receivers. Verify on the bench with the Configurator receiver tab before trusting it;
-that loopback check is exactly what ``scripts/bench.py rc-test`` is for.
+Channel order note (bench-verified 2026-07-05 on the Air65 II): the two directions DIFFER.
+``MSP_SET_RAW_RC`` payloads are in WIRE order and the FC applies its channel map — AETR here,
+so send ``[roll, pitch, THROTTLE, yaw, aux..]``. ``MSP_RC`` reads back ``rcData`` in
+``ROLL, PITCH, YAW, THROTTLE, AUX1..`` (MultiWii legacy). ``scripts/bench.py rc-test`` is the
+loopback that proves the mapping on any new board/config — rerun it if ``map`` changes.
 """
 
 from __future__ import annotations

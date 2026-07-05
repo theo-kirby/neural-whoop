@@ -35,7 +35,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from neural_whoop.bench import MSP_ATTITUDE, MspClient, MspUdpClient  # noqa: E402
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
-NEUTRAL_RC = [1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000]  # R,P,Y centered; T + aux low
+# MSP_SET_RAW_RC frames are in WIRE order and the FC applies its channel map (AETR on our
+# Air65 II): [roll, pitch, THROTTLE, yaw, aux...]. Verified on the bench 2026-07-05 — sending
+# RPYT here landed throttle=1500/yaw=1000 in rcData. rcData reads back as R,P,Y,T (msp.py).
+NEUTRAL_RC = [1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000]  # AETR: R,P centered; T low; Y centered
 
 
 def _client(args: argparse.Namespace):
@@ -142,7 +145,8 @@ def cmd_rc_test(args: argparse.Namespace) -> int:
                     print(f"  (echo failed: {e})")
                 next_echo = time.monotonic() + 1.0
             time.sleep(period)
-    print(f"sent {sent} frames. If rcData held {NEUTRAL_RC[:4]} on the overridden channels, "
+    expected_rcdata = [NEUTRAL_RC[0], NEUTRAL_RC[1], NEUTRAL_RC[3], NEUTRAL_RC[2]]  # AETR wire -> RPYT rcData
+    print(f"sent {sent} frames. If rcData held {expected_rcdata} on the overridden channels, "
           "the seam works; if it showed your Pocket/failsafe values, check msp_override config.")
     return 0
 
