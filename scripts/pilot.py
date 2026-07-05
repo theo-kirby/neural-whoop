@@ -93,9 +93,12 @@ BOX_MSP_OVERRIDE = 50
 # strongly damped one, and also arrests the leftover takeoff-boost climb after handoff.
 VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift)
 VZ_TRIM_CAP = 0.15   # act[0] units (0.15 -> +-0.3 g of P authority)
-VZ_TRIM_KI = 0.10    # integral gain: absorbs constant thrust bias (P alone leaves a
-VZ_ITRIM_CAP = 0.12  # steady 0.2+ m/s climb at +7% bias -> ceiling in ~10 s; simulated
-#                      P+I with these gains peaks at ~0.8 m and settles level)
+VZ_TRIM_KI = 0.15    # integral gain: absorbs the pack's constant thrust bias (P alone is
+VZ_ITRIM_CAP = 0.20  # DC-blind past the leak). Sim: +15% pack bias peaks 1.1 m and holds.
+VZ_CLAMP = 3.0       # m/s; a whoop indoors doesn't do more — beyond this the estimate is lying
+VZ_TILT_LIMIT = math.radians(45.0)  # beyond this the cos-tilt correction + collision accels
+#                     poison the estimate (flights 1783280676/65: ceiling strike -> pitch -73,
+#                     vz "-10 m/s", trim pinned +, throttle 1600 while sideways). Freeze there.
 
 # Ground-takeoff profile (--takeoff): spool fast through the on-ground sub-hover zone (a
 # skittering half-throttle whoop tips over), hold a boost above hover to actually climb —
@@ -457,10 +460,12 @@ def cmd_fly(args: argparse.Namespace) -> int:
                 worst_age = max(worst_age, min(age, 9.9))
                 if age > args.max_obs_age:
                     n_stale += 1
-                    if age > 0.5:
+                    if age > 0.5 and t_start is not None:
                         print(f"\nobs stale {age * 1e3:.0f} ms -> releasing to Pocket")
                         break  # stop streaming: Betaflight freshness window hands back RC
-                    # brief staleness: skip this tick (FC holds last values up to 300 ms)
+                    # brief staleness: skip this tick (FC holds last values up to 300 ms).
+                    # While still WAITING for the switch, stales are harmless (idle stream,
+                    # drone on the ground) — never exit, just keep polling.
                 else:
                     o = tel.obs()
                     # Crash detector (flight_1783273010: it lay INVERTED for 2 s with motors
@@ -494,11 +499,17 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     if (az_ref is not None and args.vz_gain > 0
                             and t_start is not None and t_fl >= hold_s):
                         dt = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
-                        a_vert = (acc_z / az_ref * math.cos(o[0]) * math.cos(o[1]) - 1.0) * 9.81
-                        vz = (vz + a_vert * dt) * math.exp(-dt / VZ_LEAK_TAU)
-                        if t_air <= args.seconds:  # freeze during ramp-down (intentional descent)
-                            i_trim = max(-VZ_ITRIM_CAP,
-                                         min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
+                        if abs(o[0]) < VZ_TILT_LIMIT and abs(o[1]) < VZ_TILT_LIMIT:
+                            a_vert = (acc_z / az_ref * math.cos(o[0]) * math.cos(o[1]) - 1.0) * 9.81
+                            vz = (vz + a_vert * dt) * math.exp(-dt / VZ_LEAK_TAU)
+                            vz = max(-VZ_CLAMP, min(VZ_CLAMP, vz))
+                            # I only in the hover window: not during boost (keeps the takeoff
+                            # punch) and not during ramp-down (intentional descent).
+                            if 0.0 < t_air <= args.seconds:
+                                i_trim = max(-VZ_ITRIM_CAP,
+                                             min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
+                        else:
+                            vz *= math.exp(-dt / VZ_LEAK_TAU)  # tilted: no new evidence, decay
                         thr_trim = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz)) + i_trim
                     t_last_fresh = now
 
@@ -568,9 +579,11 @@ def main() -> int:
     ap.add_argument("--udp", required=True, metavar="HOST[:PORT]", help="bridge address")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
     ap.add_argument("--hover-us", type=int, default=1410, help="bench-measured hover throttle (us)")
-    ap.add_argument("--vbat-ref", type=float, default=3.65,
-                    help="voltage at which --hover-us was measured; live vbat re-anchors the "
-                         "throttle map (duty ~ 1/V, comp clamped to [0.9, 1.2]); 0 disables")
+    ap.add_argument("--vbat-ref", type=float, default=0.0,
+                    help="DEPRECATED voltage re-anchoring of the throttle map (duty ~ 1/V). "
+                         "Default 0 = OFF: loaded vbat proved a bad thrust proxy in both "
+                         "directions (flights 1783278136/1783280676); the acc-z climb damper "
+                         "owns thrust bias now. Set to the calibration voltage to re-enable.")
     ap.add_argument("--trim-thrust", type=float, default=0.0, help="additive act[0] trim (bench-calibrated)")
     ap.add_argument("--min-us", type=int, default=1000)
     ap.add_argument("--max-us", type=int, default=1600, help="hard throttle ceiling for early flights")
