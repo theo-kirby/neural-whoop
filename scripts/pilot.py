@@ -83,6 +83,13 @@ BF_MAX_RATE_YAW = math.radians(345.0)
 BOX_ARM = 0
 BOX_MSP_OVERRIDE = 50
 
+# Ground-takeoff profile (--takeoff): spool fast through the on-ground sub-hover zone (a
+# skittering half-throttle whoop tips over), hold a boost above hover to actually climb —
+# exactly 1.0x hover just sits light on its wheels (flights 1783273972/92 proved it: 5 s
+# parked at a perfect 1410 us) — then settle onto the policy's command.
+TAKEOFF_SPOOL_S = 0.3
+TAKEOFF_SETTLE_S = 0.5
+
 # MSP_RAW_IMU gyro scale. Betaflight's gyroRateDps() (sensors/gyro_init.c) returns
 # gyroADCf / rawSensorDev->scale — i.e. the FILTERED rate converted back to raw LSB units,
 # 16.384 LSB per deg/s on a +-2000 dps gyro. Confirmed empirically from flight_1783271742:
@@ -349,12 +356,22 @@ def cmd_fly(args: argparse.Namespace) -> int:
         warned_already_on = False
         armed_seen = False
         t_start = None
-        hold_s = args.hold_seconds if args.launch else 0.0
-        ramp_in_s = 0.5 if args.launch else 0.0
-        if args.launch:
+        if args.takeoff and args.launch:
+            sys.exit("pick one of --takeoff / --launch")
+        staged = args.launch or args.takeoff
+        hold_s = args.hold_seconds if staged else 0.0
+        ramp_in_s = (args.boost_s + TAKEOFF_SETTLE_S) if args.takeoff else (0.5 if args.launch else 0.0)
+        boost_us = int(1000 + (args.hover_us - 1000) * math.sqrt(args.boost))
+        if args.takeoff:
+            print(f"GROUND-TAKEOFF mode: set the drone LEVEL on the floor, stand clear, ARM on "
+                  f"the Pocket, flip the OVERRIDE switch — {hold_s:.0f}s idle countdown, then it "
+                  f"spools to {args.boost:.2f}x hover ({boost_us} us) for {args.boost_s:.1f}s and "
+                  f"hands to the policy. After the flight it ramps down and lands: DISARM then.")
+        elif args.launch:
             print(f"HAND-LAUNCH mode: hold the drone (grip the duct, fingers clear), ARM on the "
-                  f"Pocket, flip the OVERRIDE SWITCH — then a {hold_s:.0f}s low-throttle countdown, "
-                  f"and RELEASE at 'GO'. After the flight it ramps down and settles: DISARM then.")
+                  f"Pocket, flip the OVERRIDE SWITCH — {hold_s:.0f}s idle countdown, then the "
+                  f"throttle ramps up WHILE YOU KEEP HOLDING; release only at 'GO'. After the "
+                  f"flight it ramps down and settles: DISARM then.")
         else:
             print(f"streaming... FLIP THE OVERRIDE SWITCH to start the {args.seconds}s flight window "
                   "(keep your throttle stick at hover for the handback!)")
@@ -426,20 +443,31 @@ def cmd_fly(args: argparse.Namespace) -> int:
                                       args.trim_thrust)
                     if args.yaw == "center":
                         us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
-                    if t_start is not None and args.launch and t_fl < hold_s:
-                        # Countdown phase: props at idle, level rates, drone still in hand.
+                    if t_start is not None and staged and t_fl < hold_s:
+                        # Countdown: props at idle (in hand for --launch, on the floor for --takeoff).
                         us = [1500, 1500, args.min_us, 1500]
                         remaining = int(hold_s - t_fl) + 1
                         if remaining != last_countdown:
                             last_countdown = remaining
-                            print(f"  release in {remaining}...")
-                    elif t_start is not None and args.launch and t_fl < hold_s + ramp_in_s:
-                        # Ramp-in: blend throttle from idle to the policy's command.
+                            print(f"  {'liftoff' if args.takeoff else 'throttle'} in {remaining}...")
+                    elif t_start is not None and staged and t_fl < hold_s + ramp_in_s:
                         if last_countdown != 0:
                             last_countdown = 0
-                            print("  GO — release!")
-                        k = (t_fl - hold_s) / ramp_in_s
-                        us[2] = int(args.min_us + (us[2] - args.min_us) * k)
+                            print("  LIFTOFF" if args.takeoff else "  throttle ramping — KEEP HOLDING")
+                        tp = t_fl - hold_s
+                        if args.takeoff:
+                            if tp < TAKEOFF_SPOOL_S:      # spool: idle -> boost, fast
+                                us[2] = int(args.min_us + (boost_us - args.min_us) * (tp / TAKEOFF_SPOOL_S))
+                            elif tp < args.boost_s:       # climb-out above hover
+                                us[2] = boost_us
+                            else:                         # settle: boost -> policy command
+                                k = (tp - args.boost_s) / TAKEOFF_SETTLE_S
+                                us[2] = int(boost_us + (us[2] - boost_us) * k)
+                        else:                             # --launch: idle -> policy while still held
+                            us[2] = int(args.min_us + (us[2] - args.min_us) * (tp / ramp_in_s))
+                    elif t_start is not None and args.launch and last_countdown != -2:
+                        last_countdown = -2  # throttle is fully up now — only NOW let go
+                        print("  GO — release!")
                     stream_rc(fc, us)
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
@@ -471,9 +499,17 @@ def main() -> int:
     fly.add_argument("--yaw", choices=["center", "policy"], default="center",
                      help="yaw channel: center (1500, FC damps yaw; default until the yaw sign "
                           "is verified) or policy")
+    fly.add_argument("--takeoff", action="store_true",
+                     help="ground-takeoff flow (RECOMMENDED): drone level on the floor; after the "
+                          "override switch, idle countdown, spool to --boost x hover for --boost-s, "
+                          "then hand to the policy")
+    fly.add_argument("--boost", type=float, default=1.18,
+                     help="takeoff thrust in hover-units; 1.0 just sits on the ground")
+    fly.add_argument("--boost-s", type=float, default=0.6,
+                     help="seconds of boost before settling onto the policy")
     fly.add_argument("--launch", action="store_true",
-                     help="hand-launch flow: after the override switch, hold throttle at idle for "
-                          "--hold-seconds with a countdown, ramp the policy in, release at GO")
+                     help="hand-launch flow: after the override switch, idle countdown, throttle "
+                          "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
     fly.add_argument("--aux", type=int, default=None, metavar="N",
                      help="override-switch aux channel number (1-4); normally auto-detected "
