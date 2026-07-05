@@ -119,6 +119,18 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Sim2real basis:** the impulse seam (`add_velocity`/`add_body_rate`) drives both training and the
   editor, so what the editor throws is exactly what the policy was hardened to reject.
 
+### ✅ `hover_blind` — fully-autonomous IMU-only hover (no-flow-deck first flight)
+- **Metric:** same accumulators as `hover`; honest readout is `mean_tilt_deg` + `crash_rate_per_step`
+  (what the policy can control) with `pos_error`/`hold_rate` reporting the open-loop drift.
+- **Obs/oracle:** **[roll, pitch, p, q, r]** (5) — exactly what the real Air65 II provides over the
+  MSP WiFi bridge (MSP_ATTITUDE + MSP_RAW_IMU); no position/velocity/altitude channels exist.
+- **Status:** implemented (`tasks/hover_blind.py`, `configs/hover_blind_air65.yaml`) — a pure
+  observation ablation of `hover` (reward/spawn/metrics inherited). Tight thrust/mass DR anchored by
+  the bench-measured hover throttle (~1410 µs @ 3.6–3.7 V, 2026-07-05).
+- **Sim2real basis:** THE first-flight task for sim2real branch B while the flow deck is unfitted.
+  Attitude stabilization + tumble recovery are fully observable and closed-loop; altitude/position
+  are physically open-loop (see task docstring) — deploys via `scripts/pilot.py`, tethered.
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to

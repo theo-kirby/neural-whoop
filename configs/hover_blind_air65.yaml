@@ -1,0 +1,82 @@
+# hover_blind_air65: fully-autonomous IMU-only first flight (no flow deck yet).
+# Fork of hover_air65_bridge.yaml; what differs and why:
+#   - task hover_blind: obs = [roll, pitch, p, q, r] only — exactly what MSP_ATTITUDE +
+#     MSP_RAW_IMU provide over the WiFi bridge today. Position/velocity/altitude are
+#     unobservable -> open-loop; the policy must learn attitude stabilization + a precise
+#     hover-thrust trim (see the task docstring's physics-honesty note).
+#   - reward rebalance for partial observability: upright dominates (it's what the policy can
+#     actually see/control), velocity damping up (drifting fast = worse expected position
+#     reward), smoothness up x4 (bang-bang thrust can't help without feedback and translates
+#     badly through the WiFi link), pos terms kept to shape the thrust trim via z error.
+#   - DR tightened where blindness demands calibration: thrust_scale 5% (bench 2026-07-05
+#     measured hover ~1410 us at 3.6-3.7 V — deployment anchors there; DR covers residual),
+#     mass 28-32 g around the ~30 g AUW. Wind kept but softer (positionally unrejectable when
+#     blind); impulse recovery kept — gyro/attitude SEE tumbles, that reflex is trainable.
+#   - spawn: more pure-hold episodes (trim practice), offsets kept for tumble recovery.
+# Deploys via scripts/pilot.py (pure-stdlib MSP pilot). Flywheel: cluster deploy-hw.
+
+run:
+  name: hover_blind_air65
+
+task:
+  name: hover_blind
+  episode_len: 500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 4096
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05      # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.01
+  action_latency_steps: 3      # ESP-bridge round trip lumped: 0-60 ms at 50 Hz
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 40_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.3
+  ckpt_interval_updates: 100
