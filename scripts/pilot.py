@@ -54,12 +54,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from neural_whoop.bench.msp import (  # noqa: E402
     MSP_ANALOG,
     MSP_ATTITUDE,
+    MSP_MODE_RANGES,
     MSP_RAW_IMU,
     MSP_RC,
     MSP_SET_RAW_RC,
+    MspError,
+    MspTimeout,
     MspUdpClient,
     decode_analog,
     decode_attitude,
+    decode_mode_ranges,
     decode_raw_imu,
     decode_u16s,
     pack_rc_channels,
@@ -74,6 +78,10 @@ SIM_MAX_RATE_RP = 12.0    # rad/s
 SIM_MAX_RATE_YAW = 6.0
 BF_MAX_RATE_RP = math.radians(690.0)
 BF_MAX_RATE_YAW = math.radians(345.0)
+
+# Betaflight permanent box ids (msp_box.c) — stable across versions, keyed by MSP_MODE_RANGES.
+BOX_ARM = 0
+BOX_MSP_OVERRIDE = 50
 
 _SQRT2 = math.sqrt(2.0)
 _SQRT2PI = math.sqrt(2.0 * math.pi)
@@ -294,6 +302,28 @@ def cmd_fly(args: argparse.Namespace) -> int:
     period = 1.0 / args.hz
     ramp_s = 1.5  # end-of-flight thrust ramp-down
     with MspUdpClient(args.udp_host, args.udp_port) as fc:
+        # WHICH aux channel is the override switch? Ask the FC — MSP_MODE_RANGES lists every
+        # Modes-tab assignment by permanent box id. (Watching for "any aux that rises" grabbed
+        # the ARM flip first: arm and override are both just aux channels on the Pocket.)
+        override_rng = arm_rng = None
+        try:
+            for r in decode_mode_ranges(fc.request(MSP_MODE_RANGES)):
+                if r["perm_id"] == BOX_MSP_OVERRIDE and override_rng is None:
+                    override_rng = r
+                elif r["perm_id"] == BOX_ARM and arm_rng is None:
+                    arm_rng = r
+        except (MspError, MspTimeout) as e:
+            print(f"MSP_MODE_RANGES query failed ({e})")
+        if args.aux is not None:
+            override_rng = {"aux_idx": args.aux - 1, "lo_us": 1700, "hi_us": 2115}
+        if override_rng is None:
+            sys.exit("the FC reports no MSP OVERRIDE mode range — assign it to a switch in the\n"
+                     "Modes tab (and `save`), or pass --aux N to name the aux channel manually.")
+        ov_ch = 4 + override_rng["aux_idx"]  # rcData index
+        print(f"override switch = AUX{override_rng['aux_idx'] + 1} "
+              f"[{override_rng['lo_us']}-{override_rng['hi_us']} us]"
+              + (f"; arm = AUX{arm_rng['aux_idx'] + 1} (ignored)" if arm_rng else ""))
+
         tel = Telemetry(fc)
         print("acquiring telemetry...")
         t0 = time.monotonic()
@@ -305,11 +335,12 @@ def cmd_fly(args: argparse.Namespace) -> int:
         print(f"telemetry live (vbat {tel.vbat or 0:.2f} V). hover_us={args.hover_us} "
               f"trim={args.trim_thrust:+.4f} yaw={args.yaw}. Ctrl+C = instant release.")
 
-        # Snapshot aux channels (rcData[4:8], straight from the radio — the mask never overrides
-        # aux), then stream and wait for one to flip low->high: that's the override switch, and
-        # it starts the flight clock. The same channel dropping mid-flight = manual takeover.
-        aux_base = None
-        switch_idx = None
+        # Watch rcData[ov_ch] (straight from the radio — the mask never overrides aux) for an
+        # OFF -> IN-RANGE transition of the override switch: that starts the flight clock.
+        # The same channel leaving the range mid-flight = manual takeover.
+        seen_off = False
+        warned_already_on = False
+        armed_seen = False
         t_start = None
         hold_s = args.hold_seconds if args.launch else 0.0
         ramp_in_s = 0.5 if args.launch else 0.0
@@ -331,20 +362,23 @@ def cmd_fly(args: argparse.Namespace) -> int:
                 tick += 1
                 tel.poll(now, want_analog=(tick % int(args.hz) == 0), want_rc=(tick % 5 == 0))
 
-                if tel.rc is not None and len(tel.rc) >= 8:
-                    aux = tel.rc[4:8]
-                    if aux_base is None:
-                        aux_base = aux
-                        print(f"aux baseline {list(aux)} — the override switch must start OFF "
-                              "(if it's already on, flip it off, then on)")
-                    if switch_idx is None:
-                        for i in range(4):
-                            if aux_base[i] < 1300 and aux[i] > 1700:
-                                switch_idx = i
-                                t_start = now
-                                print(f"\noverride ON (aux{i + 1}) -> policy flying")
-                                break
-                    elif aux[switch_idx] < 1300:
+                if tel.rc is not None and len(tel.rc) > ov_ch:
+                    ov_on = override_rng["lo_us"] <= tel.rc[ov_ch] <= override_rng["hi_us"]
+                    if (arm_rng and not armed_seen and len(tel.rc) > 4 + arm_rng["aux_idx"]
+                            and arm_rng["lo_us"] <= tel.rc[4 + arm_rng["aux_idx"]] <= arm_rng["hi_us"]):
+                        armed_seen = True
+                        print(f"\narm switch ON (aux{arm_rng['aux_idx'] + 1}) — now flip the "
+                              f"OVERRIDE switch (aux{override_rng['aux_idx'] + 1}) to start")
+                    if t_start is None:
+                        if not ov_on:
+                            seen_off = True
+                        elif seen_off:
+                            t_start = now
+                            print(f"\noverride ON (aux{override_rng['aux_idx'] + 1}) -> policy flying")
+                        elif not warned_already_on:
+                            warned_already_on = True
+                            print("override switch is already ON — flip it OFF, then ON to start")
+                    elif not ov_on:
                         print("\noverride switch OFF -> manual takeover, releasing")
                         break
 
@@ -419,6 +453,9 @@ def main() -> int:
                      help="hand-launch flow: after the override switch, hold throttle at idle for "
                           "--hold-seconds with a countdown, ramp the policy in, release at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
+    fly.add_argument("--aux", type=int, default=None, metavar="N",
+                     help="override-switch aux channel number (1-4); normally auto-detected "
+                          "from the FC's MSP OVERRIDE mode range")
     fly.add_argument("--log", default=None)
     fly.add_argument("--ack-props-on", action="store_true")
     args = ap.parse_args()

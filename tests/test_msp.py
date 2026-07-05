@@ -11,6 +11,7 @@ from neural_whoop.bench.msp import (
     MspParser,
     decode_analog,
     decode_attitude,
+    decode_mode_ranges,
     decode_raw_imu,
     decode_u16s,
     encode_msp_v1,
@@ -108,6 +109,16 @@ def test_udp_client_roundtrip_against_fake_bridge():
     t.join(2.0)
     srv.close()
     assert att == {"roll_deg": 15.0, "pitch_deg": -3.0, "yaw_deg": 90.0}
+
+
+def test_decode_mode_ranges_skips_empty_slots_and_scales_steps():
+    # ARM (perm 0) on aux1 steps 32-48, MSP OVERRIDE (perm 50) on aux3, one unused slot.
+    payload = bytes([0, 0, 32, 48, 50, 2, 32, 48, 0, 0, 0, 0])
+    ranges = decode_mode_ranges(payload)
+    assert ranges == [
+        {"perm_id": 0, "aux_idx": 0, "lo_us": 1700, "hi_us": 2100},
+        {"perm_id": 50, "aux_idx": 2, "lo_us": 1700, "hi_us": 2100},
+    ]
 
 
 def test_decode_raw_imu_keeps_raw_units():

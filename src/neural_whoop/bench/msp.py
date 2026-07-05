@@ -27,6 +27,7 @@ from dataclasses import dataclass
 MSP_API_VERSION = 1
 MSP_FC_VARIANT = 2
 MSP_FC_VERSION = 3
+MSP_MODE_RANGES = 34
 MSP_STATUS = 101
 MSP_RAW_IMU = 102
 MSP_MOTOR = 104
@@ -142,6 +143,24 @@ def decode_analog(payload: bytes) -> dict:
 def decode_fc_version(payload: bytes) -> str:
     major, minor, patch = struct.unpack("<BBB", payload[:3])
     return f"{major}.{minor}.{patch}"
+
+
+def decode_mode_ranges(payload: bytes) -> list[dict]:
+    """MSP_MODE_RANGES: 4 bytes per slot — box permanentId, aux index, start/end step.
+
+    Steps map to microseconds as ``900 + 25 * step``; a slot with start >= end is unused.
+    Permanent ids are Betaflight's stable box ids (msp_box.c): ARM=0, MSP OVERRIDE=50, ...
+    This is how a host discovers WHICH aux channel a Modes-tab switch lives on, instead of
+    guessing from rcData edges (the arm switch is also just an aux channel).
+    """
+    out = []
+    for i in range(0, len(payload) - 3, 4):
+        perm_id, aux_idx, lo, hi = payload[i : i + 4]
+        if lo >= hi:
+            continue
+        out.append({"perm_id": perm_id, "aux_idx": aux_idx,
+                    "lo_us": 900 + 25 * lo, "hi_us": 900 + 25 * hi})
+    return out
 
 
 def decode_u16s(payload: bytes) -> tuple[int, ...]:
