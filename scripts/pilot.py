@@ -363,6 +363,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         worst_age = 0.0
         tick = 0
         last_countdown = -1
+        bad_att_since = None  # crash detector: sustained extreme attitude -> cut + release
         try:
             while not stop["flag"]:
                 now = time.monotonic()
@@ -403,6 +404,20 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     # brief staleness: skip this tick (FC holds last values up to 300 ms)
                 else:
                     o = tel.obs()
+                    # Crash detector (flight_1783273010: it lay INVERTED for 2 s with motors
+                    # grinding at 1467 us — the blind policy can't know it's on its back).
+                    # Sustained-only, so mid-tumble sign flips through +-180 don't cut a
+                    # recovery attempt; a settled upside-down/pinned drone trips it fast.
+                    hopeless = abs(o[0]) > math.radians(110) or abs(o[1]) > math.radians(80)
+                    if t_start is not None and hopeless:
+                        if bad_att_since is None:
+                            bad_att_since = now
+                        elif now - bad_att_since > 0.3:
+                            print(f"\ncrashed (|roll| {math.degrees(abs(o[0])):.0f} deg for 0.3 s)"
+                                  " -> releasing, DISARM on the Pocket")
+                            break
+                    else:
+                        bad_att_since = None
                     act = pol(o)
                     if t_air > args.seconds:  # ramp down: ease thrust action toward floor
                         k = (t_air - args.seconds) / ramp_s
