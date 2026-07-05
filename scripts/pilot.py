@@ -308,7 +308,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
     fout = open(log_path, "w", newline="")
     writer = csv.writer(fout)
     writer.writerow(["t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
-                     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw", "vbat"])
+                     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
+                     "vbat", "hover_eff"])
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
@@ -319,15 +320,26 @@ def cmd_fly(args: argparse.Namespace) -> int:
         # WHICH aux channel is the override switch? Ask the FC — MSP_MODE_RANGES lists every
         # Modes-tab assignment by permanent box id. (Watching for "any aux that rises" grabbed
         # the ARM flip first: arm and override are both just aux channels on the Pocket.)
-        override_rng = arm_rng = None
-        try:
-            for r in decode_mode_ranges(fc.request(MSP_MODE_RANGES)):
-                if r["perm_id"] == BOX_MSP_OVERRIDE and override_rng is None:
-                    override_rng = r
-                elif r["perm_id"] == BOX_ARM and arm_rng is None:
-                    arm_rng = r
-        except (MspError, MspTimeout) as e:
-            print(f"MSP_MODE_RANGES query failed ({e})")
+        override_rng = arm_rng = ranges = None
+        for attempt in range(16):  # ~8 s of patience: single UDP losses must not abort a flight
+            try:
+                ranges = decode_mode_ranges(fc.request(MSP_MODE_RANGES, retries=0))
+                break
+            except MspTimeout:
+                print("waiting for the FC link" if attempt == 0 else ".",
+                      end="", flush=True)
+            except MspError as e:
+                sys.exit(f"FC rejected MSP_MODE_RANGES: {e}")
+        if attempt:
+            print()
+        if ranges is None and args.aux is None:
+            sys.exit("no reply to MSP_MODE_RANGES in ~8 s — bridge/FC link down? Check the bridge "
+                     "LED, then: python3 scripts/bench.py --udp <host> info")
+        for r in ranges or []:
+            if r["perm_id"] == BOX_MSP_OVERRIDE and override_rng is None:
+                override_rng = r
+            elif r["perm_id"] == BOX_ARM and arm_rng is None:
+                arm_rng = r
         if args.aux is not None:
             override_rng = {"aux_idx": args.aux - 1, "lo_us": 1700, "hi_us": 2115}
         if override_rng is None:
@@ -344,7 +356,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         while tel.obs_age(time.monotonic()) > 0.1:
             tel.poll(time.monotonic(), want_analog=True)
             time.sleep(0.02)
-            if time.monotonic() - t0 > 5.0:
+            if time.monotonic() - t0 > 10.0:
                 sys.exit("no telemetry from the bridge — is the battery in and the LED blinking?")
         print(f"telemetry live (vbat {tel.vbat or 0:.2f} V). hover_us={args.hover_us} "
               f"trim={args.trim_thrust:+.4f} yaw={args.yaw}. Ctrl+C = instant release.")
@@ -381,11 +393,21 @@ def cmd_fly(args: argparse.Namespace) -> int:
         tick = 0
         last_countdown = -1
         bad_att_since = None  # crash detector: sustained extreme attitude -> cut + release
+        vfilt = None          # slow-EMA vbat for the sag-compensated hover anchor
+        last_wait_print = 0.0
         try:
             while not stop["flag"]:
                 now = time.monotonic()
                 tick += 1
                 tel.poll(now, want_analog=(tick % int(args.hz) == 0), want_rc=(tick % 5 == 0))
+                if tel.vbat:
+                    vfilt = tel.vbat if vfilt is None else 0.98 * vfilt + 0.02 * tel.vbat
+
+                if t_start is None and staged and now - last_wait_print > 3.0:
+                    last_wait_print = now
+                    sw = tel.rc[ov_ch] if tel.rc is not None and len(tel.rc) > ov_ch else None
+                    print(f"waiting (idle throttle): override aux{override_rng['aux_idx'] + 1} = "
+                          f"{sw if sw is not None else 'no RC data yet'}")
 
                 if tel.rc is not None and len(tel.rc) > ov_ch:
                     ov_on = override_rng["lo_us"] <= tel.rc[ov_ch] <= override_rng["hi_us"]
@@ -439,11 +461,25 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     if t_air > args.seconds:  # ramp down: ease thrust action toward floor
                         k = (t_air - args.seconds) / ramp_s
                         act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
-                    us = action_to_us(act, args.hover_us, args.min_us, args.max_us,
+                    # Sag-compensated hover anchor: hover_us was measured at --vbat-ref; required
+                    # duty scales ~1/V, so re-anchor on the (filtered) live voltage. At 3.45 V the
+                    # calibrated 1410 is BELOW true hover — flight_1783276185 sank and bounced off
+                    # the floor on exactly this.
+                    comp = 1.0
+                    if args.vbat_ref > 0 and vfilt:
+                        comp = max(0.9, min(1.2, args.vbat_ref / vfilt))
+                    hover_eff = int(1000 + (args.hover_us - 1000) * comp)
+                    boost_us = int(1000 + (hover_eff - 1000) * math.sqrt(args.boost))
+                    us = action_to_us(act, hover_eff, args.min_us, args.max_us,
                                       args.trim_thrust)
                     if args.yaw == "center":
                         us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
-                    if t_start is not None and staged and t_fl < hold_s:
+                    if staged and t_start is None:
+                        # Waiting for the switch: stream IDLE, never the policy's hover throttle.
+                        # (Streaming ~1410 us while waiting meant an early/undetected override
+                        # flip sent the drone STRAIGHT UP — observed, ceiling included.)
+                        us = [1500, 1500, args.min_us, 1500]
+                    elif t_start is not None and staged and t_fl < hold_s:
                         # Countdown: props at idle (in hand for --launch, on the floor for --takeoff).
                         us = [1500, 1500, args.min_us, 1500]
                         remaining = int(hold_s - t_fl) + 1
@@ -472,7 +508,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                                      *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
-                                     *us, tel.vbat or ""])
+                                     *us, tel.vbat or "", hover_eff])
                 time.sleep(max(0.0, period - (time.monotonic() - now)))
         finally:
             fout.close()
@@ -486,6 +522,9 @@ def main() -> int:
     ap.add_argument("--udp", required=True, metavar="HOST[:PORT]", help="bridge address")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
     ap.add_argument("--hover-us", type=int, default=1410, help="bench-measured hover throttle (us)")
+    ap.add_argument("--vbat-ref", type=float, default=3.65,
+                    help="voltage at which --hover-us was measured; live vbat re-anchors the "
+                         "throttle map (duty ~ 1/V, comp clamped to [0.9, 1.2]); 0 disables")
     ap.add_argument("--trim-thrust", type=float, default=0.0, help="additive act[0] trim (bench-calibrated)")
     ap.add_argument("--min-us", type=int, default=1000)
     ap.add_argument("--max-us", type=int, default=1600, help="hard throttle ceiling for early flights")
