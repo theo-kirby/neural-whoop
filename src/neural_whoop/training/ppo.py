@@ -71,12 +71,37 @@ class PPOConfig:
     ckpt_interval_updates: int = 50
 
 
+_SQRT_2 = 2.0 ** 0.5
+_SQRT_2PI = (2.0 * torch.pi) ** 0.5
+
+
+def clipped_gaussian_mean(mean: Tensor, std: Tensor, lo: float = -1.0, hi: float = 1.0) -> Tensor:
+    """Closed-form ``E[clip(N(mean, std), lo, hi)]`` — the *effective* mean PPO optimizes.
+
+    Training samples ``Normal(mean, std)`` and the env clamps to ``[-1, 1]``, so the behavior
+    PPO's gradient sees is the clipped sample, not the raw mean. When the mean sits within ~2
+    std of a bound, the truncation shifts the effective mean away from it — deploying the raw
+    mean then reproduces a systematically different action (the hover_blind thrust-trim bias:
+    12% under hover, sink and floor-exit in ~4 s). All deterministic paths (eval, deploy
+    export, studio live) therefore deploy this expectation instead. Pure erf/exp — TorchScript
+    and ONNX (opset>=9) clean.
+    """
+    a = (lo - mean) / std
+    b = (hi - mean) / std
+    cdf_a = 0.5 * (1.0 + torch.erf(a / _SQRT_2))
+    cdf_b = 0.5 * (1.0 + torch.erf(b / _SQRT_2))
+    pdf_a = torch.exp(-0.5 * a * a) / _SQRT_2PI
+    pdf_b = torch.exp(-0.5 * b * b) / _SQRT_2PI
+    return lo * cdf_a + hi * (1.0 - cdf_b) + mean * (cdf_b - cdf_a) - std * (pdf_b - pdf_a)
+
+
 class ActorCritic(nn.Module):
     """TinyPolicy actor (Gaussian mean) + a small separate critic.
 
     The actor outputs an unbounded mean; actions are sampled from ``Normal(mean, exp(log_std))``
-    and clamped to ``[-1, 1]`` by the env (the deterministic export uses ``clip(mean)``). The
-    log-std is state-independent (a learned per-dim scalar), standard for on-policy locomotion.
+    and clamped to ``[-1, 1]`` by the env. The log-std is state-independent (a learned per-dim
+    scalar), standard for on-policy locomotion. Deterministic eval/deploy uses
+    :func:`clipped_gaussian_mean` (see there for why raw ``clip(mean)`` is biased).
     """
 
     def __init__(self, obs_dim: int, act_dim: int, cfg: PPOConfig):
@@ -96,6 +121,11 @@ class ActorCritic(nn.Module):
 
     def get_value(self, obs: Tensor) -> Tensor:
         return self.critic(obs).squeeze(-1)
+
+    def act_deterministic(self, obs: Tensor) -> Tensor:
+        """The deployment action: effective (clipped-Gaussian) mean, already in ``[-1, 1]``."""
+        mean = self.actor(obs)
+        return clipped_gaussian_mean(mean, self.log_std.exp().expand_as(mean))
 
     def get_action_and_value(self, obs: Tensor, action: Tensor | None = None):
         mean = self.actor(obs)

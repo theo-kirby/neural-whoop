@@ -1,10 +1,14 @@
 """Policy export: trained actor -> TorchScript / ONNX, the sim2real deploy path.
 
-The deployable policy is just the TinyPolicy actor with its action clamped to ``[-1, 1]`` (the
-deterministic action PPO uses at eval). This module lifts the trained actor into a clean,
-SB3-free, framework-free ``DeployPolicy`` module — pure ``Linear`` + activation + ``clamp`` —
-that TorchScripts and ONNX-exports cleanly and is quantization-ready for a flight controller.
-On hardware the same obs-v4 vector is fed in and the CTBR action comes out (rescaled by the
+The deployable policy is the TinyPolicy actor emitting the deterministic action PPO's eval
+uses: the **clipped-Gaussian effective mean** ``E[clip(N(mean, std))]`` with the trained
+per-channel std baked in as a constant (see
+:func:`~neural_whoop.training.ppo.clipped_gaussian_mean` — deploying the raw clamped mean is
+systematically biased on channels trained near a clip bound, the hover_blind thrust-trim
+sink). This module lifts the trained actor into a clean, SB3-free, framework-free
+``DeployPolicy`` module — pure ``Linear`` + activation + erf/exp — that TorchScripts and
+ONNX-exports cleanly and is quantization-ready for a flight controller. On hardware the same
+obs-v4 vector is fed in and the CTBR action comes out (rescaled by the
 :class:`~neural_whoop.contract.ActionLimits` the env used).
 """
 
@@ -14,23 +18,24 @@ import torch
 from torch import Tensor, nn
 
 from neural_whoop.policies.tiny_policy import TinyPolicy
-from neural_whoop.training.ppo import ActorCritic
+from neural_whoop.training.ppo import ActorCritic, clipped_gaussian_mean
 
 
 class DeployPolicy(nn.Module):
-    """Wraps the trained TinyPolicy actor with the deterministic ``clip`` output for deploy."""
+    """Trained TinyPolicy actor + the deterministic effective-mean output for deploy."""
 
-    def __init__(self, actor: TinyPolicy):
+    def __init__(self, actor: TinyPolicy, std: Tensor):
         super().__init__()
         self.net = actor.net  # share the trained Linear/activation stack
+        self.register_buffer("std", std.detach().clone())
 
     def forward(self, obs: Tensor) -> Tensor:
-        return torch.clamp(self.net(obs), -1.0, 1.0)
+        return clipped_gaussian_mean(self.net(obs), self.std)
 
 
 def build_deploy_policy(agent: ActorCritic) -> DeployPolicy:
     """Extract a :class:`DeployPolicy` from a trained :class:`ActorCritic`."""
-    return DeployPolicy(agent.actor).eval()
+    return DeployPolicy(agent.actor, agent.log_std.exp()).eval()
 
 
 def export_torchscript(policy: DeployPolicy, obs_dim: int, path: str) -> str:

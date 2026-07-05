@@ -48,8 +48,7 @@ def evaluate(
     gates = torch.zeros(env.n_drones, device=dev)
     task_sums: dict[str, torch.Tensor] = {}
     for _ in range(steps):
-        mean = agent.actor(obs)
-        action = mean.clamp(-1.0, 1.0) if deterministic else agent.get_action_and_value(obs)[0]
+        action = agent.act_deterministic(obs) if deterministic else agent.get_action_and_value(obs)[0]
         obs, reward, term, trunc, info = env.step(action)
         rew_sum += reward
         if "crashed" in info:
@@ -239,8 +238,7 @@ def evaluate_and_record(
     task_sums: dict[str, torch.Tensor] = {}
 
     for step in range(steps):
-        mean = agent.actor(obs)
-        action = mean.clamp(-1.0, 1.0) if deterministic else agent.get_action_and_value(obs)[0]
+        action = agent.act_deterministic(obs) if deterministic else agent.get_action_and_value(obs)[0]
         obs, reward, term, trunc, info = env.step(action)
 
         rew_sum += reward

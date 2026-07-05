@@ -1,0 +1,76 @@
+# hover_blind_air65_long: the ~1 h "how far can blind hover get" run (3.2B steps, 80x the 40M
+# baseline). Fork of hover_blind_air65.yaml; what differs and why:
+#   - total_steps 40M -> 3.2B, n_envs 4096 -> 8192 (~920k sps on the 5090 => ~58 min).
+#   - episode_len 500 -> 1500 (30 s): the 40M run exposed the open-loop thrust-trim as THE
+#     failure mode (clipped-Gaussian bias node still-bird-0492) — a 30 s horizon lets residual
+#     trim error integrate to floor exits *within* the episode, giving PPO a direct gradient
+#     against the sink; also matches the eval/survival-probe horizon.
+#   - deterministic eval/deploy now uses the clipped-Gaussian effective mean (the trim-bias
+#     fix in training/ppo.py + export.py), so eval numbers measure the deployable policy.
+# Everything else (reward, DR, airframe, net) identical to hover_blind_air65 on purpose.
+
+run:
+  name: hover_blind_air65_long
+
+task:
+  name: hover_blind
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 8192
+  seed: 0
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05      # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.01
+  action_latency_steps: 3      # ESP-bridge round trip lumped: 0-60 ms at 50 Hz
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.3
+  ckpt_interval_updates: 800

@@ -108,7 +108,7 @@ class LiveSession:
         """Advance one control step under the current disturbances; return a JSON frame dict."""
         torch = self._torch
         with torch.no_grad():
-            action = self.agent.actor(self.obs).clamp(-1.0, 1.0)
+            action = self.agent.act_deterministic(self.obs)
             # Inject the live wind (continuous) + any queued one-shot impulses BEFORE the dynamics
             # step so they're integrated this step and reflected in the returned pose/obs — the same
             # add_velocity/add_body_rate seam the policy trained against.

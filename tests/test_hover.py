@@ -121,6 +121,9 @@ def test_evaluate_metrics_survive_lockstep_truncation_boundary():
         def actor(self, obs):
             return torch.zeros(obs.shape[0], env.act_dim)
 
+        def act_deterministic(self, obs):
+            return self.actor(obs)
+
     m = evaluate(env, _ZeroAgent(), steps=10)  # 2 lockstep episodes exactly
     assert m["mean_pos_error"] > 0.05  # drones drift/fall: real error, not the post-reset zeros
     assert m["crash_rate_per_step"] == 0.0
