@@ -83,6 +83,13 @@ BF_MAX_RATE_YAW = math.radians(345.0)
 BOX_ARM = 0
 BOX_MSP_OVERRIDE = 50
 
+# MSP_RAW_IMU gyro scale. Betaflight's gyroRateDps() (sensors/gyro_init.c) returns
+# gyroADCf / rawSensorDev->scale — i.e. the FILTERED rate converted back to raw LSB units,
+# 16.384 LSB per deg/s on a +-2000 dps gyro. Confirmed empirically from flight_1783271742:
+# the crash-tumble railed at |31527| raw = 1924 dps ~= the sensor's 2000 dps full scale.
+# (First two flights fed the policy rates 16.4x real -> constant overreaction -> climb.)
+GYRO_RAW_TO_DPS = 2000.0 / 32768.0
+
 _SQRT2 = math.sqrt(2.0)
 _SQRT2PI = math.sqrt(2.0 * math.pi)
 
@@ -126,7 +133,7 @@ class Policy:
 
 
 def obs_from_msp(att: dict, imu: dict) -> list[float]:
-    """[roll, pitch, p, q, r] in sim convention from MSP attitude (deg) + gyro (deg/s).
+    """[roll, pitch, p, q, r] in sim convention from MSP attitude (deg) + gyro (raw LSB).
 
     Signs are EMPIRICAL for this Air65 II stack (2026-07-05: hand-pose check + manual-flight
     command/attitude correlation, 87:1 roll / 57:3 pitch): this board reports nose-down as
@@ -137,10 +144,10 @@ def obs_from_msp(att: dict, imu: dict) -> list[float]:
     """
     roll = math.radians(att["roll_deg"])           # + = roll right (matches sim)
     pitch = math.radians(att["pitch_deg"])         # + = nose down on this board (matches sim)
-    gx, gy, gz = imu["gyro_raw"]
-    p = math.radians(float(gx))                    # + = roll-right rate (check-verified)
-    q = math.radians(float(gy))                    # + = nose-down rate (event-verified)
-    r = -math.radians(float(gz))                   # assumed gz+ = yaw right; UNVERIFIED
+    gx, gy, gz = (v * GYRO_RAW_TO_DPS for v in imu["gyro_raw"])  # raw LSB -> deg/s
+    p = math.radians(gx)                           # + = roll-right rate (check-verified)
+    q = math.radians(gy)                           # + = nose-down rate (event-verified)
+    r = -math.radians(gz)                          # assumed gz+ = yaw right; UNVERIFIED
     return [roll, pitch, p, q, r]
 
 

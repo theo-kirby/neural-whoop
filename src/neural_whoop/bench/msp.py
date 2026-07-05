@@ -123,9 +123,10 @@ def decode_attitude(payload: bytes) -> dict:
 def decode_raw_imu(payload: bytes) -> dict:
     """MSP_RAW_IMU: 9 int16 — acc[3], gyro[3], mag[3], in RAW device units.
 
-    Scale factors are gyro/acc-config dependent (acc ≈ 1/512 g, gyro ≈ deg/s on modern BF, but
-    do not trust these unverified) — the bench workflow records raw ints and calibrates against
-    Configurator readings; see docs/SIM2REAL.md Stage 0.
+    Gyro scale VERIFIED (source + flight data, 2026-07-05): Betaflight's gyroRateDps()
+    returns gyroADCf / rawSensorDev->scale — the filtered rate in raw LSB units, 16.384
+    LSB per deg/s on a +-2000 dps gyro (deg/s = raw * 2000/32768). It is NOT deg/s.
+    Acc stays config-dependent lore; see docs/SIM2REAL.md Stage 0.
     """
     v = struct.unpack("<9h", payload[:18])
     return {"acc_raw": v[0:3], "gyro_raw": v[3:6], "mag_raw": v[6:9]}
