@@ -83,6 +83,20 @@ BF_MAX_RATE_YAW = math.radians(345.0)
 BOX_ARM = 0
 BOX_MSP_OVERRIDE = 50
 
+# Acc-z climb damper. Open-loop thrust-from-voltage failed honestly: a fresh pack and a tired
+# pack both read ~3.65-3.7 V UNDER LOAD yet the same 1410 us climbs to the ceiling on one and
+# sinks to the floor on the other (flights 1783278136 vs 1783276185). So close the loop with
+# the accelerometer instead: acc-z at rest during the countdown IS 1 g (self-calibrating, no
+# scale lore), vertical specific force integrates to a leak-filtered climb-rate estimate, and
+# a proportional thrust trim damps it. The leak (tau below) bounds acc-bias drift; this is a
+# DAMPER, not an altitude hold — it turns the blind policy's altitude random walk into a
+# strongly damped one, and also arrests the leftover takeoff-boost climb after handoff.
+VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift)
+VZ_TRIM_CAP = 0.15   # act[0] units (0.15 -> +-0.3 g of P authority)
+VZ_TRIM_KI = 0.10    # integral gain: absorbs constant thrust bias (P alone leaves a
+VZ_ITRIM_CAP = 0.12  # steady 0.2+ m/s climb at +7% bias -> ceiling in ~10 s; simulated
+#                      P+I with these gains peaks at ~0.8 m and settles level)
+
 # Ground-takeoff profile (--takeoff): spool fast through the on-ground sub-hover zone (a
 # skittering half-throttle whoop tips over), hold a boost above hover to actually climb —
 # exactly 1.0x hover just sits light on its wheels (flights 1783273972/92 proved it: 5 s
@@ -309,7 +323,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
     writer = csv.writer(fout)
     writer.writerow(["t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
                      "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
-                     "vbat", "hover_eff"])
+                     "vbat", "hover_eff", "vz_est", "trim"])
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
@@ -395,6 +409,12 @@ def cmd_fly(args: argparse.Namespace) -> int:
         bad_att_since = None  # crash detector: sustained extreme attitude -> cut + release
         vfilt = None          # slow-EMA vbat for the sag-compensated hover anchor
         last_wait_print = 0.0
+        az_cal: list[int] = []   # countdown acc-z samples (drone at rest -> 1 g reference)
+        az_ref = None
+        vz = 0.0                 # leak-filtered climb-rate estimate (m/s, + = up)
+        thr_trim = 0.0
+        i_trim = 0.0             # integral trim: absorbs the pack's constant thrust bias
+        t_last_fresh = None
         try:
             while not stop["flag"]:
                 now = time.monotonic()
@@ -457,6 +477,31 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             break
                     else:
                         bad_att_since = None
+                    # Acc-z climb damper (see VZ_* constants). Calibrate the 1 g reference while
+                    # the drone rests through the countdown; integrate from spool start so the
+                    # takeoff boost's climb rate is known — and damped — at handoff.
+                    acc_z = tel.imu["acc_raw"][2]
+                    if t_start is not None and staged and t_fl < hold_s:
+                        if t_fl > 0.5:
+                            az_cal.append(acc_z)
+                    elif az_ref is None and len(az_cal) >= 20:
+                        tail = az_cal[len(az_cal) // 4:]
+                        ref = sum(tail) / len(tail)
+                        if abs(ref) > 100:
+                            az_ref = ref
+                            print(f"  acc 1g = {az_ref:.0f} raw ({len(az_cal)} rest samples) "
+                                  f"— climb damper armed (gain {args.vz_gain})")
+                    if (az_ref is not None and args.vz_gain > 0
+                            and t_start is not None and t_fl >= hold_s):
+                        dt = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
+                        a_vert = (acc_z / az_ref * math.cos(o[0]) * math.cos(o[1]) - 1.0) * 9.81
+                        vz = (vz + a_vert * dt) * math.exp(-dt / VZ_LEAK_TAU)
+                        if t_air <= args.seconds:  # freeze during ramp-down (intentional descent)
+                            i_trim = max(-VZ_ITRIM_CAP,
+                                         min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
+                        thr_trim = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz)) + i_trim
+                    t_last_fresh = now
+
                     act = pol(o)
                     if t_air > args.seconds:  # ramp down: ease thrust action toward floor
                         k = (t_air - args.seconds) / ramp_s
@@ -471,7 +516,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     hover_eff = int(1000 + (args.hover_us - 1000) * comp)
                     boost_us = int(1000 + (hover_eff - 1000) * math.sqrt(args.boost))
                     us = action_to_us(act, hover_eff, args.min_us, args.max_us,
-                                      args.trim_thrust)
+                                      args.trim_thrust + thr_trim)
                     if args.yaw == "center":
                         us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
                     if staged and t_start is None:
@@ -508,7 +553,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                                      *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
-                                     *us, tel.vbat or "", hover_eff])
+                                     *us, tel.vbat or "", hover_eff,
+                                     f"{vz:.3f}", f"{thr_trim:+.4f}"])
                 time.sleep(max(0.0, period - (time.monotonic() - now)))
         finally:
             fout.close()
@@ -550,6 +596,9 @@ def main() -> int:
                      help="hand-launch flow: after the override switch, idle countdown, throttle "
                           "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
+    fly.add_argument("--vz-gain", type=float, default=0.15,
+                     help="acc-z climb damper gain (act[0] per m/s of estimated climb); "
+                          "0 disables")
     fly.add_argument("--aux", type=int, default=None, metavar="N",
                      help="override-switch aux channel number (1-4); normally auto-detected "
                           "from the FC's MSP OVERRIDE mode range")
