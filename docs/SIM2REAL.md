@@ -54,6 +54,13 @@ Prove the CTBR seam in isolation. Needs only the drone + USB.
 - Measure real rate step-response (vs `K_angvel=[16,16,8]`), hover throttle, thrust curve / TWR, mass, inertia.
 - **Output:** re-centered Air65 II airframe DR + matched controller constants in `dynamics/whoop.py`.
 
+**Bench ladder complete over the WiFi bridge (2026-07-05, branch B live):** `info` (BTFL
+2026.6.0), `latency` (median **2.41 ms**, p99 24 ms — ~100× inside the 300 ms freshness
+window), `rc-test` (override seam proven; **MSP_SET_RAW_RC is AETR wire order**, rcData reads
+RPYT — see `bench/msp.py`), `motor-test` (indices 0–3 = RR, FR, RL, FL, standard quad-X).
+Commits `da0e37a`, `3c5e2bb`. Still open here: rate-curve calibration, step-response/thrust
+measurements, and the `msp_override_failsafe` decision.
+
 ### Stage 1 — Perception + velocity pipeline (offboard, bench/handheld)
 - Analog VRX → USB capture → gate detector → body-frame target vector; measure detector noise → fold into `DetectorNoise`.
 - Flow deck → host-side flow+ToF→velocity estimator; measure error → new flow-velocity DR seam.
