@@ -311,12 +311,20 @@ def cmd_fly(args: argparse.Namespace) -> int:
         aux_base = None
         switch_idx = None
         t_start = None
-        print(f"streaming... FLIP THE OVERRIDE SWITCH to start the {args.seconds}s flight window "
-              "(keep your throttle stick at hover for the handback!)")
+        hold_s = args.hold_seconds if args.launch else 0.0
+        ramp_in_s = 0.5 if args.launch else 0.0
+        if args.launch:
+            print(f"HAND-LAUNCH mode: hold the drone (grip the duct, fingers clear), ARM on the "
+                  f"Pocket, flip the OVERRIDE SWITCH — then a {hold_s:.0f}s low-throttle countdown, "
+                  f"and RELEASE at 'GO'. After the flight it ramps down and settles: DISARM then.")
+        else:
+            print(f"streaming... FLIP THE OVERRIDE SWITCH to start the {args.seconds}s flight window "
+                  "(keep your throttle stick at hover for the handback!)")
 
         n_sent = n_stale = 0
         worst_age = 0.0
         tick = 0
+        last_countdown = -1
         try:
             while not stop["flag"]:
                 now = time.monotonic()
@@ -341,7 +349,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
                         break
 
                 t_fl = (now - t_start) if t_start is not None else 0.0
-                if t_start is not None and t_fl >= args.seconds + ramp_s:
+                t_air = t_fl - hold_s - ramp_in_s  # airborne time (launch phases excluded)
+                if t_start is not None and t_air >= args.seconds + ramp_s:
                     break
                 age = tel.obs_age(now)
                 worst_age = max(worst_age, min(age, 9.9))
@@ -354,13 +363,27 @@ def cmd_fly(args: argparse.Namespace) -> int:
                 else:
                     o = tel.obs()
                     act = pol(o)
-                    if t_fl > args.seconds:  # ramp down: ease thrust action toward floor
-                        k = (t_fl - args.seconds) / ramp_s
+                    if t_air > args.seconds:  # ramp down: ease thrust action toward floor
+                        k = (t_air - args.seconds) / ramp_s
                         act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
                     us = action_to_us(act, args.hover_us, args.min_us, args.max_us,
                                       args.trim_thrust)
                     if args.yaw == "center":
                         us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
+                    if t_start is not None and args.launch and t_fl < hold_s:
+                        # Countdown phase: props at idle, level rates, drone still in hand.
+                        us = [1500, 1500, args.min_us, 1500]
+                        remaining = int(hold_s - t_fl) + 1
+                        if remaining != last_countdown:
+                            last_countdown = remaining
+                            print(f"  release in {remaining}...")
+                    elif t_start is not None and args.launch and t_fl < hold_s + ramp_in_s:
+                        # Ramp-in: blend throttle from idle to the policy's command.
+                        if last_countdown != 0:
+                            last_countdown = 0
+                            print("  GO — release!")
+                        k = (t_fl - hold_s) / ramp_in_s
+                        us[2] = int(args.min_us + (us[2] - args.min_us) * k)
                     stream_rc(fc, us)
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
@@ -392,6 +415,10 @@ def main() -> int:
     fly.add_argument("--yaw", choices=["center", "policy"], default="center",
                      help="yaw channel: center (1500, FC damps yaw; default until the yaw sign "
                           "is verified) or policy")
+    fly.add_argument("--launch", action="store_true",
+                     help="hand-launch flow: after the override switch, hold throttle at idle for "
+                          "--hold-seconds with a countdown, ramp the policy in, release at GO")
+    fly.add_argument("--hold-seconds", type=float, default=3.0)
     fly.add_argument("--log", default=None)
     fly.add_argument("--ack-props-on", action="store_true")
     args = ap.parse_args()
