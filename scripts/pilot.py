@@ -55,11 +55,13 @@ from neural_whoop.bench.msp import (  # noqa: E402
     MSP_ANALOG,
     MSP_ATTITUDE,
     MSP_RAW_IMU,
+    MSP_RC,
     MSP_SET_RAW_RC,
     MspUdpClient,
     decode_analog,
     decode_attitude,
     decode_raw_imu,
+    decode_u16s,
     pack_rc_channels,
 )
 
@@ -169,14 +171,18 @@ class Telemetry:
         self.att: dict | None = None
         self.imu: dict | None = None
         self.vbat: float | None = None
+        self.rc: tuple[int, ...] | None = None
         self.t_att = 0.0
         self.t_imu = 0.0
+        self.t_rc = 0.0
 
-    def poll(self, now: float, want_analog: bool = False) -> None:
+    def poll(self, now: float, want_analog: bool = False, want_rc: bool = False) -> None:
         self.fc.send(MSP_ATTITUDE)
         self.fc.send(MSP_RAW_IMU)
         if want_analog:
             self.fc.send(MSP_ANALOG)
+        if want_rc:
+            self.fc.send(MSP_RC)
         frames = []
         for _ in range(32):  # drain the socket dry (non-blocking)
             got = self.fc._drain()
@@ -192,6 +198,8 @@ class Telemetry:
                 self.imu, self.t_imu = decode_raw_imu(frame.payload), now
             elif frame.cmd == MSP_ANALOG and len(frame.payload) >= 7:
                 self.vbat = decode_analog(frame.payload)["vbat_v"]
+            elif frame.cmd == MSP_RC and len(frame.payload) >= 16:
+                self.rc, self.t_rc = decode_u16s(frame.payload), now
 
     def obs_age(self, now: float) -> float:
         if self.att is None or self.imu is None:
@@ -294,19 +302,47 @@ def cmd_fly(args: argparse.Namespace) -> int:
             time.sleep(0.02)
             if time.monotonic() - t0 > 5.0:
                 sys.exit("no telemetry from the bridge — is the battery in and the LED blinking?")
-        print(f"telemetry live (vbat {tel.vbat or 0:.2f} V). Flying {args.seconds}s at {args.hz} Hz."
-              f" hover_us={args.hover_us} trim={args.trim_thrust:+.4f}. Ctrl+C = instant release.")
+        print(f"telemetry live (vbat {tel.vbat or 0:.2f} V). hover_us={args.hover_us} "
+              f"trim={args.trim_thrust:+.4f} yaw={args.yaw}. Ctrl+C = instant release.")
 
-        t_start = time.monotonic()
+        # Snapshot aux channels (rcData[4:8], straight from the radio — the mask never overrides
+        # aux), then stream and wait for one to flip low->high: that's the override switch, and
+        # it starts the flight clock. The same channel dropping mid-flight = manual takeover.
+        aux_base = None
+        switch_idx = None
+        t_start = None
+        print(f"streaming... FLIP THE OVERRIDE SWITCH to start the {args.seconds}s flight window "
+              "(keep your throttle stick at hover for the handback!)")
+
         n_sent = n_stale = 0
         worst_age = 0.0
+        tick = 0
         try:
             while not stop["flag"]:
                 now = time.monotonic()
-                t_fl = now - t_start
-                if t_fl >= args.seconds + ramp_s:
+                tick += 1
+                tel.poll(now, want_analog=(tick % int(args.hz) == 0), want_rc=(tick % 5 == 0))
+
+                if tel.rc is not None and len(tel.rc) >= 8:
+                    aux = tel.rc[4:8]
+                    if aux_base is None:
+                        aux_base = aux
+                        print(f"aux baseline {list(aux)} — the override switch must start OFF "
+                              "(if it's already on, flip it off, then on)")
+                    if switch_idx is None:
+                        for i in range(4):
+                            if aux_base[i] < 1300 and aux[i] > 1700:
+                                switch_idx = i
+                                t_start = now
+                                print(f"\noverride ON (aux{i + 1}) -> policy flying")
+                                break
+                    elif aux[switch_idx] < 1300:
+                        print("\noverride switch OFF -> manual takeover, releasing")
+                        break
+
+                t_fl = (now - t_start) if t_start is not None else 0.0
+                if t_start is not None and t_fl >= args.seconds + ramp_s:
                     break
-                tel.poll(now, want_analog=(n_sent % args.hz == 0))
                 age = tel.obs_age(now)
                 worst_age = max(worst_age, min(age, 9.9))
                 if age > args.max_obs_age:
