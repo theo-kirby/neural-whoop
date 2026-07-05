@@ -116,13 +116,21 @@ class Policy:
 
 
 def obs_from_msp(att: dict, imu: dict) -> list[float]:
-    """[roll, pitch, p, q, r] in sim convention from MSP attitude (deg) + gyro (deg/s)."""
-    roll = math.radians(att["roll_deg"])           # roll: same sign
-    pitch = -math.radians(att["pitch_deg"])        # BF nose-up+  -> sim nose-down+
+    """[roll, pitch, p, q, r] in sim convention from MSP attitude (deg) + gyro (deg/s).
+
+    Signs are EMPIRICAL for this Air65 II stack (2026-07-05: hand-pose check + manual-flight
+    command/attitude correlation, 87:1 roll / 57:3 pitch): this board reports nose-down as
+    POSITIVE on both attitude pitch and gyro y — same as the sim convention — so pitch takes
+    no flip (the textbook BF nose-up+ convention does NOT hold here). Yaw (r = -gz) is the
+    one remaining doc-derived sign: verify via the clockwise-spin check before trusting
+    policy yaw (fly defaults to --yaw center for exactly this reason).
+    """
+    roll = math.radians(att["roll_deg"])           # + = roll right (matches sim)
+    pitch = math.radians(att["pitch_deg"])         # + = nose down on this board (matches sim)
     gx, gy, gz = imu["gyro_raw"]
-    p = math.radians(float(gx))
-    q = -math.radians(float(gy))
-    r = -math.radians(float(gz))
+    p = math.radians(float(gx))                    # + = roll-right rate (check-verified)
+    q = math.radians(float(gy))                    # + = nose-down rate (event-verified)
+    r = -math.radians(float(gz))                   # assumed gz+ = yaw right; UNVERIFIED
     return [roll, pitch, p, q, r]
 
 
@@ -137,8 +145,12 @@ def action_to_us(act: list[float], hover_us: int, min_us: int, max_us: int,
     wx = act[1] * SIM_MAX_RATE_RP                          # sim rad/s
     wy = act[2] * SIM_MAX_RATE_RP
     wz = act[3] * SIM_MAX_RATE_YAW
-    roll_us = 1500.0 + 500.0 * max(-1.0, min(1.0, wx / BF_MAX_RATE_RP))    # same sign
-    pitch_us = 1500.0 + 500.0 * max(-1.0, min(1.0, -wy / BF_MAX_RATE_RP))  # sim nose-down+ -> BF nose-up+
+    # Command signs: EMPIRICAL from the manual-flight rcData/attitude correlation (see
+    # obs_from_msp) — on this setup channel-high = roll right AND nose DOWN (pitch takes no
+    # flip, mirroring the telemetry convention). Yaw is doc-derived and unverified; fly
+    # streams 1500 there unless --yaw policy.
+    roll_us = 1500.0 + 500.0 * max(-1.0, min(1.0, wx / BF_MAX_RATE_RP))    # + = roll right
+    pitch_us = 1500.0 + 500.0 * max(-1.0, min(1.0, wy / BF_MAX_RATE_RP))   # + = nose down
     yaw_us = 1500.0 + 500.0 * max(-1.0, min(1.0, -wz / BF_MAX_RATE_YAW))   # sim nose-left+ -> BF nose-right+
     return [int(roll_us), int(pitch_us), thr_us, int(yaw_us)]
 
@@ -216,15 +228,24 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         us = action_to_us(pol([0.0] * pol.obs_dim), args.hover_us, args.min_us, args.max_us)
         print(f"level-still command @ hover_us={args.hover_us}: AETR {us} "
               f"(throttle should be ~{args.hover_us})")
+        # Closed-loop direction sanity through the FULL conversion chain (empirical signs):
+        nose_down = action_to_us(pol([0.0, 0.2, 0, 0, 0]), args.hover_us, args.min_us, args.max_us)
+        tilt_right = action_to_us(pol([0.2, 0, 0, 0, 0]), args.hover_us, args.min_us, args.max_us)
+        dir_ok = nose_down[1] < 1500 and tilt_right[0] < 1500
+        print(f"nose-down obs -> pitch_us {nose_down[1]} (<1500 = nose-up correction); "
+              f"tilt-right obs -> roll_us {tilt_right[0]} (<1500 = roll-left correction) "
+              f"-> {'OK' if dir_ok else 'FAIL'}")
+        ok = ok and dir_ok
     return 0 if ok else 1
 
 
 def cmd_check(args: argparse.Namespace) -> int:
     pol = Policy(args.weights)
-    print("PROPS OFF check: hand-tilt the drone and verify the corrections:")
-    print("  tilt RIGHT      -> roll_us < 1500 (commands roll-left)")
-    print("  tilt NOSE DOWN  -> pitch_us > 1500 (commands nose-up)")
-    print("  level & still   -> throttle ~ hover_us, roll/pitch/yaw ~ 1500")
+    print("PROPS OFF check: hand-move the drone and verify (signs per the 2026-07-05 calibration):")
+    print("  tilt RIGHT              -> roll(sim) positive,  roll_us  < 1500 (roll-left correction)")
+    print("  tilt NOSE DOWN          -> pitch(sim) POSITIVE, pitch_us < 1500 (nose-up correction)")
+    print("  spin CLOCKWISE (top)    -> 3rd gyro number NEGATIVE  (verifies the yaw sign; report it!)")
+    print("  level & still           -> throttle ~ hover_us, roll/pitch/yaw ~ 1500")
     print("Ctrl+C to stop. Nothing is streamed to the FC in this mode.\n")
     with MspUdpClient(args.udp_host, args.udp_port) as fc:
         tel = Telemetry(fc)
@@ -302,6 +323,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
                         act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
                     us = action_to_us(act, args.hover_us, args.min_us, args.max_us,
                                       args.trim_thrust)
+                    if args.yaw == "center":
+                        us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
                     stream_rc(fc, us)
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
@@ -330,6 +353,9 @@ def main() -> int:
     fly.add_argument("--seconds", type=float, default=15.0)
     fly.add_argument("--hz", type=float, default=50.0)
     fly.add_argument("--max-obs-age", type=float, default=0.25, help="stale-obs watchdog (s)")
+    fly.add_argument("--yaw", choices=["center", "policy"], default="center",
+                     help="yaw channel: center (1500, FC damps yaw; default until the yaw sign "
+                          "is verified) or policy")
     fly.add_argument("--log", default=None)
     fly.add_argument("--ack-props-on", action="store_true")
     args = ap.parse_args()
