@@ -130,6 +130,11 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 - **Sim2real basis:** THE first-flight task for sim2real branch B while the flow deck is unfitted.
   Attitude stabilization + tumble recovery are fully observable and closed-loop; altitude/position
   are physically open-loop (see task docstring) — deploys via `scripts/pilot.py`, tethered.
+- **Baseline (40M, 2026-07-05):** no-DR tilt **1.14°** (attitude solved); but the raw deterministic
+  trim is 12% low (clipped-Gaussian exploration bias — see SIM2REAL Stage 0.5) → steady sink,
+  floor-exit median 4 s. One scalar trim (+0.0616 on act[0]) → pure-hold 30 s survival 0→**100%**
+  no-DR. Deployment MUST bench-calibrate thrust trim; no constant trim survives full thrust/mass DR
+  (open-loop physics).
 
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.

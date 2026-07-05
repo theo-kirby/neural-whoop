@@ -61,7 +61,26 @@ RPYT — see `bench/msp.py`), `motor-test` (indices 0–3 = RR, FR, RL, FL, stan
 Commits `da0e37a`, `3c5e2bb`. Still open here: rate-curve calibration, step-response/thrust
 measurements, and the `msp_override_failsafe` decision.
 
-### Stage 1 — Perception + velocity pipeline (offboard, bench/handheld)
+### Stage 0.5 — `hover_blind` IMU-only first flight (no flow deck)
+
+`hover_blind_air65` trained (40M steps, 2026-07-05): attitude stabilization is excellent
+(**1.14° mean tilt, no-DR**), but the trained checkpoint exposed a transferable pitfall —
+**deterministic-eval thrust trim is ~12% below hover** (act[0] −0.562 vs the analytic hover
+−0.500), so a pure-hold spawn sinks at ~0.35 m/s and floor-exits in median 4 s. Cause
+(arithmetically confirmed): **clipped-Gaussian exploration bias** — PPO optimizes the *sampled*
+policy, and with final thrust σ=0.478 the clamp at −1 raises the effective sampled mean to
+−0.515 ≈ hover; deterministic deployment strips the noise and reveals the low mean. The parent
+`hover` masks the same bias via velocity feedback; any *open-loop* channel level learned through
+clamped Gaussian exploration will be biased at deterministic deployment.
+
+**Consequence for deployment (pilot.py): a thrust-trim calibration step is MANDATORY, not
+optional.** A single scalar trim (+0.0616 on act[0], zeroing v_z at nominal) takes pure-hold
+30 s survival from **0% → 100% (no-DR)**. Under full DR no constant trim survives (91% crash
+within 30 s) — that is open-loop physics (±5% thrust × ±7% mass), and it is exactly why the
+bench-measured hover throttle (~1410 µs @ 3.6–3.7 V) must anchor the real trim: on the bench,
+trim until the commanded hover matches true hover, then fly the policy around that anchor.
+Longer-term training-side fixes: tanh-squashed action head (no clip bias) or deploying the
+effective-mean correction E[clip(N(μ,σ))] per channel.
 - Analog VRX → USB capture → gate detector → body-frame target vector; measure detector noise → fold into `DetectorNoise`.
 - Flow deck → host-side flow+ToF→velocity estimator; measure error → new flow-velocity DR seam.
 - Measure full end-to-end latency → widen `action_latency` DR.
