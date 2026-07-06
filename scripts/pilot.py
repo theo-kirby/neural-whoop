@@ -92,13 +92,16 @@ BOX_MSP_OVERRIDE = 50
 # DAMPER, not an altitude hold — it turns the blind policy's altitude random walk into a
 # strongly damped one, and also arrests the leftover takeoff-boost climb after handoff.
 VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift)
-VZ_TRIM_CAP = 0.15   # act[0] units (0.15 -> +-0.3 g of P authority)
+VZ_TRIM_CAP = 0.12   # act[0] units of P authority
 VZ_TRIM_KI = 0.15    # integral gain: absorbs the pack's constant thrust bias (P alone is
-VZ_ITRIM_CAP = 0.20  # DC-blind past the leak). Sim: +15% pack bias peaks 1.1 m and holds.
-VZ_CLAMP = 3.0       # m/s; a whoop indoors doesn't do more — beyond this the estimate is lying
-VZ_TILT_LIMIT = math.radians(45.0)  # beyond this the cos-tilt correction + collision accels
-#                     poison the estimate (flights 1783280676/65: ceiling strike -> pitch -73,
-#                     vz "-10 m/s", trim pinned +, throttle 1600 while sideways). Freeze there.
+VZ_ITRIM_CAP = 0.12  # DC-blind past the leak)
+VZ_TRIM_TOTAL = 0.18  # hard cap on P+I together. Flight 1783324924: a tilt-poisoned estimate
+#                      pinned the old 0.35 total for 14 s and FLEW the drone; the learned
+#                      anchor is now good to ~5%, so the damper only needs gentle authority.
+VZ_ITRIM_LEAK_TAU = 10.0  # s; a poisoned integrator must find its own way back to neutral
+VZ_CLAMP = 2.0       # m/s; a whoop indoors doesn't do more — beyond this the estimate is lying
+VZ_TILT_LIMIT = math.radians(25.0)  # cos-tilt math reads sustained wobble as phantom descent
+#                     (1783324924: roll +-30-60 deg -> vz "-3 m/s" for 14 s). Freeze early.
 
 # Ground-takeoff (--takeoff): SEEK, don't assume. A fixed boost anchored to --hover-us shot
 # every fresh-pack flight straight into the ceiling (flights 1783323895/910/928: "1.18x" of
@@ -337,7 +340,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
     writer = csv.writer(fout)
     writer.writerow(["t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
                      "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
-                     "vbat", "hover_eff", "vz_est", "trim"])
+                     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z"])
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
@@ -424,6 +427,10 @@ def cmd_fly(args: argparse.Namespace) -> int:
         last_wait_print = 0.0
         az_cal: list[int] = []   # countdown acc-z samples (drone at rest -> 1 g reference)
         az_ref = None
+        lvl_cal: list[tuple] = []  # countdown roll/pitch samples (resting on the floor -> LEVEL)
+        lvl = (0.0, 0.0)         # attitude bias to subtract: the FC read roll +3.5 / pitch +2.5
+        #                          at rest (mount bias); the policy holding that "level" is a
+        #                          constant ~0.5 m/s^2 lateral push -> wall (flight 1783324924)
         vz = 0.0                 # leak-filtered climb-rate estimate (m/s, + = up)
         thr_trim = 0.0
         i_trim = 0.0             # integral trim: absorbs the pack's constant thrust bias
@@ -501,6 +508,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     if t_start is not None and staged and t_fl < hold_s:
                         if t_fl > 0.5:
                             az_cal.append(acc_z)
+                            if args.takeoff:  # resting on the floor: this attitude IS level
+                                lvl_cal.append((o[0], o[1]))
                     elif az_ref is None and len(az_cal) >= 20:
                         tail = az_cal[len(az_cal) // 4:]
                         ref = sum(tail) / len(tail)
@@ -508,6 +517,16 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             az_ref = ref
                             print(f"  acc 1g = {az_ref:.0f} raw ({len(az_cal)} rest samples) "
                                   f"— climb damper armed (gain {args.vz_gain})")
+                        if lvl_cal:
+                            n = len(lvl_cal)
+                            tail_l = lvl_cal[n // 4:]
+                            lvl = (sum(v[0] for v in tail_l) / len(tail_l),
+                                   sum(v[1] for v in tail_l) / len(tail_l))
+                            print(f"  level reference: roll {math.degrees(lvl[0]):+.1f} / "
+                                  f"pitch {math.degrees(lvl[1]):+.1f} deg (floor-rest bias, "
+                                  "subtracted from the policy's view)")
+                    if lvl != (0.0, 0.0):
+                        o = [o[0] - lvl[0], o[1] - lvl[1], o[2], o[3], o[4]]
                     if (az_ref is not None and args.vz_gain > 0
                             and t_start is not None and t_fl >= hold_s):
                         dt = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
@@ -522,7 +541,9 @@ def cmd_fly(args: argparse.Namespace) -> int:
                                              min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
                         else:
                             vz *= math.exp(-dt / VZ_LEAK_TAU)  # tilted: no new evidence, decay
-                        thr_trim = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz)) + i_trim
+                        i_trim *= math.exp(-dt / VZ_ITRIM_LEAK_TAU)  # poisoned I self-heals
+                        p_term = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz))
+                        thr_trim = max(-VZ_TRIM_TOTAL, min(VZ_TRIM_TOTAL, p_term + i_trim))
                     t_last_fresh = now
 
                     act = pol(o)
@@ -590,7 +611,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                                      *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
                                      *us, tel.vbat or "", hover_eff,
-                                     f"{vz:.3f}", f"{thr_trim:+.4f}"])
+                                     f"{vz:.3f}", f"{thr_trim:+.4f}", *tel.imu["acc_raw"]])
                 time.sleep(max(0.0, period - (time.monotonic() - now)))
         finally:
             fout.close()
