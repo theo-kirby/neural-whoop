@@ -140,10 +140,20 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   pure-hold 30 s survival **91%** no-DR (0.087 crash), drift speed 0.069 m/s, tilt 1.68°. THE
   first-flight checkpoint; exports are deployment-correct as-is.
 
-### ✅ `hover_blind_v2` — noise-hardened blind hover + a leaky climb-rate channel (2026-07-06)
-- **Metric:** same as `hover_blind`; acceptance vs the `hover_blind_air65_long` baseline (tilt
-  1.68°, drift 0.069 m/s, 91% 30 s survival no-DR) is no-DR 30 s survival ≥ 95%, mean_tilt ≤ 2.5°,
-  mean_speed ≤ 0.07 — and under the honest DR it must clearly dominate the old policy cross-evaled.
+### ❌ `hover_blind_v2` — noise-hardened blind hover + a leaky climb-rate channel (2026-07-06, REFUTED)
+- **Result (RED, Flywheel `muddy-hill-9397`):** the three-way 3.2B-step sweep is **refuted**. All
+  three arms (flagship / `_novz` / `_noiseonly`) **sink to the floor** — no-DR pure-hold 30 s
+  survival **0.0%** vs the baseline's 91.6% — despite *better* attitude (no-DR tilt 0.69–1.96°).
+  The honest 2.5 rad/s gyro-noise DR (isolated by `_noiseonly`, which keeps the baseline reward and
+  drops vz yet still sinks) **re-breaks the open-loop vertical trim** the baseline had solved; the
+  reward steepening and the vz channel only *shorten* the sink (median exit 3.98→2.74→1.70 s). The
+  vz channel did not rescue altitude — its input carries the honest ±1.5 m/s DC bias, so the leaky
+  acc-integrated estimate is unusable. **Verdict: more DR is the wrong lever; blind IMU-only vertical
+  hover needs the flow deck (real closed-loop velocity).** `cold-night-8900` (`hover_blind_air65_long`)
+  remains the first-flight checkpoint of record; the exported `hover_blind_air65_v2` deploy JSONs
+  carry a sinking trim — do not deploy. `scripts/survival_probe.py` (committed) is the metric.
+- **Metric:** same as `hover_blind`; the acceptance bar (no-DR 30 s survival ≥ 95%, mean_tilt ≤ 2.5°,
+  mean_speed ≤ 0.07, dominate the old policy under honest DR) was **not met** — survival regressed to 0%.
 - **Obs/oracle:** **[roll, pitch, p, q, r, vz_est]** (6) × `obs_stack 3` (deployed input 18).
   `vz_est` simulates the deployed pilot's leaky acc-integrated climb-rate estimate exactly
   (leak τ 4 s, clamp ±2 m/s, decay-only past 25° tilt — `scripts/pilot.py`'s VZ_* constants);

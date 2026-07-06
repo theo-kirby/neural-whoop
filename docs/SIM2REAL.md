@@ -112,6 +112,19 @@ governor fight over the biased vz estimate), so `hover_blind_v2` feeds the pilot
 to the policy as obs channel 6 and the pilot disables the external damper P/I for such policies
 (the RPM governor stays — vz is high-passed and cannot see DC thrust error).
 
+> **RESULT (2026-07-06, RED — Flywheel `muddy-hill-9397`).** Training against these gaps
+> **backfired**. All three `hover_blind_air65_v2` arms (3.2B steps each) **sink to the floor** —
+> no-DR pure-hold 30 s survival **0.0%** vs the `hover_blind_air65_long` baseline's 91.6% — while
+> attitude actually *improved* (no-DR tilt 0.69–1.96°). The `_noiseonly` control (baseline reward,
+> no vz) still sinks, pinning the cause on the **honest 2.5 rad/s gyro-noise DR itself**: it drowns
+> the fine open-loop thrust trim so PPO cannot converge the deterministic hover throttle. The vz
+> channel did not close the altitude loop — its input carries the measured ±1.5 m/s DC bias, so the
+> leaky acc-integrated estimate is unusable (it *aggravates* the sink). **Conclusion: noise-hardening
+> DR is the wrong lever for open-loop IMU-only vertical hover; the fix is the flow deck (real,
+> low-bias closed-loop velocity — the Stage-1 `vel_body` pipeline below), not more DR.** The
+> `hover_blind_air65_long` checkpoint stays the first-flight policy of record. Metric:
+> `scripts/survival_probe.py`.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
