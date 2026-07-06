@@ -219,6 +219,11 @@ class MultiAgentDroneEnv:
         trunc = truncated_env.repeat_interleave(self.n_agents)
         done = done_env.repeat_interleave(self.n_agents)
 
+        # Advance the AR(1) colored obs-noise process exactly once per control step. _raw_obs()
+        # runs twice on steps where any drone terminates (terminal frame + post-reset frame) —
+        # add_obs_noise is a pure read of this state, so that double call cannot double-advance.
+        self.dr.step_noise()
+
         # Terminal frame (post-dynamics, pre-reset): push it onto the stack for bootstrapping.
         raw_term = self._raw_obs()
         self._frames = torch.cat([self._frames[1:], raw_term.unsqueeze(0)], dim=0)

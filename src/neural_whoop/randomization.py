@@ -41,6 +41,15 @@ class DomainRandomizationConfig:
             when non-empty this OVERRIDES the scalar ``obs_noise_std``. Lets the noise model
             be honest per channel — e.g. the measured whoop gyro vibration floor (~2.5 rad/s)
             vs a quiet attitude estimate (~0.02 rad).
+        obs_noise_ar_channels: Per-channel AR(1) coefficients ``rho in [0, 1)`` (length ==
+            ``obs_dim``); when non-empty the per-channel noise becomes a marginal-preserving
+            AR(1) process (``state = rho*state + sqrt(1-rho^2)*sigma*randn`` -> ``Var = sigma^2``
+            exactly, autocorrelation ``rho^k``) instead of fresh i.i.d. white noise each step.
+            Models a *filtered* real sensor stream — the deployed gyro is Betaflight-LPF/notch-
+            filtered (``gyroADCf``), so its noise is time-correlated; injecting the measured
+            amplitude as white noise matches the marginal but not the spectrum. ``rho=0`` on a
+            channel reproduces white noise. Requires ``obs_noise_std_channels``. Empty = legacy
+            white noise.
         obs_bias_channels: Per-channel, per-episode constant observation bias ranges (length ==
             ``obs_dim``); each drone draws ``uniform(±range)`` per channel at reset. Models the
             slowly-varying DC errors real sensors carry (attitude mount bias, vz vibration DC
@@ -67,6 +76,7 @@ class DomainRandomizationConfig:
     thrust_scale_frac: float = 0.10
     obs_noise_std: float = 0.01
     obs_noise_std_channels: tuple[float, ...] = ()
+    obs_noise_ar_channels: tuple[float, ...] = ()
     obs_bias_channels: tuple[float, ...] = ()
     action_latency_steps: int = 1
     uplink_latency_steps: int = 0
@@ -133,14 +143,31 @@ class DomainRandomizer:
         # frame, so a drawn bias is automatically constant across the stacked history, matching a
         # physical mount/DC bias). Tuple lengths must match the task's obs_dim exactly.
         for name, chans in (("obs_noise_std_channels", cfg.obs_noise_std_channels),
+                            ("obs_noise_ar_channels", cfg.obs_noise_ar_channels),
                             ("obs_bias_channels", cfg.obs_bias_channels)):
             if len(chans) > 0 and len(chans) != obs_dim:
                 raise ValueError(
                     f"{name} has {len(chans)} entries but the task obs_dim is {obs_dim}"
                 )
+        if len(cfg.obs_noise_ar_channels) > 0:
+            if not cfg.obs_noise_std_channels:
+                raise ValueError("obs_noise_ar_channels requires obs_noise_std_channels")
+            if any(not (0.0 <= r < 1.0) for r in cfg.obs_noise_ar_channels):
+                raise ValueError("obs_noise_ar_channels entries must be in [0, 1)")
         self._noise_std = (
             torch.tensor(cfg.obs_noise_std_channels, device=self.dev, dtype=torch.float32)
             if cfg.obs_noise_std_channels else None
+        )
+        self._noise_ar = (
+            torch.tensor(cfg.obs_noise_ar_channels, device=self.dev, dtype=torch.float32)
+            if (cfg.obs_noise_ar_channels and cfg.enabled) else None
+        )
+        # AR(1) colored-noise state, in unscaled sigma units (curriculum scale applies at read
+        # time, like the white path). Advanced exactly once per control step by step_noise();
+        # add_obs_noise() is then a pure read — _raw_obs() runs twice on terminal steps and a
+        # stateful draw there would double-advance the process.
+        self._noise_state = (
+            torch.zeros(n_drones, obs_dim, device=self.dev) if self._noise_ar is not None else None
         )
         self._bias_range = (
             torch.tensor(cfg.obs_bias_channels, device=self.dev, dtype=torch.float32)
@@ -193,6 +220,14 @@ class DomainRandomizer:
         self.thrust_scale[idx, 0] = self._rand(n, lo=1 - c.thrust_scale_frac * s, hi=1 + c.thrust_scale_frac * s)
         if self._bias_range is not None:
             self.obs_bias[idx] = (self._rand(n, self._bias_range.numel()) * 2 - 1) * self._bias_range * s
+        if self._noise_state is not None:
+            # Fresh episodes start the AR(1) noise at its stationary marginal N(0, sigma^2)
+            # (not zero), so the read-time variance is exactly sigma^2 from t=0 — a real filtered
+            # sensor stream has no quiet warm-up window at an episode boundary.
+            self._noise_state[idx] = (
+                torch.randn(n, self._noise_state.shape[1], device=self.dev, generator=self.gen)
+                * self._noise_std
+            )
         if self._max_lat > 0:
             lat = torch.randint(0, self._max_lat + 1, (n,), device=self.dev, generator=self.gen)
             if s < 1.0:  # ramp latency *incidence* with the curriculum (latency is integer-valued)
@@ -292,17 +327,36 @@ class DomainRandomizer:
         mag = self._rand(self.n, 1, lo=0.0, hi=self.cfg.impulse_rate_rps * self.scale)
         return self._impulse_mask() * direction * mag
 
+    def step_noise(self) -> None:
+        """Advance the AR(1) colored-noise state by one control step (no-op on the white paths).
+
+        Marginal-preserving update: ``state = rho*state + sqrt(1-rho^2)*sigma*randn`` keeps
+        ``Var(state) = sigma^2`` exactly at every step with autocorrelation ``rho^k``. Must be
+        called exactly ONCE per env control step (the env owns this); :meth:`add_obs_noise` is a
+        pure read of the current state, so the double ``_raw_obs()`` on terminal steps cannot
+        double-advance the process.
+        """
+        if self._noise_state is None:
+            return
+        innov = torch.randn(
+            self._noise_state.shape, device=self.dev, generator=self.gen
+        ) * (self._noise_std * torch.sqrt(1.0 - self._noise_ar**2))
+        self._noise_state.mul_(self._noise_ar).add_(innov)
+
     def add_obs_noise(self, obs: Tensor) -> Tensor:
         """Add Gaussian observation noise + the per-episode channel bias.
 
         Per-channel path (``obs_noise_std_channels`` set): each channel gets its own noise std
         (curriculum-scaled per step) plus this drone's episode-constant ``obs_bias`` (curriculum-
-        scaled at draw time, like ``thrust_scale``). Legacy scalar path unchanged. No-op if
-        disabled.
+        scaled at draw time, like ``thrust_scale``). With ``obs_noise_ar_channels`` set the
+        per-channel noise is the AR(1) state advanced by :meth:`step_noise` (a pure read here).
+        Legacy scalar path unchanged. No-op if disabled.
         """
         if not self.cfg.enabled:
             return obs
-        if self._noise_std is not None:
+        if self._noise_state is not None:
+            out = obs + self._noise_state * self.scale
+        elif self._noise_std is not None:
             out = obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * (
                 self._noise_std * self.scale
             )
