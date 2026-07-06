@@ -52,6 +52,15 @@ class HoverConfig:
     upright_sigma: float = 0.5      # width of the upright bell (rad of combined tilt)
     vel_penalty: float = 0.02       # −kv·|vel| velocity-damping penalty (small: don't deter approach)
     spin_penalty: float = 0.01      # −kw·|ω| body-rate (spin) penalty
+    # Privileged decoupling terms (H2, off by default). Both use GROUND-TRUTH state the deployed
+    # policy cannot observe — legitimate as *training* signals only (reward shaping, not obs).
+    # Motivation: honest-amplitude gyro obs noise biases the learned mean hover thrust (the policy's
+    # thrust output couples to the noisy rate inputs), sinking the open-loop trim. A direct |vz|
+    # penalty gives PPO an unambiguous gradient against sinking that needs no noisy estimate, and a
+    # thrust-constancy penalty decouples the throttle channel from the gyro jitter. Keep small —
+    # over-weighting kills legitimate tilt-compensation throttle moves.
+    vz_penalty: float = 0.0         # −k·|vz| privileged vertical-velocity penalty
+    thrust_const_penalty: float = 0.0  # −k·(a_t[0]−a_{t−1}[0])² thrust-channel constancy penalty
     alive_bonus: float = 0.1        # per-step alive bonus
     smoothness_penalty: float = 0.001
     crash_penalty: float = 10.0
@@ -176,6 +185,11 @@ class HoverTask(DroneTask):
         reward = reward - c.dist_penalty * dist
         reward = reward - c.vel_penalty * speed - c.spin_penalty * spin
         reward = reward - smoothness_penalty(action, env.prev_action, c.smoothness_penalty)
+        # Privileged decoupling terms (H2): ground-truth vz + thrust-channel constancy (see config).
+        if c.vz_penalty > 0.0:
+            reward = reward - c.vz_penalty * vel[..., 2].abs()
+        if c.thrust_const_penalty > 0.0:
+            reward = reward - c.thrust_const_penalty * (action[..., 0] - env.prev_action[..., 0]) ** 2
 
         crashed = is_crashed(pos, self._bounds)
         reward = reward - c.crash_penalty * crashed.float()

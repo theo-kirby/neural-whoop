@@ -1,0 +1,82 @@
+# hover_blind_air65_r4: privileged-decoupling arm (H2) -- R3 + ground-truth reward shaping.
+# Fork of hover_blind_air65_r3.yaml adding ONLY the two H2 reward terms (task-level, privileged
+# training signals; the deployed obs is unchanged obs-5 x stack 3):
+#   - vz_penalty 0.5: -0.5*|vz| on the GROUND-TRUTH vertical velocity -- a direct PPO gradient
+#     against the altitude sink that no noisy obs channel can provide.
+#   - thrust_const_penalty 0.1: -0.1*(a_t[0]-a_{t-1}[0])^2 -- decouple the throttle channel from
+#     the honest gyro jitter (the sink mechanism: noise-coupled thrust biases the learned trim).
+# Weights are a SINGLE POINT (unswept -- flag in the node). Context: R1 (white, no trim poisons)
+# and R3 (AR(1)-colored, no trim poisons) both sank to 0% M1 -- neither the trim DR (H3) nor the
+# modeled spectrum (H1, rho 0.9/0.8) rescues the trim; H2 is the last pre-authorized lever.
+run:
+  name: hover_blind_air65_r4
+
+task:
+  name: hover_blind
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  vz_penalty: 0.5
+  thrust_const_penalty: 0.1
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 3
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05      # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  #                        [roll,  pitch, p,    q,    r   ]  (rad, rad/s)
+  obs_noise_std_channels: [0.02,  0.02,  2.5,  2.2,  1.5]
+  obs_noise_ar_channels:  [0.9,   0.9,   0.8,  0.8,  0.8]   # AR(1) rho -- MODELED, unvalidated
+  obs_bias_channels:      [0.0,   0.0,   0.05, 0.05, 0.05]
+  action_latency_steps: 5
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800
