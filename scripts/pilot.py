@@ -28,9 +28,15 @@ Frame/sign conventions (bench-verified 2026-07-05, see docs/SIM2REAL.md):
   -> roll matches, pitch and yaw FLIP, both for observations and commanded rates.
   MSP_SET_RAW_RC wire order is AETR: [roll, pitch, THROTTLE, yaw, aux1..4].
 
-Weights: produced from a checkpoint by the extraction snippet in the runs/ dir (torch needed
-once, anywhere): actor Linear layers + log_std to JSON. Deploy convention since 5c735cd is the
+Weights: produced from a checkpoint by ``scripts/export_json.py`` (torch needed once, anywhere):
+actor Linear layers + log_std + stacking meta to JSON. Deploy convention since 5c735cd is the
 clipped-Gaussian effective mean E[clip(N(mu, sigma))] — implemented here with math.erf.
+Stacked/vz-aware policies (hover_blind_v2, meta.obs_stack/base_obs_dim): the base frame grows
+the pilot's own leaky climb-rate estimate as channel 6, and the network sees the last obs_stack
+frames concatenated oldest->newest (history seeded by repeating the first frame — the env's
+reset semantics). When the policy consumes vz it OWNS vertical damping: the external climb
+damper's P/I trims are disabled; the RPM governor stays (it anchors ABSOLUTE thrust, which a
+high-passed climb rate cannot see).
 
 Thrust mapping: act[0] -> normed thrust t in [0, 4] hover-units (contract.py), then
 us = 1000 + (hover_us - 1000) * sqrt(t)  (prop thrust ~ quadratic in throttle; sqrt inverts),
@@ -47,6 +53,7 @@ import math
 import signal
 import sys
 import time
+from collections import deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -160,6 +167,14 @@ class Policy:
         self.sigma = [math.exp(v) for v in self.meta["log_std"]]
         self.obs_dim = self.meta["obs_dim"]
         self.act_dim = self.meta["act_dim"]
+        # Stacked-obs / vz-aware policies (export_json.py meta). Pre-stacking JSON files carry
+        # neither key -> base == obs_dim, stack 1: unchanged behavior for the old 5-dim files.
+        self.base_obs_dim = int(self.meta.get("base_obs_dim", self.obs_dim))
+        self.obs_stack = int(self.meta.get("obs_stack", 1))
+        if self.base_obs_dim * self.obs_stack != self.obs_dim:
+            raise ValueError(f"inconsistent meta: base_obs_dim {self.base_obs_dim} x obs_stack "
+                             f"{self.obs_stack} != obs_dim {self.obs_dim}")
+        self.uses_vz = self.base_obs_dim >= 6
 
     @staticmethod
     def _clipped_gaussian_mean(mu: float, sd: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -179,6 +194,32 @@ class Policy:
             y = [sum(wr[j] * x[j] for j in range(len(x))) + b[k] for k, wr in enumerate(W)]
             x = [math.tanh(v) for v in y] if i < last else y
         return [self._clipped_gaussian_mean(x[k], self.sigma[k]) for k in range(self.act_dim)]
+
+
+def stack_frames(hist: deque, frame: list[float], stack: int) -> list[float]:
+    """Push the newest base frame and return the stacked obs, oldest->newest.
+
+    An empty history is seeded by repeating the first frame across the whole stack — exactly
+    the env's reset semantics (envs/base.py), which the exporter's ref outputs also use. The
+    deque must be created with ``maxlen=stack``; stack 1 degenerates to the plain frame.
+    """
+    if not hist:
+        hist.extend([frame] * stack)
+    else:
+        hist.append(frame)
+    return [v for fr in hist for v in fr]
+
+
+def check_policy_family(pol: Policy) -> None:
+    """This pilot builds [roll, pitch, p, q, r] (+ vz_est) frames — refuse anything else."""
+    if pol.base_obs_dim not in (5, 6):
+        sys.exit(f"unsupported policy: base_obs_dim {pol.base_obs_dim} (this pilot feeds the "
+                 "5-dim hover_blind or 6-dim hover_blind_v2 obs layout only)")
+    if pol.obs_stack > 1 or pol.uses_vz:
+        print(f"policy: base obs {pol.base_obs_dim}{' (incl. vz_est)' if pol.uses_vz else ''}"
+              f" x {pol.obs_stack} stacked frames"
+              + ("; external climb-damper P/I DISABLED — the policy owns vertical damping "
+                 "(RPM governor stays: absolute thrust anchor)" if pol.uses_vz else ""))
 
 
 # --- conversions ----------------------------------------------------------------------------
@@ -303,12 +344,15 @@ def stream_rc(fc: MspUdpClient, us4: list[int]) -> None:
 
 def cmd_selftest(args: argparse.Namespace) -> int:
     pol = Policy(args.weights)
+    check_policy_family(pol)
     ref_path = Path(args.weights).parent / "policy_ref_outputs.json"
     with open(ref_path) as f:
         ref = json.load(f)
     worst = 0.0
-    for name, obs in ref["inputs"].items():
-        got = pol(obs)
+    for name, frame in ref["inputs"].items():
+        # Ref inputs are single BASE frames (old 5-dim files: stack 1 -> identity); tiling the
+        # frame across the stack is the reset semantics both env and exporter use.
+        got = pol(list(frame) * pol.obs_stack)
         want = ref["outputs"][name]
         err = max(abs(g - w) for g, w in zip(got, want))
         worst = max(worst, err)
@@ -316,41 +360,84 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     ok = worst < 1e-4
     print(f"parity vs {ref_path}: worst {worst:.2e} -> {'OK' if ok else 'FAIL'}")
     if ok:
-        us = action_to_us(pol([0.0] * pol.obs_dim), args.hover_us, args.min_us, args.max_us)
+        def probe(idx: int | None = None, val: float = 0.0) -> list[float]:
+            base = [0.0] * pol.base_obs_dim
+            if idx is not None:
+                base[idx] = val
+            return base * pol.obs_stack
+
+        us = action_to_us(pol(probe()), args.hover_us, args.min_us, args.max_us)
         print(f"level-still command @ hover_us={args.hover_us}: AETR {us} "
               f"(throttle should be ~{args.hover_us})")
         # Closed-loop direction sanity through the FULL conversion chain (empirical signs):
-        nose_down = action_to_us(pol([0.0, 0.2, 0, 0, 0]), args.hover_us, args.min_us, args.max_us)
-        tilt_right = action_to_us(pol([0.2, 0, 0, 0, 0]), args.hover_us, args.min_us, args.max_us)
+        nose_down = action_to_us(pol(probe(1, 0.2)), args.hover_us, args.min_us, args.max_us)
+        tilt_right = action_to_us(pol(probe(0, 0.2)), args.hover_us, args.min_us, args.max_us)
         dir_ok = nose_down[1] < 1500 and tilt_right[0] < 1500
         print(f"nose-down obs -> pitch_us {nose_down[1]} (<1500 = nose-up correction); "
               f"tilt-right obs -> roll_us {tilt_right[0]} (<1500 = roll-left correction) "
               f"-> {'OK' if dir_ok else 'FAIL'}")
         ok = ok and dir_ok
+        if pol.uses_vz:  # informational: a healthy v2 policy raises thrust against a sink
+            sink = action_to_us(pol(probe(5, -0.5)), args.hover_us, args.min_us, args.max_us)
+            print(f"sinking obs (vz_est -0.5 m/s) -> throttle {sink[2]} us vs level {us[2]} us "
+                  "(expect higher)")
     return 0 if ok else 1
 
 
 def cmd_check(args: argparse.Namespace) -> int:
     pol = Policy(args.weights)
+    check_policy_family(pol)
     print("PROPS OFF check: hand-move the drone and verify (signs per the 2026-07-05 calibration):")
     print("  tilt RIGHT              -> roll(sim) positive,  roll_us  < 1500 (roll-left correction)")
     print("  tilt NOSE DOWN          -> pitch(sim) POSITIVE, pitch_us < 1500 (nose-up correction)")
     print("  spin CLOCKWISE (top)    -> 3rd gyro number NEGATIVE  (verifies the yaw sign; report it!)")
     print("  level & still           -> throttle ~ hover_us, roll/pitch/yaw ~ 1500")
+    if pol.uses_vz:
+        print("  lift/lower STEADILY     -> vz_est +/- (leaky, decays back); throttle counters it")
     print("Ctrl+C to stop. Nothing is streamed to the FC in this mode.\n")
     with MspUdpClient(args.udp_host, args.udp_port) as fc:
         tel = Telemetry(fc)
+        hist: deque = deque(maxlen=pol.obs_stack)
+        # Same vz estimator the fly loop runs (full projection, leak, clamp, tilt-freeze) so a
+        # v2 policy's 6th channel — and its thrust response — can be sanity-checked by hand.
+        az_cal: list[int] = []
+        az_ref = None
+        vz = 0.0
+        t_last = None
         try:
             while True:
                 now = time.monotonic()
                 tel.poll(now, want_analog=True)
                 if tel.obs_age(now) < 0.5:
                     o = tel.obs()
-                    us = action_to_us(pol(o), args.hover_us, args.min_us, args.max_us,
-                                      args.trim_thrust)
+                    acc = tel.imu["acc_raw"]
+                    if az_ref is None:
+                        az_cal.append(acc[2])
+                        if len(az_cal) >= 20:
+                            tail = az_cal[len(az_cal) // 4:]
+                            ref = sum(tail) / len(tail)
+                            if abs(ref) > 100:
+                                az_ref = ref
+                                print(f"  acc 1g = {az_ref:.0f} raw (hold-still cal) — vz estimate live\n")
+                    else:
+                        dt = min(0.5, now - t_last) if t_last is not None else 0.0
+                        f_up = (-acc[0] * math.sin(o[1])
+                                + acc[1] * math.cos(o[1]) * math.sin(o[0])
+                                + acc[2] * math.cos(o[1]) * math.cos(o[0]))
+                        if abs(o[0]) < VZ_TILT_LIMIT and abs(o[1]) < VZ_TILT_LIMIT:
+                            vz = (vz + (f_up / az_ref - 1.0) * 9.81 * dt) * math.exp(-dt / VZ_LEAK_TAU)
+                            vz = max(-VZ_CLAMP, min(VZ_CLAMP, vz))
+                        else:
+                            vz *= math.exp(-dt / VZ_LEAK_TAU)
+                    t_last = now
+                    frame = o + [vz] if pol.uses_vz else o
+                    us = action_to_us(pol(stack_frames(hist, frame, pol.obs_stack)),
+                                      args.hover_us, args.min_us, args.max_us, args.trim_thrust)
                     print(f"\r roll {math.degrees(o[0]):+6.1f}  pitch(sim) {math.degrees(o[1]):+6.1f} deg"
                           f" | gyro {math.degrees(o[2]):+7.1f} {math.degrees(o[3]):+7.1f}"
-                          f" {math.degrees(o[4]):+7.1f} deg/s | cmd RPTY(us) {us}"
+                          f" {math.degrees(o[4]):+7.1f} deg/s"
+                          + (f" | vz_est {vz:+5.2f} m/s" if pol.uses_vz else "")
+                          + f" | cmd RPTY(us) {us}"
                           f" | vbat {tel.vbat or 0:.2f}V   ", end="")
                 time.sleep(0.1)
         except KeyboardInterrupt:
@@ -388,6 +475,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                  "the drone is tethered, the area is clear, and YOUR thumb is on the override\n"
                  "switch + arm/kill on the Pocket.")
     pol = Policy(args.weights)
+    check_policy_family(pol)
     log_path = Path(args.log or f"runs/pilot/flight_{int(time.time())}.csv")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fout = open(log_path, "w", newline="")
@@ -487,6 +575,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         #                          at rest (mount bias); the policy holding that "level" is a
         #                          constant ~0.5 m/s^2 lateral push -> wall (flight 1783324924)
         vz = 0.0                 # leak-filtered climb-rate estimate (m/s, + = up)
+        obs_hist: deque = deque(maxlen=pol.obs_stack)  # base-frame history (stacked policies)
         thr_trim = 0.0
         i_trim = 0.0             # integral trim: absorbs the pack's constant thrust bias
         t_last_fresh = None
@@ -596,7 +685,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             print(f"  level reference: roll {math.degrees(lvl[0]):+.1f} / "
                                   f"pitch {math.degrees(lvl[1]):+.1f} deg (floor-rest bias, "
                                   "subtracted from the policy's view)")
-                    if (az_ref is not None and args.vz_gain > 0
+                    if (az_ref is not None and (args.vz_gain > 0 or pol.uses_vz)
                             and t_start is not None and t_fl >= hold_s):
                         dt = dt_tick
                         # Full projection of specific force onto world-up (RAW attitude — acc
@@ -616,21 +705,29 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             vz = max(-VZ_CLAMP, min(VZ_CLAMP, vz))
                             # I only in the hover window: not during boost (keeps the takeoff
                             # punch) and not during ramp-down (intentional descent).
-                            if 0.0 < t_air <= args.seconds:
+                            if not pol.uses_vz and 0.0 < t_air <= args.seconds:
                                 i_trim = max(-VZ_ITRIM_CAP,
                                              min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
                         else:
                             vz *= math.exp(-dt / VZ_LEAK_TAU)  # tilted: no new evidence, decay
-                        i_trim *= math.exp(-dt / VZ_ITRIM_LEAK_TAU)  # poisoned I self-heals
-                        p_term = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz))
-                        thr_trim = max(-VZ_TRIM_TOTAL, min(VZ_TRIM_TOTAL, p_term + i_trim))
+                        if pol.uses_vz:
+                            # The policy sees vz and owns vertical damping — external P/I stay
+                            # zero (they fought the policy through a biased estimate). The RPM
+                            # governor below stays: vz is high-passed and cannot see DC thrust.
+                            thr_trim = i_trim = 0.0
+                        else:
+                            i_trim *= math.exp(-dt / VZ_ITRIM_LEAK_TAU)  # poisoned I self-heals
+                            p_term = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz))
+                            thr_trim = max(-VZ_TRIM_TOTAL, min(VZ_TRIM_TOTAL, p_term + i_trim))
                     t_last_fresh = now
                     # Level reference + manual trim, policy's view only (estimator uses raw).
                     # Backwards drift -> positive --trim-pitch-deg (holds more nose-down).
                     o = [o[0] - lvl[0] - trim_roll_rad,
                          o[1] - lvl[1] - trim_pitch_rad, o[2], o[3], o[4]]
 
-                    act = pol(o)
+                    # Base frame (+ the vz channel for v2 policies), stacked oldest->newest.
+                    frame = o + [vz] if pol.uses_vz else o
+                    act = pol(stack_frames(obs_hist, frame, pol.obs_stack))
                     if t_air > args.seconds:  # ramp down: ease thrust action toward floor
                         k = (t_air - args.seconds) / ramp_s
                         act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
