@@ -154,6 +154,15 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   carry a sinking trim — do not deploy. `scripts/survival_probe.py` (committed) is the metric.
 - **Metric:** same as `hover_blind`; the acceptance bar (no-DR 30 s survival ≥ 95%, mean_tilt ≤ 2.5°,
   mean_speed ≤ 0.07, dominate the old policy under honest DR) was **not met** — survival regressed to 0%.
+- **Attribution corrected (2026-07-06, Flywheel `quiet-bonus-7296`/`muddy-brook-9314`):** the
+  "gyro-noise DR itself" attribution above was confounded (5 factors changed at once). The
+  one-factor **R1** arm (`hover_blind_air65_r1.yaml` — white noise kept, thrust 0.12→0.05,
+  attitude bias zeroed, curriculum 0.5) still sinks to 0.0% M1 — **trim poisons exonerated; the
+  noise as modeled (i.i.d. WHITE at measured amplitude) is the culprit.** New honesty-split metric:
+  M2 = calibrated-trim (thrust_scale 0) honest-noise survival, bar ≥ 80% — baseline scores 0.1%,
+  white-trained arms 3–4%. Open question: the real gyro is Betaflight-LPF-filtered (spectrum is
+  colored, not white) — under test with the AR(1) `obs_noise_ar_channels` seam (R2/R3 arms,
+  ρ modeled/unvalidated).
 - **Obs/oracle:** **[roll, pitch, p, q, r, vz_est]** (6) × `obs_stack 3` (deployed input 18).
   `vz_est` simulates the deployed pilot's leaky acc-integrated climb-rate estimate exactly
   (leak τ 4 s, clamp ±2 m/s, decay-only past 25° tilt — `scripts/pilot.py`'s VZ_* constants);

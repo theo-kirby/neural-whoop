@@ -125,6 +125,25 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 > `hover_blind_air65_long` checkpoint stays the first-flight policy of record. Metric:
 > `scripts/survival_probe.py`.
 
+> **ATTRIBUTION CORRECTED (2026-07-06, Flywheel `quiet-bonus-7296` → `muddy-brook-9314`).** The
+> verdict above was **confounded**: `_noiseonly` changed five factors at once vs the baseline
+> (noise amplitude, per-episode ±2° attitude bias, thrust 0.05→0.12, latency 3→5, obs_stack 1→3).
+> The one-factor follow-up **R1** (`hover_blind_air65_r1.yaml`: honest *white* noise kept, trim
+> poisons removed — thrust back to 0.05, attitude bias zeroed, longer curriculum) **still sinks to
+> 0.0%** clean survival — so the trim-poison DR is exonerated and the honest noise itself (as
+> modeled, i.i.d. **white** at the measured amplitude) is the isolated culprit. Two further
+> corrections: (1) DR-on survival with `thrust_scale > 0` is physically unwinnable open-loop, so
+> the honest robustness metric is now **split**: M1 = clean-trim no-DR survival (bar ≥ 91.6%),
+> M2 = calibrated-trim honest-noise survival (`_m2_honest*` eval configs, bar ≥ 80%) — under M2
+> the un-hardened baseline scores **0.1%** (it has zero honest-noise robustness even with perfect
+> trim) and the white-noise-trained arms only 3–4%. (2) The deployed gyro is Betaflight-LPF/notch-
+> filtered (`pilot.py` `gyroADCf`), so its real noise is **time-correlated** — the sim's white
+> injection matches the marginal but not the spectrum. The spectrum hypothesis is under test via
+> the AR(1) colored-noise seam (`obs_noise_ar_channels`, marginal-preserving, ρ modeled 0.9/0.8 —
+> unvalidated until measured from calm-hover logs): arms R3 (= R1 + colored, one factor) and R2
+> (= `_noiseonly` + colored). "Needs the flow deck" remains the strategic read but is **not yet
+> forced by the evidence** for the stock-hardware (IMU-only) line.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
