@@ -100,12 +100,23 @@ VZ_TILT_LIMIT = math.radians(45.0)  # beyond this the cos-tilt correction + coll
 #                     poison the estimate (flights 1783280676/65: ceiling strike -> pitch -73,
 #                     vz "-10 m/s", trim pinned +, throttle 1600 while sideways). Freeze there.
 
-# Ground-takeoff profile (--takeoff): spool fast through the on-ground sub-hover zone (a
-# skittering half-throttle whoop tips over), hold a boost above hover to actually climb —
-# exactly 1.0x hover just sits light on its wheels (flights 1783273972/92 proved it: 5 s
-# parked at a perfect 1410 us) — then settle onto the policy's command.
-TAKEOFF_SPOOL_S = 0.3
-TAKEOFF_SETTLE_S = 0.5
+# Ground-takeoff (--takeoff): SEEK, don't assume. A fixed boost anchored to --hover-us shot
+# every fresh-pack flight straight into the ceiling (flights 1783323895/910/928: "1.18x" of
+# 1410 was really ~1.5x of that pack's true ~1360 hover; vz railed +3 m/s during the boost
+# itself). Instead: spool to SEEK_START fast, then ramp throttle SLOWLY while watching the
+# acc-z climb estimator; the instant the drone actually lifts (vz > LIFT_VZ), the throttle at
+# breakaway IS that pack's true hover point — learn it (minus the detection lag), re-anchor
+# the whole flight's thrust map on it, apply a tiny RISE_THRUST for RISE_S to gain height,
+# then hand to the policy. Takeoff doubles as per-pack hover calibration.
+SEEK_START_US = 1200   # jump here quickly (well below any pack's hover)
+SEEK_SPOOL_S = 0.2
+SEEK_RATE_US_S = 250.0  # slow ramp: ~35 us of overshoot at the estimator's ~0.15 s lag
+SEEK_TIMEOUT_S = 2.5
+LIFT_VZ = 0.20         # m/s of estimated climb = the wheels left the ground
+LIFT_LAG_US = 60       # detection-lag overshoot to subtract (sim: learned anchor then lands
+#                        within +0..+10 us of true hover for packs from 1340 to 1480 us)
+RISE_THRUST = 1.06     # gentle climb-out after liftoff (in learned-hover units)
+RISE_S = 0.5
 
 # MSP_RAW_IMU gyro scale. Betaflight's gyroRateDps() (sensors/gyro_init.c) returns
 # gyroADCf / rawSensorDev->scale — i.e. the FILTERED rate converted back to raw LSB units,
@@ -389,13 +400,12 @@ def cmd_fly(args: argparse.Namespace) -> int:
             sys.exit("pick one of --takeoff / --launch")
         staged = args.launch or args.takeoff
         hold_s = args.hold_seconds if staged else 0.0
-        ramp_in_s = (args.boost_s + TAKEOFF_SETTLE_S) if args.takeoff else (0.5 if args.launch else 0.0)
-        boost_us = int(1000 + (args.hover_us - 1000) * math.sqrt(args.boost))
+        ramp_in_s = (SEEK_TIMEOUT_S + RISE_S) if args.takeoff else (0.5 if args.launch else 0.0)
         if args.takeoff:
             print(f"GROUND-TAKEOFF mode: set the drone LEVEL on the floor, stand clear, ARM on "
-                  f"the Pocket, flip the OVERRIDE switch — {hold_s:.0f}s idle countdown, then it "
-                  f"spools to {args.boost:.2f}x hover ({boost_us} us) for {args.boost_s:.1f}s and "
-                  f"hands to the policy. After the flight it ramps down and lands: DISARM then.")
+                  f"the Pocket, flip the OVERRIDE switch — {hold_s:.0f}s idle countdown, then a "
+                  f"slow throttle ramp SEEKS the liftoff point (learning this pack's true hover) "
+                  f"and hands to the policy. After the flight it ramps down and lands: DISARM then.")
         elif args.launch:
             print(f"HAND-LAUNCH mode: hold the drone (grip the duct, fingers clear), ARM on the "
                   f"Pocket, flip the OVERRIDE SWITCH — {hold_s:.0f}s idle countdown, then the "
@@ -418,6 +428,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
         thr_trim = 0.0
         i_trim = 0.0             # integral trim: absorbs the pack's constant thrust bias
         t_last_fresh = None
+        t_liftoff_tp = None      # seek-phase time at which the drone left the ground
+        hover_learned = None     # this pack's true hover us, measured at breakaway
         try:
             while not stop["flag"]:
                 now = time.monotonic()
@@ -521,11 +533,11 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     # duty scales ~1/V, so re-anchor on the (filtered) live voltage. At 3.45 V the
                     # calibrated 1410 is BELOW true hover — flight_1783276185 sank and bounced off
                     # the floor on exactly this.
+                    base_hover = hover_learned if hover_learned is not None else args.hover_us
                     comp = 1.0
                     if args.vbat_ref > 0 and vfilt:
                         comp = max(0.9, min(1.2, args.vbat_ref / vfilt))
-                    hover_eff = int(1000 + (args.hover_us - 1000) * comp)
-                    boost_us = int(1000 + (hover_eff - 1000) * math.sqrt(args.boost))
+                    hover_eff = int(1000 + (base_hover - 1000) * comp)
                     us = action_to_us(act, hover_eff, args.min_us, args.max_us,
                                       args.trim_thrust + thr_trim)
                     if args.yaw == "center":
@@ -545,16 +557,29 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     elif t_start is not None and staged and t_fl < hold_s + ramp_in_s:
                         if last_countdown != 0:
                             last_countdown = 0
-                            print("  LIFTOFF" if args.takeoff else "  throttle ramping — KEEP HOLDING")
+                            print("  seeking liftoff (slow ramp)..." if args.takeoff
+                                  else "  throttle ramping — KEEP HOLDING")
                         tp = t_fl - hold_s
                         if args.takeoff:
-                            if tp < TAKEOFF_SPOOL_S:      # spool: idle -> boost, fast
-                                us[2] = int(args.min_us + (boost_us - args.min_us) * (tp / TAKEOFF_SPOOL_S))
-                            elif tp < args.boost_s:       # climb-out above hover
-                                us[2] = boost_us
-                            else:                         # settle: boost -> policy command
-                                k = (tp - args.boost_s) / TAKEOFF_SETTLE_S
-                                us[2] = int(boost_us + (us[2] - boost_us) * k)
+                            if t_liftoff_tp is None:      # seek: slow ramp until acc-z sees liftoff
+                                if tp < SEEK_SPOOL_S:
+                                    us[2] = int(args.min_us
+                                                + (SEEK_START_US - args.min_us) * (tp / SEEK_SPOOL_S))
+                                else:
+                                    us[2] = int(min(args.max_us,
+                                                    SEEK_START_US + SEEK_RATE_US_S * (tp - SEEK_SPOOL_S)))
+                                if us[2] > 1250 and vz > LIFT_VZ:
+                                    t_liftoff_tp = tp
+                                    hover_learned = max(1250, min(1550, us[2] - LIFT_LAG_US))
+                                    ramp_in_s = t_liftoff_tp + RISE_S  # flight clock: rise ends it
+                                    print(f"  LIFTOFF at {us[2]} us -> hover anchor learned: "
+                                          f"{hover_learned} us")
+                                elif tp > SEEK_TIMEOUT_S:
+                                    print("\nno liftoff within the seek window — weak pack or prop "
+                                          "drag? releasing, DISARM")
+                                    break
+                            else:                         # rise: gentle climb-out on the LEARNED anchor
+                                us[2] = int(1000 + (hover_learned - 1000) * math.sqrt(RISE_THRUST))
                         else:                             # --launch: idle -> policy while still held
                             us[2] = int(args.min_us + (us[2] - args.min_us) * (tp / ramp_in_s))
                     elif t_start is not None and args.launch and last_countdown != -2:
@@ -570,7 +595,9 @@ def cmd_fly(args: argparse.Namespace) -> int:
         finally:
             fout.close()
         print(f"\nreleased. {n_sent} frames streamed, {n_stale} stale ticks, "
-              f"worst obs age {worst_age * 1e3:.0f} ms. Log: {log_path}")
+              f"worst obs age {worst_age * 1e3:.0f} ms. Log: {log_path}"
+              + (f"\nlearned hover anchor this pack: {hover_learned} us (breakaway-measured)"
+                 if hover_learned else ""))
     return 0
 
 
@@ -602,9 +629,9 @@ def main() -> int:
                           "override switch, idle countdown, spool to --boost x hover for --boost-s, "
                           "then hand to the policy")
     fly.add_argument("--boost", type=float, default=1.18,
-                     help="takeoff thrust in hover-units; 1.0 just sits on the ground")
+                     help="DEPRECATED, ignored: --takeoff now auto-seeks the liftoff throttle")
     fly.add_argument("--boost-s", type=float, default=0.6,
-                     help="seconds of boost before settling onto the policy")
+                     help="DEPRECATED, ignored: --takeoff now auto-seeks the liftoff throttle")
     fly.add_argument("--launch", action="store_true",
                      help="hand-launch flow: after the override switch, idle countdown, throttle "
                           "ramps WHILE HELD, release only at GO")
