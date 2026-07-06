@@ -94,6 +94,24 @@ answer to *real* thrust uncertainty (battery sag, prop wear), not to a policy bi
 - Flow deck → host-side flow+ToF→velocity estimator; measure error → new flow-velocity DR seam.
 - Measure full end-to-end latency → widen `action_latency` DR.
 
+**Measured sim2real gaps from the 2026-07-06 real-flight campaign** (runs/pilot/flight_*.csv;
+full 15 s flights, liftoff-seek + RPM governor working). These calibrate the `hover_blind_v2`
+sweep configs (`configs/hover_blind_air65_v2*.yaml`):
+
+| gap | measured | sim was | fix |
+|---|---|---|---|
+| gyro rate-obs noise (calm hover) | **±145 °/s (~2.5 rad/s) sd** from frame vibration | `obs_noise_std 0.01` — a **250× gap** on the policy's primary input (→ constant overreaction, ±10–17° wobble) | per-channel `obs_noise_std_channels` at the measured floor + `obs_stack 3` as the averaging path |
+| obs age over the WiFi bridge | p50 24 / p99 112 / max 209 ms | `action_latency_steps 3` (0–60 ms) | `action_latency_steps 5` |
+| vz estimate DC bias (in-air) | −0.6..−1.6 m/s in every hover window, even after full-projection + powered 1 g recal | not modeled | `obs_bias_channels` ±1.5 m/s on the new vz_est channel; policy learns what to trust |
+| residual level bias after floor-cal | ±2° | not modeled | `obs_bias_channels` ±0.035 rad on roll/pitch |
+| same-day hover-anchor spread | ±15% (liftoff-seek re-anchors most of it) | `thrust_scale_frac 0.05` | `thrust_scale_frac 0.12` |
+| attitude gains under real noise | steady −3..−10° pitch equilibrium ("drifts backwards"): `upright_sigma 0.5` commands corrections too small to measure over the noise | shallow reward well | `upright_sigma 0.25`, `smoothness_penalty 0.002` |
+
+Altitude remains the structural gap: the external acc-PI damper hit its ceiling (it and the RPM
+governor fight over the biased vz estimate), so `hover_blind_v2` feeds the pilot's vz estimate
+to the policy as obs channel 6 and the pilot disables the external damper P/I for such policies
+(the RPM governor stays — vz is high-passed and cannot see DC thrust error).
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 

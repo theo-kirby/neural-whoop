@@ -140,6 +140,25 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   pure-hold 30 s survival **91%** no-DR (0.087 crash), drift speed 0.069 m/s, tilt 1.68°. THE
   first-flight checkpoint; exports are deployment-correct as-is.
 
+### ✅ `hover_blind_v2` — noise-hardened blind hover + a leaky climb-rate channel (2026-07-06)
+- **Metric:** same as `hover_blind`; acceptance vs the `hover_blind_air65_long` baseline (tilt
+  1.68°, drift 0.069 m/s, 91% 30 s survival no-DR) is no-DR 30 s survival ≥ 95%, mean_tilt ≤ 2.5°,
+  mean_speed ≤ 0.07 — and under the honest DR it must clearly dominate the old policy cross-evaled.
+- **Obs/oracle:** **[roll, pitch, p, q, r, vz_est]** (6) × `obs_stack 3` (deployed input 18).
+  `vz_est` simulates the deployed pilot's leaky acc-integrated climb-rate estimate exactly
+  (leak τ 4 s, clamp ±2 m/s, decay-only past 25° tilt — `scripts/pilot.py`'s VZ_* constants);
+  its real-world noise/DC-bias come from the per-channel obs-noise/bias DR, not the task.
+- **Status:** implemented (`tasks/hover_blind_v2.py`, `configs/hover_blind_air65_v2.yaml` +
+  `_novz`/`_noiseonly` sweep ablations). Estimator state advances in `reward_and_done` (once per
+  step); `observe` is a pure read (the env calls it twice on reset steps).
+- **Sim2real basis:** the 2026-07-06 flight campaign measured the deployed `hover_blind` stack's
+  actual gaps (gyro noise floor ±145 °/s sd — 250× the trained 0.01; obs age p99 112 ms; vz DC
+  bias −0.6..−1.6 m/s; ±2° residual level bias) and this task/config trains against all of them:
+  per-channel obs noise + per-episode bias DR, `action_latency_steps 5`, steeper upright well
+  (σ 0.25) so commanded corrections clear the real noise floor, `obs_stack 3` as the policy's
+  averaging path. When the policy consumes vz, the pilot's external climb-damper P/I turn OFF
+  (the policy owns vertical damping; the RPM governor stays as the absolute thrust anchor).
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to
