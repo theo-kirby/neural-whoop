@@ -6,6 +6,8 @@
 # amplitude-adaptive trim needs. ONE factor vs hover_blind_air65_d50var.yaml: obs_stack 3 -> 8.
 # (Policy runs offboard; input dim 40 on [64,64] is cheap. Deploy: pilot keeps an 8-deep obs deque.)
 
+run:
+  name: hover_blind_air65_d50var_s8
 
 task:
   name: hover_blind
