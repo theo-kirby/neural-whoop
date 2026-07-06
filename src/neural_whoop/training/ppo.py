@@ -438,6 +438,8 @@ def save_checkpoint(agent: ActorCritic, cfg: PPOConfig, env: MultiAgentDroneEnv,
             "model": agent.state_dict(),
             "ppo_cfg": asdict(cfg),
             "obs_dim": env.obs_dim,
+            "base_obs_dim": env.base_obs_dim,
+            "obs_stack": env.obs_stack,
             "act_dim": env.act_dim,
             "task": env.task.name,
             "global_step": step,
@@ -445,7 +447,8 @@ def save_checkpoint(agent: ActorCritic, cfg: PPOConfig, env: MultiAgentDroneEnv,
         path,
     )
     with open(path + ".meta.json", "w") as f:
-        json.dump({"task": env.task.name, "obs_dim": env.obs_dim, "act_dim": env.act_dim, "step": step}, f)
+        json.dump({"task": env.task.name, "obs_dim": env.obs_dim, "base_obs_dim": env.base_obs_dim,
+                   "obs_stack": env.obs_stack, "act_dim": env.act_dim, "step": step}, f)
 
 
 def load_agent(path: str, device: torch.device | str = "cuda") -> ActorCritic:
