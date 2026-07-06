@@ -97,6 +97,14 @@ BOX_MSP_OVERRIDE = 50
 # a proportional thrust trim damps it. The leak (tau below) bounds acc-bias drift; this is a
 # DAMPER, not an altitude hold — it turns the blind policy's altitude random walk into a
 # strongly damped one, and also arrests the leftover takeoff-boost climb after handoff.
+# RPM thrust governor. Bidir-DShot RPM telemetry (probe-confirmed on this board) is a TRUE
+# thrust anchor: thrust ~ rpm^2 independent of pack freshness/sag/voltage-sensor lies. At
+# breakaway the RMS motor RPM is by definition the RPM that carries the weight; in flight a
+# slow integrator steers the throttle so measured (rpm/rpm_hover)^2 tracks the thrust the
+# policy is asking for. Kills the fresh-vs-tired-pack problem at the source.
+RPM_KI_US = 300.0    # us of throttle correction per (thrust-unit error * s); tau ~ 0.7 s
+RPM_CORR_CAP = 80.0  # us; the anchor is already within a few %, this is fine adjustment
+
 VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift)
 VZ_TRIM_CAP = 0.12   # act[0] units of P authority
 VZ_TRIM_KI = 0.15    # integral gain: absorbs the pack's constant thrust bias (P alone is
@@ -231,13 +239,18 @@ class Telemetry:
         self.imu: dict | None = None
         self.vbat: float | None = None
         self.rc: tuple[int, ...] | None = None
+        self.mt: list[dict] | None = None
         self.t_att = 0.0
         self.t_imu = 0.0
         self.t_rc = 0.0
+        self.t_mt = 0.0
 
-    def poll(self, now: float, want_analog: bool = False, want_rc: bool = False) -> None:
+    def poll(self, now: float, want_analog: bool = False, want_rc: bool = False,
+             want_rpm: bool = False) -> None:
         self.fc.send(MSP_ATTITUDE)
         self.fc.send(MSP_RAW_IMU)
+        if want_rpm:
+            self.fc.send(MSP_MOTOR_TELEMETRY)
         if want_analog:
             self.fc.send(MSP_ANALOG)
         if want_rc:
@@ -259,6 +272,17 @@ class Telemetry:
                 self.vbat = decode_analog(frame.payload)["vbat_v"]
             elif frame.cmd == MSP_RC and len(frame.payload) >= 16:
                 self.rc, self.t_rc = decode_u16s(frame.payload), now
+            elif frame.cmd == MSP_MOTOR_TELEMETRY and len(frame.payload) >= 14:
+                self.mt, self.t_mt = decode_motor_telemetry(frame.payload), now
+
+    def rpm_rms(self, now: float) -> float | None:
+        """RMS motor RPM (thrust ~ sum(rpm^2)); None if stale, missing, or bidir-DShot off."""
+        if self.mt is None or now - self.t_mt > 0.2:
+            return None
+        vals = [m["rpm"] for m in self.mt]
+        if len(vals) < 4 or any(v < 500 for v in vals):
+            return None
+        return math.sqrt(sum(v * v for v in vals) / len(vals))
 
     def obs_age(self, now: float) -> float:
         if self.att is None or self.imu is None:
@@ -370,7 +394,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
     writer = csv.writer(fout)
     writer.writerow(["t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
                      "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
-                     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z"])
+                     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
+                     "rpm_rms", "us_corr"])
 
     stop = {"flag": False}
     signal.signal(signal.SIGINT, lambda *_: stop.__setitem__("flag", True))
@@ -469,6 +494,9 @@ def cmd_fly(args: argparse.Namespace) -> int:
         hover_learned = None     # this pack's true hover us, measured at breakaway
         v_liftoff = None         # filtered vbat at breakaway (in-flight sag reference)
         fup_buf: list[tuple] = []  # seek-phase (t, f_up): ground-at-throttle 1 g re-reference
+        rpm_buf: list[tuple] = []  # seek-phase (t, rms rpm): breakaway rpm == hover rpm
+        rpm_hover = None
+        us_corr = 0.0            # RPM governor's integrated throttle correction (us)
         trim_roll_rad = math.radians(args.trim_roll_deg)
         trim_pitch_rad = math.radians(args.trim_pitch_deg)
         if args.trim_roll_deg or args.trim_pitch_deg:
@@ -478,7 +506,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
             while not stop["flag"]:
                 now = time.monotonic()
                 tick += 1
-                tel.poll(now, want_analog=(tick % int(args.hz) == 0), want_rc=(tick % 5 == 0))
+                tel.poll(now, want_analog=(tick % int(args.hz) == 0), want_rc=(tick % 5 == 0),
+                         want_rpm=True)
                 if tel.vbat:
                     vfilt = tel.vbat if vfilt is None else 0.98 * vfilt + 0.02 * tel.vbat
 
@@ -542,6 +571,11 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     # the drone rests through the countdown; integrate from spool start so the
                     # takeoff boost's climb rate is known — and damped — at handoff.
                     acc_z = tel.imu["acc_raw"][2]
+                    rpm_now = tel.rpm_rms(now)
+                    dt_tick = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
+                    if (args.takeoff and t_start is not None and t_liftoff_tp is None
+                            and t_fl >= hold_s and rpm_now):
+                        rpm_buf.append((t_fl - hold_s, rpm_now))
                     if t_start is not None and staged and t_fl < hold_s:
                         if t_fl > 0.5:
                             az_cal.append(acc_z)
@@ -564,7 +598,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
                                   "subtracted from the policy's view)")
                     if (az_ref is not None and args.vz_gain > 0
                             and t_start is not None and t_fl >= hold_s):
-                        dt = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
+                        dt = dt_tick
                         # Full projection of specific force onto world-up (RAW attitude — acc
                         # and attitude share the mount, so raw-with-raw is self-consistent).
                         # z-only undercounted lift by (1-cos)*g during ordinary wobble: every
@@ -659,6 +693,11 @@ def cmd_fly(args: argparse.Namespace) -> int:
                                               f"{new_ref:.0f} ({(new_ref / az_ref - 1) * 100:+.1f}%)")
                                         az_ref = new_ref
                                         vz = 0.3  # we know it just lifted at ~this rate
+                                    rcal = [v for (tt, v) in rpm_buf if tp - 0.3 <= tt <= tp - 0.02]
+                                    if len(rcal) >= 4:
+                                        rpm_hover = sum(rcal) / len(rcal)
+                                        print(f"  hover RPM anchor: {rpm_hover:.0f} rms "
+                                              "(breakaway = weight) — RPM governor armed")
                                 elif tp > SEEK_TIMEOUT_S:
                                     print("\nno liftoff within the seek window — weak pack or prop "
                                           "drag? releasing, DISARM")
@@ -670,12 +709,23 @@ def cmd_fly(args: argparse.Namespace) -> int:
                     elif t_start is not None and args.launch and last_countdown != -2:
                         last_countdown = -2  # throttle is fully up now — only NOW let go
                         print("  GO — release!")
+                    # RPM thrust governor (free flight only): steer throttle so the MEASURED
+                    # thrust (rpm/rpm_hover)^2 tracks what the policy is asking for.
+                    if (rpm_hover and rpm_now and t_start is not None
+                            and t_fl >= hold_s + ramp_in_s):
+                        a0c = max(-1.0, min(1.0, act[0] + args.trim_thrust + thr_trim))
+                        t_des = (a0c + 1.0) * 0.5 * MAX_THRUST_NORMED
+                        rpm_err = (rpm_now / rpm_hover) ** 2 - t_des
+                        us_corr = max(-RPM_CORR_CAP,
+                                      min(RPM_CORR_CAP, us_corr - RPM_KI_US * rpm_err * dt_tick))
+                        us[2] = int(max(args.min_us, min(args.max_us, us[2] + us_corr)))
                     stream_rc(fc, us)
                     n_sent += 1
                     writer.writerow([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                                      *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
                                      *us, tel.vbat or "", hover_eff,
-                                     f"{vz:.3f}", f"{thr_trim:+.4f}", *tel.imu["acc_raw"]])
+                                     f"{vz:.3f}", f"{thr_trim:+.4f}", *tel.imu["acc_raw"],
+                                     f"{rpm_now:.0f}" if rpm_now else "", f"{us_corr:+.0f}"])
                 time.sleep(max(0.0, period - (time.monotonic() - now)))
         finally:
             fout.close()
