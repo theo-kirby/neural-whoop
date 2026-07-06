@@ -163,6 +163,12 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   white-trained arms 3–4%. Open question: the real gyro is Betaflight-LPF-filtered (spectrum is
   colored, not white) — under test with the AR(1) `obs_noise_ar_channels` seam (R2/R3 arms,
   ρ modeled/unvalidated).
+- **Ladder closed (RED, Flywheel `rough-art-1658`):** R3 (colored, one factor vs R1) and R4
+  (+privileged `vz_penalty`/`thrust_const_penalty` reward, `tasks/hover.py`) also 0.0% M1 —
+  hold time monotonically improves (2.96 → 5.18 → 12.84 s median) but nothing reaches 30 s and
+  M2 worsens down the ladder. **Final attribution: the honest noise amplitude itself** (2.5 rad/s
+  gyro SD) makes the open-loop trim unlearnable in this recipe. `hover_blind_air65_long` remains
+  the flagship; the flow-deck (Stage-1) path is confirmed with clean attribution.
 - **Obs/oracle:** **[roll, pitch, p, q, r, vz_est]** (6) × `obs_stack 3` (deployed input 18).
   `vz_est` simulates the deployed pilot's leaky acc-integrated climb-rate estimate exactly
   (leak τ 4 s, clamp ±2 m/s, decay-only past 25° tilt — `scripts/pilot.py`'s VZ_* constants);

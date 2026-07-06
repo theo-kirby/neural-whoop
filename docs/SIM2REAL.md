@@ -144,6 +144,22 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 > (= `_noiseonly` + colored). "Needs the flow deck" remains the strategic read but is **not yet
 > forced by the evidence** for the stock-hardware (IMU-only) line.
 
+> **LADDER CLOSED (2026-07-06, RED — Flywheel `muddy-brook-9314` → `spring-violet-3051` →
+> `rough-art-1658`).** All three attribution arms failed the bars: **R1** (white noise, trim
+> poisons removed) M1 0.0%; **R3** (AR(1)-colored, ρ 0.9/0.8 modeled) M1 0.0% but sink 1.75×
+> slower and best-ever no-DR attitude 0.71°; **R4** (+privileged −|vz| / thrust-constancy reward)
+> M1 0.0% with median hold stretched to 12.84 s but DR-on tilt collapsed to 40°. Monotone ladder:
+> median time-to-floor 2.96 → 5.18 → 12.84 s — each lever attacks its mechanism, none reaches the
+> 30 s horizon, and the deploy-relevant M2 got *worse* down the ladder (4.0 → 3.2 → 0.9%).
+> **Final attribution: the honest gyro-noise AMPLITUDE itself (2.5 rad/s ≈ 143°/s SD) is what
+> sinks blind hover** — not the trim DR (R1), not the white-vs-colored spectrum at modeled ρ (R3),
+> not the reward (R4). The v2 conclusion (IMU-only open-loop altitude cannot survive the real
+> sensor floor; flow-deck velocity is the path) now **stands with clean attribution**.
+> `hover_blind_air65_long` remains the flagship/first-flight checkpoint: 91.6% clean survival,
+> 0.1% under honest noise with calibrated trim — fly it in calm air, expect no noise robustness.
+> Open honesty items: ρ unvalidated (measure lag-1 autocorr from calm-hover `flight_*.csv`),
+> H2 weights unswept.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
