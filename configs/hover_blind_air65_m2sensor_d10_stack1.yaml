@@ -1,0 +1,56 @@
+# hover_blind_air65_m2sensor_d10_stack1: SENSOR-ONLY M2 eval at 10% of the measured gyro-noise
+# amplitude — calibrated trim (thrust_scale 0) AND no unwinnable kinematic disturbances (impulses 0,
+# wind 0): open-loop altitude cannot answer z velocity kicks any more than it can answer thrust error,
+# so a fair sensor-robustness number must exclude them (same honesty split as thrust_scale).
+# Keeps: white gyro/attitude noise (scaled), gyro bias 0.05, rate_gain 0.15, latency 5. stack-1 twin.
+
+run:
+  name: hover_blind_air65_m2sensor_d10_stack1
+
+task:
+  name: hover_blind
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 2048
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  wind_accel_mps2: 0.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.0       # trim calibrated: the honesty split
+  obs_noise_std: 0.0
+  #                        [roll,  pitch, p,     q,    r    ]  (rad, rad/s)
+  obs_noise_std_channels: [0.02,  0.02,  0.25,  0.22,  0.15]
+  obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05]
+  action_latency_steps: 5
+  impulse_prob: 0.0
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
