@@ -1,0 +1,100 @@
+# hover_blind_air65_v2 (FLAGSHIP of the 2026-07-06 three-way sweep): noise-hardened, vz-aware
+# blind hover. Fork of hover_blind_air65_long.yaml, driven by the real-flight campaign
+# (runs/pilot/flight_*.csv — measured numbers below, recorded in docs/SIM2REAL.md):
+#   - task hover_blind -> hover_blind_v2: obs grows a 6th channel, the deploy-matched leaky
+#     acc-integrated climb-rate estimate (vz_est). Altitude was open-loop; the external acc-PI
+#     damper hit its ceiling fighting the RPM governor over a biased estimate — let the policy
+#     own vertical damping and learn what to trust about vz.
+#   - HONEST per-channel obs noise (obs_noise_std 0.01 -> channel list): calm-hover gyro noise
+#     floor measured at ±145 deg/s (~2.5 rad/s) sd from frame vibration — a 250x gap vs the old
+#     scalar 0.01 on the policy's primary input (the ±10-17 deg wobble). Attitude ~0.02 rad;
+#     vz ~0.15 m/s per-step scatter.
+#   - Per-episode obs BIAS DR (new): residual level bias after floor-cal ±2 deg (0.035 rad) on
+#     roll/pitch; vz DC bias measured −0.6..−1.6 m/s in every hover window -> ±1.5 m/s range.
+#   - STEEPER upright well (sigma 0.5 -> 0.25) + halved smoothness penalty (0.004 -> 0.002):
+#     the old shallow well commanded rates too small to measure over the real noise floor
+#     (the steady −3..−10 deg pitch equilibrium = "drifts backwards"); with honest 2.5 rad/s
+#     noise the delta-action penalty taxes gain a memoryless MLP can't filter — obs_stack 3
+#     provides the averaging path instead.
+#   - obs_stack 3: the policy's only noise filter (and latency inference) — deploy-size still
+#     tiny (18-in [64,64]).
+#   - action_latency_steps 3 -> 5, thrust_scale_frac 0.05 -> 0.12: measured obs age p50 24 /
+#     p99 112 / max 209 ms; same-day hover-anchor spread ±15% (liftoff-seek re-anchors most of
+#     it, the DR covers the rest).
+# Sweep comparisons: vs _v2_novz = value of the vz channel; _novz vs _v2_noiseonly = value of
+# the reward steepening; _noiseonly vs hover_blind_air65_long cross-eval = value of noise-
+# hardening alone.
+
+run:
+  name: hover_blind_air65_v2
+
+task:
+  name: hover_blind_v2
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.25
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.002
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+  # vz estimator constants — MUST mirror scripts/pilot.py (VZ_LEAK_TAU/VZ_CLAMP/VZ_TILT_LIMIT).
+  vz_tau_s: 4.0
+  vz_clamp: 2.0
+  vz_freeze_tilt_deg: 25.0
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 3
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.12      # measured same-day hover-anchor spread ±15%; seek re-anchors most
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  #                        [roll,  pitch, p,    q,    r,    vz_est]  (rad, rad/s, m/s)
+  obs_noise_std_channels: [0.02,  0.02,  2.5,  2.2,  1.5,  0.15]   # gyro floor: ±145 deg/s sd measured
+  obs_bias_channels:      [0.035, 0.035, 0.05, 0.05, 0.05, 1.5]    # level ±2 deg; vz DC −0.6..−1.6 m/s
+  action_latency_steps: 5      # measured obs age p50 24 / p99 112 / max 209 ms at 50 Hz
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.3
+  ckpt_interval_updates: 800
