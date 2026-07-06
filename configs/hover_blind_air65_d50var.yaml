@@ -1,0 +1,86 @@
+# hover_blind_air65_d50var: amplitude-randomized noise DR — the fix for the trim
+# amplitude-sensitivity the d50 M1-live diagnostic exposed (survival 81.4%/43.0%/0.3% at
+# 0.8x/1.0x/1.2x of the trained amplitude: a fixed-amplitude-trained policy's thrust trim is a
+# steep function of the input-noise sd, so it is deployment-brittle under the real world's
+# throttle/battery/prop-wear amplitude variation and under uncertainty in how much bridge-side
+# oversampling actually helps).
+#
+# Fork of hover_blind_air65_d50.yaml changing ONE factor: obs_noise_amp_range [0.5, 2.0] — each
+# drone draws a per-episode noise-amplitude factor, so the trained band is 0.625..2.5 rad/s on p:
+#   * upper edge (2.0x) = the RAW measured vibration floor (bridge averaging buys nothing),
+#   * lower edge (0.5x) = averaging works better than the sqrt(N) model.
+# If the trim holds across this band, the deploy story no longer depends on the unvalidated
+# oversampling assumptions. obs_stack 3 makes the episode's amplitude estimable from
+# frame-to-frame variance, so an amplitude-ADAPTIVE trim is representable, not just a compromise.
+# Eval battery: M1-live at s050..s200 (trim flatness across the band), M2-sensor@d50/@d100.
+
+run:
+  name: hover_blind_air65_d50var
+
+task:
+  name: hover_blind
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.8
+  z_max: 2.2
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 3
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05      # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  #                        [roll,  pitch, p,     q,    r    ]  (rad, rad/s)
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75]
+  obs_noise_amp_range:    [0.5, 2.0]   # per-episode amplitude factor (see header)
+  obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05]
+  action_latency_steps: 5
+  impulse_prob: 0.02
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

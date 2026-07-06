@@ -54,6 +54,16 @@ class DomainRandomizationConfig:
             ``obs_dim``); each drone draws ``uniform(±range)`` per channel at reset. Models the
             slowly-varying DC errors real sensors carry (attitude mount bias, vz vibration DC
             offset) that per-step noise can't represent. Empty = off.
+        obs_noise_amp_range: Per-episode noise AMPLITUDE randomization ``(lo, hi)``: each drone
+            draws a scalar factor ``uniform(lo, hi)`` at reset that multiplies its per-channel
+            obs noise (white or AR(1)) for the whole episode. Empty = off (factor 1). Models the
+            real uncertainty in the vibration-noise level (throttle, battery, prop wear, and how
+            much bridge-side oversampling actually averages out) — the d50 M1-live diagnostic
+            showed a fixed-amplitude-trained policy's thrust trim is a steep function of the
+            noise sd (81%/43%/0.3% survival at 0.8x/1.0x/1.2x the trained amplitude), so training
+            across an amplitude band is what forces an amplitude-invariant/adaptive trim. The
+            factor deliberately does NOT scale ``obs_bias_channels`` (a DC error is not vibration).
+            Requires ``obs_noise_std_channels``.
         action_latency_steps: Max actuation delay in control steps (per-drone 0..max).
         uplink_latency_steps: Max staleness (control steps, per-drone 0..max) of the task's
             *uplinked* obs channels (``DroneTask.uplink_slices``) — the onboard-hybrid split
@@ -78,6 +88,7 @@ class DomainRandomizationConfig:
     obs_noise_std_channels: tuple[float, ...] = ()
     obs_noise_ar_channels: tuple[float, ...] = ()
     obs_bias_channels: tuple[float, ...] = ()
+    obs_noise_amp_range: tuple[float, ...] = ()
     action_latency_steps: int = 1
     uplink_latency_steps: int = 0
     uplink_interval_steps: int = 1
@@ -154,6 +165,14 @@ class DomainRandomizer:
                 raise ValueError("obs_noise_ar_channels requires obs_noise_std_channels")
             if any(not (0.0 <= r < 1.0) for r in cfg.obs_noise_ar_channels):
                 raise ValueError("obs_noise_ar_channels entries must be in [0, 1)")
+        if len(cfg.obs_noise_amp_range) > 0:
+            if len(cfg.obs_noise_amp_range) != 2:
+                raise ValueError("obs_noise_amp_range must be (lo, hi)")
+            lo, hi = cfg.obs_noise_amp_range
+            if not (0.0 <= lo <= hi):
+                raise ValueError("obs_noise_amp_range requires 0 <= lo <= hi")
+            if not cfg.obs_noise_std_channels:
+                raise ValueError("obs_noise_amp_range requires obs_noise_std_channels")
         self._noise_std = (
             torch.tensor(cfg.obs_noise_std_channels, device=self.dev, dtype=torch.float32)
             if cfg.obs_noise_std_channels else None
@@ -173,6 +192,12 @@ class DomainRandomizer:
             torch.tensor(cfg.obs_bias_channels, device=self.dev, dtype=torch.float32)
             if cfg.obs_bias_channels else None
         )
+        # Per-episode noise-amplitude factor, (n, 1); ones = off. Multiplies the per-channel
+        # noise at read time (white draw or AR state) but never the DC obs_bias.
+        self._amp_range = (
+            tuple(cfg.obs_noise_amp_range) if (cfg.obs_noise_amp_range and cfg.enabled) else None
+        )
+        self._noise_amp = torch.ones(n_drones, 1, device=self.dev)
         self.obs_bias = torch.zeros(n_drones, obs_dim, device=self.dev)
 
         self.wind = torch.zeros(n_drones, 3, device=self.dev)
@@ -220,6 +245,10 @@ class DomainRandomizer:
         self.thrust_scale[idx, 0] = self._rand(n, lo=1 - c.thrust_scale_frac * s, hi=1 + c.thrust_scale_frac * s)
         if self._bias_range is not None:
             self.obs_bias[idx] = (self._rand(n, self._bias_range.numel()) * 2 - 1) * self._bias_range * s
+        if self._amp_range is not None:
+            # NOT curriculum-scaled: the overall noise level already ramps via `scale` at read
+            # time; the amplitude *spread* is the thing being trained against and stays fixed.
+            self._noise_amp[idx, 0] = self._rand(n, lo=self._amp_range[0], hi=self._amp_range[1])
         if self._noise_state is not None:
             # Fresh episodes start the AR(1) noise at its stationary marginal N(0, sigma^2)
             # (not zero), so the read-time variance is exactly sigma^2 from t=0 — a real filtered
@@ -355,10 +384,10 @@ class DomainRandomizer:
         if not self.cfg.enabled:
             return obs
         if self._noise_state is not None:
-            out = obs + self._noise_state * self.scale
+            out = obs + self._noise_state * (self._noise_amp * self.scale)
         elif self._noise_std is not None:
             out = obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * (
-                self._noise_std * self.scale
+                self._noise_std * (self._noise_amp * self.scale)
             )
         else:
             std = self.cfg.obs_noise_std * self.scale
