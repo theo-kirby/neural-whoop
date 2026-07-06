@@ -52,19 +52,25 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from neural_whoop.bench.msp import (  # noqa: E402
+    MSP_ALTITUDE,
     MSP_ANALOG,
     MSP_ATTITUDE,
     MSP_MODE_RANGES,
+    MSP_MOTOR_TELEMETRY,
     MSP_RAW_IMU,
     MSP_RC,
     MSP_SET_RAW_RC,
+    MSP_STATUS,
     MspError,
     MspTimeout,
     MspUdpClient,
+    decode_altitude,
     decode_analog,
     decode_attitude,
     decode_mode_ranges,
+    decode_motor_telemetry,
     decode_raw_imu,
+    decode_status_sensors,
     decode_u16s,
     pack_rc_channels,
 )
@@ -328,6 +334,30 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_probe(args: argparse.Namespace) -> int:
+    """Discover better vertical-state sensors than acc integration: a barometer (Betaflight
+    fuses altitude+vario for us) and bidirectional-DShot RPM telemetry (hover RPM is a true
+    thrust anchor, immune to pack freshness/sag). Battery in; props off is fine."""
+    with MspUdpClient(args.udp_host, args.udp_port) as fc:
+        sensors = decode_status_sensors(fc.request(MSP_STATUS))
+        print("sensors:", " ".join(f"{k}={'YES' if v else 'no'}" for k, v in sensors.items()))
+        try:
+            alt = decode_altitude(fc.request(MSP_ALTITUDE))
+            print(f"MSP_ALTITUDE: alt {alt['alt_m']:+.2f} m  vario {alt['vario_ms']:+.2f} m/s"
+                  + ("" if sensors["baro"] else "  (no baro: expect zeros)"))
+        except (MspError, MspTimeout) as e:
+            print(f"MSP_ALTITUDE: unavailable ({e})")
+        try:
+            mt = decode_motor_telemetry(fc.request(MSP_MOTOR_TELEMETRY))
+            print("MSP_MOTOR_TELEMETRY:",
+                  " ".join(f"m{i}={m['rpm']}rpm({m['invalid_pct']:.0f}%inv)" for i, m in enumerate(mt))
+                  or "empty")
+            print("  (rpm needs bidirectional DShot; re-run while armed at idle to see nonzero)")
+        except (MspError, MspTimeout) as e:
+            print(f"MSP_MOTOR_TELEMETRY: unavailable ({e})")
+    return 0
+
+
 def cmd_fly(args: argparse.Namespace) -> int:
     if not args.ack_props_on:
         sys.exit("refusing: fly streams live flight commands. Re-run with --ack-props-on once\n"
@@ -437,6 +467,13 @@ def cmd_fly(args: argparse.Namespace) -> int:
         t_last_fresh = None
         t_liftoff_tp = None      # seek-phase time at which the drone left the ground
         hover_learned = None     # this pack's true hover us, measured at breakaway
+        v_liftoff = None         # filtered vbat at breakaway (in-flight sag reference)
+        fup_buf: list[tuple] = []  # seek-phase (t, f_up): ground-at-throttle 1 g re-reference
+        trim_roll_rad = math.radians(args.trim_roll_deg)
+        trim_pitch_rad = math.radians(args.trim_pitch_deg)
+        if args.trim_roll_deg or args.trim_pitch_deg:
+            print(f"manual trim: roll {args.trim_roll_deg:+.1f} / pitch {args.trim_pitch_deg:+.1f} deg "
+                  "(+ = right / nose-down push)")
         try:
             while not stop["flag"]:
                 now = time.monotonic()
@@ -525,13 +562,22 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             print(f"  level reference: roll {math.degrees(lvl[0]):+.1f} / "
                                   f"pitch {math.degrees(lvl[1]):+.1f} deg (floor-rest bias, "
                                   "subtracted from the policy's view)")
-                    if lvl != (0.0, 0.0):
-                        o = [o[0] - lvl[0], o[1] - lvl[1], o[2], o[3], o[4]]
                     if (az_ref is not None and args.vz_gain > 0
                             and t_start is not None and t_fl >= hold_s):
                         dt = min(0.1, now - t_last_fresh) if t_last_fresh is not None else 0.0
+                        # Full projection of specific force onto world-up (RAW attitude — acc
+                        # and attitude share the mount, so raw-with-raw is self-consistent).
+                        # z-only undercounted lift by (1-cos)*g during ordinary wobble: every
+                        # hover window of 1783342678-842 showed vz mean -0.6..-1.25 "descent"
+                        # while the drone visibly climbed. Axis signs fitted on those logs.
+                        ax, ay = tel.imu["acc_raw"][0], tel.imu["acc_raw"][1]
+                        f_up = (-ax * math.sin(o[1])
+                                + ay * math.cos(o[1]) * math.sin(o[0])
+                                + acc_z * math.cos(o[1]) * math.cos(o[0]))
+                        if args.takeoff and t_liftoff_tp is None:
+                            fup_buf.append((t_fl - hold_s, f_up))
                         if abs(o[0]) < VZ_TILT_LIMIT and abs(o[1]) < VZ_TILT_LIMIT:
-                            a_vert = (acc_z / az_ref * math.cos(o[0]) * math.cos(o[1]) - 1.0) * 9.81
+                            a_vert = (f_up / az_ref - 1.0) * 9.81
                             vz = (vz + a_vert * dt) * math.exp(-dt / VZ_LEAK_TAU)
                             vz = max(-VZ_CLAMP, min(VZ_CLAMP, vz))
                             # I only in the hover window: not during boost (keeps the takeoff
@@ -545,19 +591,25 @@ def cmd_fly(args: argparse.Namespace) -> int:
                         p_term = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz))
                         thr_trim = max(-VZ_TRIM_TOTAL, min(VZ_TRIM_TOTAL, p_term + i_trim))
                     t_last_fresh = now
+                    # Level reference + manual trim, policy's view only (estimator uses raw).
+                    # Backwards drift -> positive --trim-pitch-deg (holds more nose-down).
+                    o = [o[0] - lvl[0] - trim_roll_rad,
+                         o[1] - lvl[1] - trim_pitch_rad, o[2], o[3], o[4]]
 
                     act = pol(o)
                     if t_air > args.seconds:  # ramp down: ease thrust action toward floor
                         k = (t_air - args.seconds) / ramp_s
                         act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
-                    # Sag-compensated hover anchor: hover_us was measured at --vbat-ref; required
-                    # duty scales ~1/V, so re-anchor on the (filtered) live voltage. At 3.45 V the
-                    # calibrated 1410 is BELOW true hover — flight_1783276185 sank and bounced off
-                    # the floor on exactly this.
+                    # Hover anchor: the liftoff-learned value, sag-adjusted RELATIVE to the
+                    # voltage at liftoff (same pack, same flight — unlike the retired absolute
+                    # vbat comp, this ratio is defensible: duty ~ 1/V as the pack sags in-flight,
+                    # e.g. 1783342817 sagged 3.41 -> 3.06 V within one flight).
                     base_hover = hover_learned if hover_learned is not None else args.hover_us
                     comp = 1.0
-                    if args.vbat_ref > 0 and vfilt:
+                    if args.vbat_ref > 0 and vfilt:  # legacy absolute mode (opt-in)
                         comp = max(0.9, min(1.2, args.vbat_ref / vfilt))
+                    elif v_liftoff and vfilt:
+                        comp = max(0.97, min(1.12, v_liftoff / vfilt))
                     hover_eff = int(1000 + (base_hover - 1000) * comp)
                     us = action_to_us(act, hover_eff, args.min_us, args.max_us,
                                       args.trim_thrust + thr_trim)
@@ -593,8 +645,20 @@ def cmd_fly(args: argparse.Namespace) -> int:
                                     t_liftoff_tp = tp
                                     hover_learned = max(1250, min(1550, us[2] - LIFT_LAG_US))
                                     ramp_in_s = t_liftoff_tp + RISE_S  # flight clock: rise ends it
+                                    v_liftoff = vfilt
                                     print(f"  LIFTOFF at {us[2]} us -> hover anchor learned: "
                                           f"{hover_learned} us")
+                                    # Re-reference 1 g from the ground-at-throttle window just
+                                    # before breakaway: props-on vibration shifts the acc DC by
+                                    # +-3-5% vs the idle countdown (measured across 1783342xxx),
+                                    # and that error IS the damper's drift.
+                                    cal = [f for (tt, f) in fup_buf if tp - 0.7 <= tt <= tp - 0.2]
+                                    if len(cal) >= 8:
+                                        new_ref = sum(cal) / len(cal)
+                                        print(f"  1g re-referenced at throttle: {az_ref:.0f} -> "
+                                              f"{new_ref:.0f} ({(new_ref / az_ref - 1) * 100:+.1f}%)")
+                                        az_ref = new_ref
+                                        vz = 0.3  # we know it just lifted at ~this rate
                                 elif tp > SEEK_TIMEOUT_S:
                                     print("\nno liftoff within the seek window — weak pack or prop "
                                           "drag? releasing, DISARM")
@@ -638,6 +702,7 @@ def main() -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("selftest")
     sub.add_parser("check")
+    sub.add_parser("probe")
     fly = sub.add_parser("fly")
     fly.add_argument("--seconds", type=float, default=15.0)
     fly.add_argument("--hz", type=float, default=50.0)
@@ -660,6 +725,11 @@ def main() -> int:
     fly.add_argument("--vz-gain", type=float, default=0.15,
                      help="acc-z climb damper gain (act[0] per m/s of estimated climb); "
                           "0 disables")
+    fly.add_argument("--trim-roll-deg", type=float, default=0.0,
+                     help="manual level trim: + pushes RIGHT (drifts left -> positive)")
+    fly.add_argument("--trim-pitch-deg", type=float, default=0.0,
+                     help="manual level trim: + pushes FORWARD/nose-down (drifts backwards -> "
+                          "positive, start with 1.5)")
     fly.add_argument("--aux", type=int, default=None, metavar="N",
                      help="override-switch aux channel number (1-4); normally auto-detected "
                           "from the FC's MSP OVERRIDE mode range")
@@ -669,7 +739,8 @@ def main() -> int:
 
     host, _, port = args.udp.partition(":")
     args.udp_host, args.udp_port = host, int(port or 14550)
-    return {"selftest": cmd_selftest, "check": cmd_check, "fly": cmd_fly}[args.cmd](args)
+    return {"selftest": cmd_selftest, "check": cmd_check, "probe": cmd_probe,
+            "fly": cmd_fly}[args.cmd](args)
 
 
 if __name__ == "__main__":

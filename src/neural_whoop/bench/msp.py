@@ -33,7 +33,9 @@ MSP_RAW_IMU = 102
 MSP_MOTOR = 104
 MSP_RC = 105
 MSP_ATTITUDE = 108
+MSP_ALTITUDE = 109
 MSP_ANALOG = 110
+MSP_MOTOR_TELEMETRY = 139
 MSP_SET_RAW_RC = 200
 MSP_SET_MOTOR = 214
 
@@ -138,6 +140,39 @@ def decode_analog(payload: bytes) -> dict:
     out = {"vbat_v": vbat_dv / 10.0, "mah_drawn": mah, "rssi": rssi, "amps": amps / 100.0}
     if len(payload) >= 9:  # BF appends a higher-resolution voltage field
         out["vbat_v"] = struct.unpack("<H", payload[7:9])[0] / 100.0
+    return out
+
+
+#: MSP_STATUS sensor-present bitmask (Betaflight msp.c sensorFlags)
+SENSOR_BITS = {"acc": 1, "baro": 2, "mag": 4, "gps": 8, "rangefinder": 16, "gyro": 32}
+
+
+def decode_status_sensors(payload: bytes) -> dict:
+    """MSP_STATUS: cycleTime u16, i2cErrors u16, then the sensor-present u16 bitmask."""
+    sensors = struct.unpack_from("<H", payload, 4)[0]
+    return {name: bool(sensors & bit) for name, bit in SENSOR_BITS.items()}
+
+
+def decode_altitude(payload: bytes) -> dict:
+    """MSP_ALTITUDE: i32 estimated altitude (cm), i16 vario (cm/s). Zeros without a source."""
+    alt_cm, vario = struct.unpack("<ih", payload[:6])
+    return {"alt_m": alt_cm / 100.0, "vario_ms": vario / 100.0}
+
+
+def decode_motor_telemetry(payload: bytes) -> list[dict]:
+    """MSP_MOTOR_TELEMETRY: u8 count, then per motor rpm u32, invalid%% u16 (1/100),
+    escTemp u8, escVoltage u16, escCurrent u16, escConsumption u16 (13 bytes/motor).
+    RPM requires bidirectional DShot; otherwise rpm reads 0."""
+    if not payload:
+        return []
+    out = []
+    off = 1
+    for _ in range(payload[0]):
+        if off + 13 > len(payload):
+            break
+        rpm, invalid, temp, volt, curr, cons = struct.unpack_from("<IHBHHH", payload, off)
+        out.append({"rpm": rpm, "invalid_pct": invalid / 100.0, "esc_temp_c": temp})
+        off += 13
     return out
 
 
