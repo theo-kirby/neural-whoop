@@ -160,6 +160,28 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 > Open honesty items: ρ unvalidated (measure lag-1 autocorr from calm-hover `flight_*.csv`),
 > H2 weights unswept.
 
+> **CAMPAIGN REOPENED (2026-07-06, stock-hardware constraint — Flywheel `delicate-credit-2979`).**
+> User directive: find a path with **no extra hardware** beyond the stock Air65 II + ESP32 bridge.
+> Reframing (`shiny-firefly-6661`): the 2.5 rad/s figure is **aliased frame vibration** at 50 Hz
+> MSP sampling, not intrinsic sensor error — the amplitude at the *policy input* is software-
+> reducible (bridge MSP oversampling ≈ sd/√N, matched host-side filtering, policy memory). Three
+> corrections landed with the first dose-response arm:
+> 1. **M2-honest was partly unwinnable** (`odd-hat-1222`): impulse kicks + wind cost the blind
+>    baseline ~30 pts *independent of noise* (44.8% vs 15.0% at 0.1× amplitude) — unobservable
+>    open-loop kinematics, same fairness class as thrust_scale. Fair metric = **M2-sensor**
+>    (`m2sensor_*` configs: calibrated trim, no impulses/wind, honest noise+bias+latency).
+> 2. **Zero-noise M1 is unphysical** for a vibration-driven gyro and reads 0% on any noise-trained
+>    arm via the Jensen trim shift; the deploy-faithful clean check is **M1-live** (clean world,
+>    live sensors — `m1live_d50_s*` configs).
+> 3. **The real enemy is the amplitude-LOCKED trim** (`polished-moon-9652`, d50 arm RED): a policy
+>    trained at fixed 0.5× amplitude survives 81.4%/43.0%/0.3% at 0.8×/1.0×/1.2× of its trained
+>    sd — the learned thrust trim is a steep function of input-noise amplitude, so every
+>    fixed-amplitude arm (the whole R-ladder included) was deployment-brittle by construction.
+>    Dose-response itself confirmed: M2-sensor@own-amplitude 3.8% (R1) → 22.0% (d50).
+> Fix under test: **per-episode noise-amplitude DR** (`obs_noise_amp_range`, commit `1fd3c1e`) —
+> d50var trains U[0.5,2.0]× (band 0.625–2.5 rad/s, upper edge = the raw measured floor), so the
+> deploy story stops depending on the unvalidated oversampling assumptions.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
