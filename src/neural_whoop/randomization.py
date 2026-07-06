@@ -36,7 +36,15 @@ class DomainRandomizationConfig:
         wind_accel_mps2: Max steady wind acceleration magnitude (m/s^2), per episode.
         rate_gain_frac: Per-drone body-rate command scale drawn from ``1 ± frac``.
         thrust_scale_frac: Per-drone collective-thrust command scale drawn from ``1 ± frac``.
-        obs_noise_std: Std of Gaussian noise added to the observation vector.
+        obs_noise_std: Std of Gaussian noise added to the observation vector (all channels).
+        obs_noise_std_channels: Per-channel noise stds (length == the task's ``obs_dim``);
+            when non-empty this OVERRIDES the scalar ``obs_noise_std``. Lets the noise model
+            be honest per channel — e.g. the measured whoop gyro vibration floor (~2.5 rad/s)
+            vs a quiet attitude estimate (~0.02 rad).
+        obs_bias_channels: Per-channel, per-episode constant observation bias ranges (length ==
+            ``obs_dim``); each drone draws ``uniform(±range)`` per channel at reset. Models the
+            slowly-varying DC errors real sensors carry (attitude mount bias, vz vibration DC
+            offset) that per-step noise can't represent. Empty = off.
         action_latency_steps: Max actuation delay in control steps (per-drone 0..max).
         uplink_latency_steps: Max staleness (control steps, per-drone 0..max) of the task's
             *uplinked* obs channels (``DroneTask.uplink_slices``) — the onboard-hybrid split
@@ -58,6 +66,8 @@ class DomainRandomizationConfig:
     rate_gain_frac: float = 0.15
     thrust_scale_frac: float = 0.10
     obs_noise_std: float = 0.01
+    obs_noise_std_channels: tuple[float, ...] = ()
+    obs_bias_channels: tuple[float, ...] = ()
     action_latency_steps: int = 1
     uplink_latency_steps: int = 0
     uplink_interval_steps: int = 1
@@ -92,6 +102,8 @@ class DomainRandomizer:
         generator: Optional torch ``Generator`` for reproducibility.
         uplink_slices: Obs channel slices that ride the radio uplink (``DroneTask.uplink_slices``);
             empty -> the uplink hooks are no-ops.
+        obs_dim: The task's (pre-stacking) observation length; required (non-zero) when the
+            per-channel ``obs_noise_std_channels`` / ``obs_bias_channels`` are configured.
     """
 
     def __init__(
@@ -103,6 +115,7 @@ class DomainRandomizer:
         device: torch.device | str = "cpu",
         generator: torch.Generator | None = None,
         uplink_slices: tuple[slice, ...] = (),
+        obs_dim: int = 0,
     ):
         self.cfg = cfg
         self.n = n_drones
@@ -115,6 +128,25 @@ class DomainRandomizer:
         # strength). The trainer can ramp this 0->1 over training (reliability curriculum); it is
         # applied per-drone at reset (wind/rate/thrust/latency incidence) and per-step for obs noise.
         self.scale = 1.0
+
+        # Per-channel obs noise/bias (both are per-frame, PRE-stacking — the env noises each raw
+        # frame, so a drawn bias is automatically constant across the stacked history, matching a
+        # physical mount/DC bias). Tuple lengths must match the task's obs_dim exactly.
+        for name, chans in (("obs_noise_std_channels", cfg.obs_noise_std_channels),
+                            ("obs_bias_channels", cfg.obs_bias_channels)):
+            if len(chans) > 0 and len(chans) != obs_dim:
+                raise ValueError(
+                    f"{name} has {len(chans)} entries but the task obs_dim is {obs_dim}"
+                )
+        self._noise_std = (
+            torch.tensor(cfg.obs_noise_std_channels, device=self.dev, dtype=torch.float32)
+            if cfg.obs_noise_std_channels else None
+        )
+        self._bias_range = (
+            torch.tensor(cfg.obs_bias_channels, device=self.dev, dtype=torch.float32)
+            if cfg.obs_bias_channels else None
+        )
+        self.obs_bias = torch.zeros(n_drones, obs_dim, device=self.dev)
 
         self.wind = torch.zeros(n_drones, 3, device=self.dev)
         self.rate_gain = torch.ones(n_drones, 1, device=self.dev)
@@ -159,6 +191,8 @@ class DomainRandomizer:
         self.wind[idx] = torch.stack([mag * ang.cos(), mag * ang.sin(), vert], dim=-1)
         self.rate_gain[idx, 0] = self._rand(n, lo=1 - c.rate_gain_frac * s, hi=1 + c.rate_gain_frac * s)
         self.thrust_scale[idx, 0] = self._rand(n, lo=1 - c.thrust_scale_frac * s, hi=1 + c.thrust_scale_frac * s)
+        if self._bias_range is not None:
+            self.obs_bias[idx] = (self._rand(n, self._bias_range.numel()) * 2 - 1) * self._bias_range * s
         if self._max_lat > 0:
             lat = torch.randint(0, self._max_lat + 1, (n,), device=self.dev, generator=self.gen)
             if s < 1.0:  # ramp latency *incidence* with the curriculum (latency is integer-valued)
@@ -259,8 +293,24 @@ class DomainRandomizer:
         return self._impulse_mask() * direction * mag
 
     def add_obs_noise(self, obs: Tensor) -> Tensor:
-        """Add Gaussian observation noise (no-op if disabled / std==0 / curriculum scale==0)."""
-        std = self.cfg.obs_noise_std * self.scale
-        if not self.cfg.enabled or std <= 0.0:
+        """Add Gaussian observation noise + the per-episode channel bias.
+
+        Per-channel path (``obs_noise_std_channels`` set): each channel gets its own noise std
+        (curriculum-scaled per step) plus this drone's episode-constant ``obs_bias`` (curriculum-
+        scaled at draw time, like ``thrust_scale``). Legacy scalar path unchanged. No-op if
+        disabled.
+        """
+        if not self.cfg.enabled:
             return obs
-        return obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * std
+        if self._noise_std is not None:
+            out = obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * (
+                self._noise_std * self.scale
+            )
+        else:
+            std = self.cfg.obs_noise_std * self.scale
+            out = obs if std <= 0.0 else (
+                obs + torch.randn(obs.shape, device=obs.device, generator=self.gen) * std
+            )
+        if self._bias_range is not None:
+            out = out + self.obs_bias
+        return out

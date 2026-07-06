@@ -70,7 +70,7 @@ class MultiAgentDroneEnv:
         self.dt = self.dyn.dt
         self.dr = DomainRandomizer(
             dr_cfg or DomainRandomizationConfig(), self.n_drones, self.act_dim, self.dt,
-            self.device, self.gen, uplink_slices=task.uplink_slices(),
+            self.device, self.gen, uplink_slices=task.uplink_slices(), obs_dim=task.obs_dim,
         )
 
         self.t = torch.zeros(n_envs, device=self.device, dtype=torch.long)
