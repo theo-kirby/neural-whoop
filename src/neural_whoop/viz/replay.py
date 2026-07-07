@@ -446,6 +446,126 @@ def _to_numpy(x: Any) -> Any:
     return x
 
 
+#: Contract action limits for a real pilot flight replay (from the obs-v4/act-v2 contract +
+#: ``scripts/pilot.py`` rate constants) — the flight has no live env to read them off, so they're
+#: pinned here for the ``meta`` block. Informational only for an IMU-only hover.
+_FLIGHT_ACTION_LIMITS = {
+    "max_thrust_normed": 4.0,
+    "hover_thrust_normed": 1.0,
+    "max_body_rate_rp_rps": 12.0,
+    "max_body_rate_yaw_rps": 6.0,
+}
+
+#: Extra real-flight telemetry channels carried in the additive per-frame ``scene`` block (each is
+#: a scalar, so ``_build_frame`` keeps them as floats). These make the flight HUD-legible in Studio
+#: without touching the pose renderers (which are meaningless for a pos-stub IMU-only hover).
+_FLIGHT_SCENE_EXTRAS = ("vbat", "rpm_rms", "obs_age_ms", "vz_est", "us_corr", "hover_eff")
+
+
+def _euler_to_quat_xyzw(roll: float, pitch: float, yaw: float) -> list[float]:
+    """ZYX intrinsic (yaw-pitch-roll) Euler -> quaternion ``[qx, qy, qz, qw]`` (real-last)."""
+    cr, sr = np.cos(roll * 0.5), np.sin(roll * 0.5)
+    cp, sp = np.cos(pitch * 0.5), np.sin(pitch * 0.5)
+    cy, sy = np.cos(yaw * 0.5), np.sin(yaw * 0.5)
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    return [float(qx), float(qy), float(qz), float(qw)]
+
+
+def flight_to_replay(
+    log: Any,
+    *,
+    policy: str = "pilot flight (real)",
+    task: str = "hover_blind",
+) -> dict[str, Any]:
+    """Convert a real pilot :class:`~neural_whoop.analysis.flight_log.FlightLog` to a replay doc.
+
+    Reuses :class:`RunRecorder` with a **hand-built meta** (no live env — every field is JSON-native)
+    so a real flight becomes a portable, Studio-playable/scrubbable artifact on the same locked
+    contract as a sim rollout. Per frame: ``obs=[roll,pitch,p,q,r]``, ``action=[a_thr,a_wx,a_wy,a_wz]``,
+    ``rpy=[roll,pitch,∫r]`` (yaw integrated from the gyro), ``angvel=[p,q,r]``, and the real-flight
+    extras (``vbat``/``rpm_rms``/``obs_age_ms``/``vz_est``/``us_corr``/``hover_eff``) in the additive
+    ``scene`` channel.
+
+    **Caveat — ``pos`` is a vertical-only stub:** ``pos=[0, 0, ∫vz_est]`` (the pilot never estimated
+    horizontal position), so the trajectory/FPV pose renderers stay meaningless for an IMU-only
+    hover. Use the telemetry/HUD views (``scene`` + attitude) only. ``vel=[0,0,vz_est]`` and
+    ``action_diffaero`` mirrors the normalized ``action`` (there is no DiffAero controller in the loop).
+
+    Args:
+        log: A :class:`FlightLog` (duck-typed: needs ``t``, ``col``, ``dt_median``, ``path``).
+        policy: Human-readable policy label for ``meta.policy``.
+        task: Task-family name for ``meta.task`` (the pilot flies the 5-dim ``hover_blind`` obs).
+
+    Returns:
+        The full replay document (``dict``), ready for :meth:`RunRecorder.save` or JSON dump.
+    """
+    dt = float(log.dt_median) or 0.02
+    control_hz = int(round(1.0 / dt)) if dt > 0 else 0
+    t = np.asarray(log.t, dtype=np.float64)
+    n = len(t)
+    roll, pitch = log.col("roll"), log.col("pitch")
+    p, q, r = log.col("p"), log.col("q"), log.col("r")
+    vz = np.nan_to_num(log.col("vz_est"), nan=0.0)
+
+    # Per-step dt from the flight clock (0 across the pre-liftoff wait rows) drives both integrals.
+    step_dt = np.diff(t, prepend=t[0] if n else 0.0)
+    step_dt = np.clip(step_dt, 0.0, 0.2)
+    yaw = np.cumsum(np.nan_to_num(r, nan=0.0) * step_dt)  # integrated gyro-z -> heading
+    pos_z = np.cumsum(vz * step_dt)                        # vertical-only stub
+
+    meta = {
+        "config": "pilot-flight",
+        "policy": str(policy),
+        "task": str(task),
+        "obs_version": "obs-v4",
+        "action_version": "act-v2",
+        "substrate": "real-hardware",
+        "control_hz": control_hz,
+        "sim_hz": control_hz,
+        "dt": dt,
+        "coordinate_frame": COORDINATE_FRAME,
+        "state_layout": STATE_LAYOUT + "  [REAL FLIGHT: pos is a vertical-only ∫vz_est stub]",
+        "action_layout": ACTION_LAYOUT,
+        "action_limits": dict(_FLIGHT_ACTION_LIMITS),
+        "unity_hint": UNITY_HINT,
+        "source": "pilot-flight",
+        "source_csv": str(getattr(log, "path", "")),
+        "pos_is_stub": True,  # trajectory/FPV renderers are meaningless — telemetry/HUD only
+        "scene_info": {"extras": list(_FLIGHT_SCENE_EXTRAS),
+                       "note": "per-frame real-flight telemetry (vbat V, rpm rms, obs_age ms, "
+                               "vz_est m/s, us_corr µs, hover_eff µs)"},
+    }
+    recorder = RunRecorder(meta)
+    recorder.begin_episode(1, gates=[], drone=0)
+    for i in range(n):
+        scene = {k: (0.0 if not np.isfinite(log.col(k)[i]) else float(log.col(k)[i]))
+                 for k in _FLIGHT_SCENE_EXTRAS}
+        action = [float(log.col(c)[i]) for c in ("a_thr", "a_wx", "a_wy", "a_wz")]
+        recorder.add_frame(
+            t=float(t[i]),
+            step=i + 1,
+            pos=[0.0, 0.0, float(pos_z[i])],
+            quat=_euler_to_quat_xyzw(float(roll[i]), float(pitch[i]), float(yaw[i])),
+            rpy=[float(roll[i]), float(pitch[i]), float(yaw[i])],
+            vel=[0.0, 0.0, float(vz[i])],
+            angvel=[float(p[i]), float(q[i]), float(r[i])],
+            action=action,
+            action_diffaero=action,  # no DiffAero controller in the real loop — mirror the action
+            reward=0.0,
+            cum_reward=0.0,
+            gate_idx=0,
+            dist_to_gate=0.0,
+            laps=0,
+            obs=[float(roll[i]), float(pitch[i]), float(p[i]), float(q[i]), float(r[i])],
+            scene=scene,
+        )
+    recorder.end_episode({"steps": n, "ended": "pilot-release"})
+    return recorder.to_dict()
+
+
 def load_run(path: str | Path) -> dict[str, Any]:
     """Load a replay file written by :class:`RunRecorder` (gzip-transparent)."""
     path = Path(path)

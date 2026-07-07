@@ -480,6 +480,13 @@ def cmd_fly(args: argparse.Namespace) -> int:
     check_policy_family(pol)
     log_path = Path(args.log or f"runs/pilot/flight_{int(time.time())}.csv")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Never silently clobber a prior flight: if --log names an existing file, wedge a timestamp
+    # before the suffix (mirrors the auto-timestamp fallback above). The multi-battery flights
+    # were lost this way once — each flight's data is irreplaceable, so a fixed --log stem
+    # rolls over to a fresh unique path instead of overwriting.
+    if log_path.exists():
+        log_path = log_path.with_name(f"{log_path.stem}_{int(time.time())}{log_path.suffix}")
+    print(f"logging flight to {log_path}")
     fout = open(log_path, "w", newline="")
     writer = csv.writer(fout)
     writer.writerow(["t", "obs_age_ms", "roll", "pitch", "p", "q", "r",

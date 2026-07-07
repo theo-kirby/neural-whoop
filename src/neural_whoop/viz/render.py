@@ -470,6 +470,147 @@ def plot_training_curves(run_dir: str | Path, out_path: str | Path) -> Path | No
     return _save(fig, out_path)
 
 
+def _flight_phase_bands(ax, metrics: dict) -> None:
+    """Shade the airborne + stable-hover phases and mark the first vz_est rail on a time axis.
+
+    Shared by every panel of :func:`plot_hover_telemetry` so the phase context reads across the
+    stack. No-op for keys that are missing/NaN (a flight that never lifted degrades to bare traces).
+    """
+    air = metrics.get("phases", {}).get("airborne", {})
+    hov = metrics.get("stable_hover", {})
+    t0, t1 = air.get("t_start"), air.get("t_end")
+    if t0 is not None and t1 is not None and np.isfinite(t0) and np.isfinite(t1):
+        ax.axvspan(t0, t1, color="#9aa4b2", alpha=0.08, lw=0)  # airborne
+    h0, h1 = hov.get("t_start"), hov.get("t_end")
+    if h0 is not None and h1 is not None and np.isfinite(h0) and np.isfinite(h1):
+        ax.axvspan(h0, h1, color=_PASSED_HEX, alpha=0.14, lw=0)  # stable hover (green)
+    rail_t = metrics.get("vertical", {}).get("vz_first_rail_t")
+    if rail_t is not None and np.isfinite(rail_t):
+        ax.axvline(rail_t, color=_ORACLE_COLOR, lw=1.1, ls="--", alpha=0.8)
+
+
+def plot_hover_telemetry(log: Any, metrics: dict, out_path: str | Path) -> Path:
+    """Stacked scalar-telemetry panels for a real hover flight (the flight-report headline plot).
+
+    Panels (shared time axis): roll/pitch, body rates (p,q,r), ``us_thr`` vs the policy's ``a_thr``
+    (twin axis — the thrust-divergence view), ``vz_est`` with the ±clamp rail marked, and
+    ``obs_age``. The airborne and longest stable-hover windows are shaded (green = stable hover) and
+    the first ``vz_est`` rail is drawn as a red dashed line — so the ceiling-hit signature (throttle
+    climbing while ``a_thr`` is flat, right as ``vz_est`` rails) is legible at a glance.
+
+    Args:
+        log: A :class:`neural_whoop.analysis.flight_log.FlightLog` (duck-typed: needs ``t``, ``roll``,
+            ``pitch``, ``us_thr``, ``a_thr``, ``vz_est``, ``obs_age_ms`` and ``.data``/``.col``).
+        metrics: The :func:`neural_whoop.analysis.flight_log.flight_metrics` dict (phase bands + rail).
+        out_path: PNG output path.
+    """
+    plt = _mpl()
+    t = np.asarray(log.t, dtype=np.float64)
+    fig, axes = plt.subplots(5, 1, figsize=(11, 11), sharex=True)
+
+    # 1) attitude (deg)
+    ax = axes[0]
+    ax.plot(t, np.degrees(log.roll), color=_PATH_COLOR, lw=1.1, label="roll")
+    ax.plot(t, np.degrees(log.pitch), color=_NEXT_HEX, lw=1.1, label="pitch")
+    ax.set_ylabel("attitude (deg)")
+    ax.legend(loc="upper left", fontsize=8, ncol=2)
+
+    # 2) body rates (deg/s) — the gyro signal
+    ax = axes[1]
+    for name, color in (("p", _PATH_COLOR), ("q", _NEXT_HEX), ("r", _PASSED_HEX)):
+        ax.plot(t, np.degrees(log.col(name)), color=color, lw=0.9, label=name)
+    ax.set_ylabel("body rate (deg/s)")
+    ax.legend(loc="upper left", fontsize=8, ncol=3)
+
+    # 3) commanded throttle (us) vs the policy's thrust action (twin axis) — the divergence view
+    ax = axes[2]
+    ax.plot(t, log.us_thr, color=_PATH_COLOR, lw=1.2, label="us_thr (µs)")
+    ax.set_ylabel("us_thr (µs)", color=_PATH_COLOR)
+    ax.tick_params(axis="y", labelcolor=_PATH_COLOR)
+    axr = ax.twinx()
+    axr.plot(t, log.a_thr, color=_ORACLE_COLOR, lw=1.2, label="a_thr")
+    axr.set_ylabel("a_thr [-1,1]", color=_ORACLE_COLOR)
+    axr.tick_params(axis="y", labelcolor=_ORACLE_COLOR)
+    div = metrics.get("vertical", {}).get("thrust_divergence", {})
+    if div.get("detected"):
+        ax.set_title(
+            f"thrust divergence: us_thr +{div.get('us_thr_rise', float('nan')):.0f} µs while "
+            f"a_thr IQR {div.get('a_thr_iqr', float('nan')):.3f} (policy steady — pilot damper drove it)",
+            fontsize=9, color=_ORACLE_COLOR,
+        )
+
+    # 4) vz_est with the ±clamp rail
+    ax = axes[3]
+    ax.plot(t, log.vz_est, color=_PATH_COLOR, lw=1.1)
+    clamp = metrics.get("vertical", {}).get("vz_clamp")
+    if clamp:
+        ax.axhline(-clamp, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.9)
+        ax.axhline(clamp, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.9)
+        ax.text(t[0] if len(t) else 0.0, -clamp, f" vz rail −{clamp:g} m/s",
+                color=_ORACLE_COLOR, fontsize=8, va="bottom")
+    ax.set_ylabel("vz_est (m/s)")
+
+    # 5) link latency
+    ax = axes[4]
+    ax.plot(t, log.obs_age_ms, color=_UPCOMING_HEX, lw=0.8)
+    ax.axhline(40.0, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.8)
+    ax.set_ylabel("obs_age (ms)")
+    ax.set_xlabel("flight time (s)")
+
+    for ax in axes:
+        ax.grid(True, alpha=0.2)
+        _flight_phase_bands(ax, metrics)
+
+    hov = metrics.get("stable_hover", {})
+    fig.suptitle(
+        f"hover telemetry · {Path(log.path).name} · stable-hover "
+        f"{_fmt(hov.get('duration_s'))} s @ {_fmt(hov.get('median_tilt_deg'))}° median tilt",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.97))
+    return _save(fig, out_path)
+
+
+def plot_link_histogram(log: Any, out_path: str | Path, metrics: dict | None = None) -> Path:
+    """Histogram of the flight's ``obs_age`` (uplink freshness) with the 40 ms cliff + p99 marked.
+
+    The 40 ms line is the staleness cliff the policy trained against; p99 is the fat tail that the
+    pilot's single-poll-per-tick coupling produces. Consumes the raw column, so it works without the
+    metrics dict; when ``metrics`` is given the p99/median lines come from it (else recomputed here).
+
+    Args:
+        log: A :class:`neural_whoop.analysis.flight_log.FlightLog` (needs ``obs_age_ms``, ``path``).
+        out_path: PNG output path.
+        metrics: Optional :func:`flight_metrics` dict for the marker lines.
+    """
+    plt = _mpl()
+    age = np.asarray(log.obs_age_ms, dtype=np.float64)
+    age = age[np.isfinite(age)]
+    link = (metrics or {}).get("link", {})
+    p50 = link.get("median_ms") if link else (float(np.median(age)) if age.size else float("nan"))
+    p99 = link.get("p99_ms") if link else (float(np.percentile(age, 99)) if age.size else float("nan"))
+    frac40 = link.get("frac_over_40ms")
+    if frac40 is None:
+        frac40 = float((age > 40).mean()) if age.size else float("nan")
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    if age.size:
+        ax.hist(age, bins=40, color=_PATH_COLOR, alpha=0.8)
+    ax.axvline(40.0, color=_ORACLE_COLOR, lw=1.4, ls="--",
+               label=f"40 ms cliff ({frac40 * 100:.0f}% past)")
+    if p50 is not None and np.isfinite(p50):
+        ax.axvline(p50, color=_PASSED_HEX, lw=1.2, ls=":", label=f"median {p50:.0f} ms")
+    if p99 is not None and np.isfinite(p99):
+        ax.axvline(p99, color="#7a3b8f", lw=1.2, ls=":", label=f"p99 {p99:.0f} ms")
+    ax.set_xlabel("obs_age (ms)")
+    ax.set_ylabel("frames")
+    ax.set_title(f"uplink freshness · {Path(log.path).name}", fontsize=11)
+    ax.legend(fontsize=8)
+    ax.grid(True, alpha=0.2)
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
 def plot_time_trial_comparison(
     replays: list[str | Path | dict],
     out_path: str | Path,

@@ -230,6 +230,14 @@ cd ../nw-viz && node capture.mjs --replay ../neural-whoop/runs/<run>/replay.json
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn
 uv run python scripts/seed_courses.py               # (once) seed bigger assets/courses/*.yaml
 uv run python scripts/serve.py                      # -> http://127.0.0.1:8000
+
+# Flight-log analysis (turn a real pilot flight CSV into a Flywheel-native pack) — docs/SIM2REAL.md:
+uv run python scripts/flight_report.py --flight runs/pilot/<flight>.csv --out runs/pilot/<flight>_report
+#   -> flight_telemetry.png / link_histogram.png / flight_summary.json / flight_metrics.csv /
+#      replay.json.gz (Studio-playable; pos is a vertical-only stub) / run.json  (viz PNGs need '.[viz]')
+python3 scripts/sim_vs_real.py --flight runs/pilot/<flight>.csv --weights runs/<run>/policy_weights.json
+#   -> offline action MAE (predicted vs logged): the quantitative "policy is faithful in-flight" check
+#      (pure stdlib + scripts/pilot.py — no torch/numpy, runs on the bench Mac)
 ```
 
 **Course geometry knobs.** `gate_race`/`swarm_race` configs now surface `step_min`/`step_max`

@@ -221,6 +221,44 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 > calm-hover gyro amplitude + lag-1 autocorr at 50 Hz (ρ still unvalidated). New seams on main:
 > `obs_noise_amp_range`, `action_latency_dist`, `append_prev_action` (+20 unit tests, suite 183).
 
+> **FIRST GOOD FLIGHT + POLICY EXONERATED (2026-07-07 — `runs/pilot/d50var_s8_f1.csv`).** The
+> studio-baseline `d50var_s8` flew its first real flight: **~9 s of near-perfect hover** (stable
+> window median tilt **1.28°**, p90 1.67°; policy `a_thr` pinned at −0.50 = textbook hover) then a
+> ceiling contact and tumble at ~10 s. Deep-dive of the one surviving log (the multi-battery flights
+> were **clobbered** by a `pilot.py` `"w"`-mode overwrite — now fixed to a unique path) gives a clean
+> root cause: **the policy is exonerated; the crash was a deploy-harness bug.** The pilot's
+> accel-integrated `vz_est` drifted and **railed at its −2.0 m/s clamp by t=8.24 s while the drone
+> sat at ~1° tilt** (pure estimator drift). Because this 5-dim policy doesn't consume `vz`, the
+> pilot's own altitude damper responded to the phantom sink by piling on thrust — `us_thr` climbed
+> **+203 µs while `a_thr` never moved** (IQR 0.015) → climb → ceiling → tumble. The offline
+> `scripts/sim_vs_real.py` re-run confirms faithfulness: predicted-vs-logged action **MAE ~2.7e-5**
+> (worst 2.2e-4, at the log's 1e-4 rounding floor). **Verdict: fly it again in a taller space; the
+> hover itself is solved.**
+>
+> - **Measurement infra shipped (this block):** `src/neural_whoop/analysis/flight_log.py` (pure
+>   load + `flight_metrics`), scalar renderers `viz/render.py::plot_hover_telemetry`/`plot_link_histogram`,
+>   `viz/replay.py::flight_to_replay` (Studio-playable real flights; `pos` is a vertical-only stub),
+>   and the `scripts/flight_report.py` / `scripts/sim_vs_real.py` CLIs (+ `tests/test_flight_log.py`).
+>   Every future flight now gets a rigorous, Flywheel-native pack — no more lost data.
+> - **Open honesty item CLOSED — props-on gyro amplitude + ρ** (measured over the 5.18 s stable-hover
+>   window, filtered obs-level i.e. what the policy sees): **sd(p)=0.84, sd(q)=0.70, sd(r)=0.03 rad/s**
+>   (48/40/1.7 °/s), **lag-1 ρ ≈ 0.70/0.70/0.64**. Two reads: (1) the filtered in-hover amplitude at
+>   the policy input (0.7–0.84 rad/s) is **~3× below the raw 2.5 rad/s vibration floor** the amplitude
+>   DR band was built around — the loaded, level-hover operating point is milder than the worst case;
+>   (2) ρ≈0.7 empirically **corroborates the colored-noise seam** (`obs_noise_ar_channels`, modeled
+>   ρ 0.9/0.8) — the noise IS time-correlated, so the marginal-preserving AR(1) model is the right
+>   shape (measured ρ is a touch lower than modeled). This is one level hover; sweep more windows/flights.
+> - **Deferred immediate follow-on — RPM-anchor `vz` fix (chosen):** replace the accel-integrated
+>   `vz_est` feeding the pilot's altitude damper with an `rpm_rms`-derived hover anchor (hover RPM ≈
+>   const; `rpm_rms` is healthy here, ~26k rms, bidir-DShot working) so the −2.0 rail that caused the
+>   ceiling hit can't recur. The `flight_metrics` vz-rail + thrust-divergence numbers above are exactly
+>   how the fix gets proven from a later flight's pack.
+> - **Deferred — pilot obs-oversampling for the latency tail:** this flight's p99 obs_age is **122 ms**
+>   (32% past the 40 ms cliff) — but the bridge RTT p99 is ~24 ms, so the tail is the pilot's 50 Hz
+>   single-poll-per-tick coupling, **not** the bridge. Decouple obs polling from the command tick
+>   (`scripts/pilot.py` + `bench/msp.py`) — cheap, and it partly overturns the campaign's "fix it in
+>   firmware" handoff.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
