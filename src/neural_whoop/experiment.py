@@ -90,4 +90,5 @@ def build_env(
         dr_cfg=dr,
         whoop_params=whoop,
         obs_stack=int(env_cfg.get("obs_stack", 1)),
+        append_prev_action=bool(env_cfg.get("append_prev_action", False)),
     )

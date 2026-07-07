@@ -48,6 +48,7 @@ class MultiAgentDroneEnv:
         whoop_params: WhoopParams | None = None,
         action_limits: ActionLimits | None = None,
         obs_stack: int = 1,
+        append_prev_action: bool = False,
     ):
         self.task = task
         self.n_envs = n_envs
@@ -59,7 +60,13 @@ class MultiAgentDroneEnv:
         # frames concatenated, so it can infer the velocity/latency a single frame hides. ``1`` is a
         # no-op (the deployed obs is one frame). A larger stack grows obs_dim -> MCU deploy-size flag.
         self.obs_stack = max(1, int(obs_stack))
-        self.base_obs_dim = task.obs_dim
+        # Action-history obs (latency compensation): append the last COMMANDED action to every
+        # frame, so the stacked history carries aligned (obs, action) pairs and the policy can
+        # infer + predict through the actuation delay it cannot otherwise observe (obs-5 has no
+        # action echo). The pilot mirrors this for free — it knows exactly what it sent — so the
+        # channel is noise-free by construction. Deploy contract: frame = [task_obs, last_sent_a].
+        self.append_prev_action = bool(append_prev_action)
+        self.base_obs_dim = task.obs_dim + (ACT_DIM if self.append_prev_action else 0)
         self.obs_dim = self.base_obs_dim * self.obs_stack
         self._frames: Tensor | None = None  # (obs_stack, n_drones, base_obs_dim), oldest->newest
         self.episode_len = task.episode_len
@@ -155,9 +162,14 @@ class MultiAgentDroneEnv:
         """One noisy observation frame ``(n_drones, base_obs_dim)``.
 
         Noise first, then the uplink delay: measurement noise travels with the uplinked packet
-        (frozen across zero-order holds) while the local state channels get fresh noise.
+        (frozen across zero-order holds) while the local state channels get fresh noise. The
+        optional prev-action channels are appended LAST — after noise/uplink — because the pilot
+        knows its own sent commands exactly (no noise, no staleness).
         """
-        return self.dr.delay_uplink(self.dr.add_obs_noise(self.task.observe(self)))
+        frame = self.dr.delay_uplink(self.dr.add_obs_noise(self.task.observe(self)))
+        if self.append_prev_action:
+            frame = torch.cat([frame, self.prev_action], dim=-1)
+        return frame
 
     def _flat_frames(self) -> Tensor:
         """Concatenate the frame stack into the policy obs ``(n_drones, obs_dim)`` (oldest->newest)."""
@@ -214,6 +226,10 @@ class MultiAgentDroneEnv:
         reward, terminated_env, info = self.task.reward_and_done(self, a)
         truncated_env = self.t >= self.episode_len
         done_env = terminated_env | truncated_env
+        # Commit the action AFTER reward_and_done (which reads prev_action as a_{t-1}) but BEFORE
+        # the terminal frame is observed, so a frame always carries the command that produced it
+        # — the same pairing the pilot reproduces at deploy. Reset zeroes it for fresh episodes.
+        self.prev_action = a
 
         term = terminated_env.repeat_interleave(self.n_agents)
         trunc = truncated_env.repeat_interleave(self.n_agents)
@@ -231,7 +247,6 @@ class MultiAgentDroneEnv:
         info["terminal_obs"] = obs_term
         info["time_outs"] = trunc
 
-        self.prev_action = a
         if bool(done_env.any()):
             self.reset_idx(done_env.nonzero(as_tuple=False).flatten())
             raw_next = self._raw_obs()  # post-reset for done drones
