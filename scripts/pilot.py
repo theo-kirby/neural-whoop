@@ -231,16 +231,18 @@ def obs_from_msp(att: dict, imu: dict) -> list[float]:
     Signs are EMPIRICAL for this Air65 II stack (2026-07-05: hand-pose check + manual-flight
     command/attitude correlation, 87:1 roll / 57:3 pitch): this board reports nose-down as
     POSITIVE on both attitude pitch and gyro y — same as the sim convention — so pitch takes
-    no flip (the textbook BF nose-up+ convention does NOT hold here). Yaw (r = -gz) is the
-    one remaining doc-derived sign: verify via the clockwise-spin check before trusting
-    policy yaw (fly defaults to --yaw center for exactly this reason).
+    no flip (the textbook BF nose-up+ convention does NOT hold here). Yaw likewise takes NO
+    flip (clockwise-spin check 2026-07-07: CW-from-above read gz NEGATIVE, refuting the
+    doc-derived gz+ = yaw-right assumption — same inverted-vs-textbook pattern as pitch).
+    Only the OBSERVED r is verified; the commanded-yaw sign through the FC is still
+    unverified, so fly keeps its --yaw center default.
     """
     roll = math.radians(att["roll_deg"])           # + = roll right (matches sim)
     pitch = math.radians(att["pitch_deg"])         # + = nose down on this board (matches sim)
     gx, gy, gz = (v * GYRO_RAW_TO_DPS for v in imu["gyro_raw"])  # raw LSB -> deg/s
     p = math.radians(gx)                           # + = roll-right rate (check-verified)
     q = math.radians(gy)                           # + = nose-down rate (event-verified)
-    r = -math.radians(gz)                          # assumed gz+ = yaw right; UNVERIFIED
+    r = math.radians(gz)                           # + = CCW-from-above rate (spin-check-verified)
     return [roll, pitch, p, q, r]
 
 

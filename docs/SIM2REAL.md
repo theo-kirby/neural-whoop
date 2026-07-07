@@ -61,6 +61,20 @@ RPYT — see `bench/msp.py`), `motor-test` (indices 0–3 = RR, FR, RL, FL, stan
 Commits `da0e37a`, `3c5e2bb`. Still open here: rate-curve calibration, step-response/thrust
 measurements, and the `msp_override_failsafe` decision.
 
+**d50var_s8 props-off deploy check GREEN (2026-07-07, bench):** selftest parity 4.6e-08;
+hand-pose signs correct (tilt-right → roll_us 1178, nose-down → pitch_us 1079); level-still
+commanded throttle **1408 ≈ the 1410 µs hover anchor** (the amplitude-DR trim fix, confirmed on
+hardware). Two findings: (1) **yaw obs sign REFUTED and fixed** — the clockwise-spin check read
+gz *negative* on a CW-from-above spin, so this board's gyro z is inverted vs the textbook BF
+convention (same pattern as pitch); `obs_from_msp` now takes **no flip on r** (verified: CW spin
+integrates −359°, policy counter-commands left). Commanded-yaw sign through the FC remains
+unverified — `fly` keeps `--yaw center`. (2) **MSP_RAW_IMU serves gyro ZEROS until Betaflight's
+boot gyro calibration completes** — handling the drone at battery plug-in defers calibration
+indefinitely and the policy would see r≡0; ops rule: **leave the drone still ~5 s after plug-in**.
+Link re-measured through the bridge at the flying spot: median 19.9 ms RTT, p99 35–54 ms, rare
+~520 ms spikes (vs 2.41 ms median on 2026-07-05 — location/RSSI-dependent; still inside the
+freshness window, and consistent with the modeled obs-age p50 24 ms).
+
 ### Stage 0.5 — `hover_blind` IMU-only first flight (no flow deck)
 
 `hover_blind_air65` trained (40M steps, 2026-07-05): attitude stabilization is excellent
