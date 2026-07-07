@@ -52,6 +52,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import signal
 import sys
 import time
@@ -84,7 +85,7 @@ from neural_whoop.bench.msp import (  # noqa: E402
     pack_rc_channels,
 )
 
-DEFAULT_WEIGHTS = "runs/hover_blind_air65_long/policy_weights.json"
+DEFAULT_WEIGHTS = "runs/hover_blind_air65_d50var_s8/policy_weights.json"
 
 # Sim action limits (contract.py ActionLimits) and the Betaflight ACTUAL-rates the drone must
 # be configured with (rates_type=ACTUAL, expo 0, roll/pitch 690 deg/s, yaw 345 deg/s).
@@ -896,7 +897,9 @@ def cmd_fly(args: argparse.Namespace) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--udp", required=True, metavar="HOST[:PORT]", help="bridge address")
+    ap.add_argument("--udp", default=os.environ.get("NW_BRIDGE"), metavar="HOST[:PORT]",
+                    help="bridge address (default: $NW_BRIDGE, so you can set it once per "
+                         "bench session with `export NW_BRIDGE=<ip>`)")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
     ap.add_argument("--hover-us", type=int, default=1410, help="bench-measured hover throttle (us)")
     ap.add_argument("--vbat-ref", type=float, default=0.0,
@@ -946,6 +949,9 @@ def main() -> int:
     fly.add_argument("--ack-props-on", action="store_true")
     args = ap.parse_args()
 
+    if not args.udp:
+        ap.error("no bridge address: pass --udp HOST[:PORT] or set $NW_BRIDGE "
+                 "(e.g. `export NW_BRIDGE=<ip>`)")
     host, _, port = args.udp.partition(":")
     args.udp_host, args.udp_port = host, int(port or 14550)
     return {"selftest": cmd_selftest, "check": cmd_check, "probe": cmd_probe,
