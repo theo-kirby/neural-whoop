@@ -265,6 +265,20 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 >   `vertical.thrust_divergence.detected` = **false** with `us_thr_rise` ≲ 40 µs across the stable
 >   hover (was +203 µs while `a_thr` never moved), and the hover holds altitude instead of climbing to
 >   the ceiling — a completed calm-air flight rather than a ~10 s ceiling contact.
+> - **RPM-anchor `vz` fix — VALIDATED IN FLIGHT (2026-07-07, GREEN — Flywheel `aged-wildflower-8839`,
+>   child of the impl node `cool-sea-6202`).** 9-flight session (`runs/pilot/flight_17834265xx.csv`),
+>   8 airborne. **The ceiling bug is dead.** On the two cleanest long flights (`711`/`678`): `vz_est`
+>   is now **driftless** (711 mean **0.00 m/s** over 18 s — in f1 it drifted to −2.0 and *parked*),
+>   `vz_rail_frames` **7/13** (was 48), `thrust_divergence` **false** with `us_thr_rise` **−163/−150 µs**
+>   (throttle *fell* — was +203 µs into the ceiling), and all three long flights (`678`/`711`/`783`)
+>   **completed the full ~18–21 s window and landed under control** (airborne 17.8–18.3 s vs f1's 12.6 s).
+>   Honest residual: hover is **wobblier** than f1's pristine window (stable-window median tilt ~1.9–2.0°
+>   with ±20–40° transients; several short flights departed early) — traced to the **latency tail**
+>   (obs_age p99 73–122 ms, spikes 240 ms), i.e. the campaign's already-isolated action-latency gap
+>   (`delicate-credit-2979`), **not** the vz fix. One caveat: `783` flagged divergence (+297 µs) — a
+>   *gentle* rise over 18 s at 1.72° reads as battery-sag comp, so the detector needs a sag-normalized
+>   threshold for long flights (follow-on). **Verdict: blind-hover altitude is solved in software; the
+>   next lever is the p99 latency tail (bridge work), not the policy.**
 > - **Deferred — pilot obs-oversampling for the latency tail:** this flight's p99 obs_age is **122 ms**
 >   (32% past the 40 ms cliff) — but the bridge RTT p99 is ~24 ms, so the tail is the pilot's 50 Hz
 >   single-poll-per-tick coupling, **not** the bridge. Decouple obs polling from the command tick
