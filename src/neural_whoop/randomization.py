@@ -65,6 +65,16 @@ class DomainRandomizationConfig:
             factor deliberately does NOT scale ``obs_bias_channels`` (a DC error is not vibration).
             Requires ``obs_noise_std_channels``.
         action_latency_steps: Max actuation delay in control steps (per-drone 0..max).
+        action_latency_dist: Per-STEP jittered actuation delay — probability weights for packet
+            age 0..len-1 (steps), replacing the per-episode-constant model when non-empty. Each
+            step each drone samples the age of its freshest-arrived command packet from these
+            weights; the applied command index is clamped monotonic (a newer command, once
+            applied, is never rolled back — the latest-packet zero-order-hold a real FC link
+            implements). Models a jittering radio link (e.g. the measured ESP32 bridge: obs-age
+            p50 24 ms / p99 112 ms at 50 Hz) instead of the harsher constant-delay hedge.
+            APPROXIMATION note: the sampled age is the freshest-packet age *before* the monotonic
+            clamp, so effective ages are <= sampled — calibrate the weights to the measured
+            percentiles and flag them until bench-validated.
         uplink_latency_steps: Max staleness (control steps, per-drone 0..max) of the task's
             *uplinked* obs channels (``DroneTask.uplink_slices``) — the onboard-hybrid split
             where state obs are locally fresh but the target channel rides a radio uplink.
@@ -90,6 +100,7 @@ class DomainRandomizationConfig:
     obs_bias_channels: tuple[float, ...] = ()
     obs_noise_amp_range: tuple[float, ...] = ()
     action_latency_steps: int = 1
+    action_latency_dist: tuple[float, ...] = ()
     uplink_latency_steps: int = 0
     uplink_interval_steps: int = 1
     detector_bearing_deg: float = 0.0
@@ -144,7 +155,19 @@ class DomainRandomizer:
         self.dev = torch.device(device)
         self.gen = generator
         self.act_dim = act_dim
-        self._max_lat = max(0, int(cfg.action_latency_steps)) if cfg.enabled else 0
+        # Jittered-link mode: per-step sampled packet ages override the per-episode-constant
+        # latency; the ring buffer is sized by the distribution's support instead.
+        if len(cfg.action_latency_dist) > 0 and cfg.enabled:
+            w = torch.tensor(cfg.action_latency_dist, dtype=torch.float32)
+            if (w < 0).any() or w.sum() <= 0:
+                raise ValueError("action_latency_dist weights must be non-negative and sum > 0")
+            self._lat_dist = (w / w.sum()).to(torch.device(device))
+            self._max_lat = len(cfg.action_latency_dist) - 1
+        else:
+            self._lat_dist = None
+            self._max_lat = max(0, int(cfg.action_latency_steps)) if cfg.enabled else 0
+        # Latest-applied command index per drone (jitter mode): monotonic zero-order hold.
+        self._applied_idx = torch.zeros(n_drones, dtype=torch.long, device=torch.device(device))
         # Curriculum scale in [0, 1]: multiplies every seam-DR magnitude (1.0 = full configured
         # strength). The trainer can ramp this 0->1 over training (reliability curriculum); it is
         # applied per-drone at reset (wind/rate/thrust/latency incidence) and per-step for obs noise.
@@ -257,11 +280,14 @@ class DomainRandomizer:
                 torch.randn(n, self._noise_state.shape[1], device=self.dev, generator=self.gen)
                 * self._noise_std
             )
-        if self._max_lat > 0:
+        if self._max_lat > 0 and self._lat_dist is None:
             lat = torch.randint(0, self._max_lat + 1, (n,), device=self.dev, generator=self.gen)
             if s < 1.0:  # ramp latency *incidence* with the curriculum (latency is integer-valued)
                 lat = lat * (self._rand(n) < s).long()
             self.latency[idx] = lat
+        if self._lat_dist is not None:
+            # Fresh episodes carry no packet backlog: the applied-index floor starts at "now".
+            self._applied_idx[idx] = self._step
         self._buf[:, idx, :] = 0.0
         if self._udim > 0:
             if self._max_ulat > 0:
@@ -272,13 +298,27 @@ class DomainRandomizer:
             self._ufloor[idx] = self._ustep
 
     def delay_action(self, action: Tensor) -> Tensor:
-        """Push ``action`` (n, act_dim) into the ring buffer and return the per-drone delayed one."""
+        """Push ``action`` (n, act_dim) into the ring buffer and return the per-drone delayed one.
+
+        Constant mode: per-episode latency drawn at reset. Jitter mode (``action_latency_dist``):
+        each step each drone samples its freshest-packet age and applies the newest command it
+        has "received", monotonically (an applied command is never rolled back to an older one).
+        """
         if self._max_lat == 0 or not self.cfg.enabled:
             return action
         L = self._max_lat + 1
         head = self._step % L
         self._buf[head] = action
-        read = (self._step - self.latency) % L  # (n,)
+        if self._lat_dist is not None:
+            age = torch.multinomial(self._lat_dist.expand(self.n, -1), 1, replacement=True,
+                                    generator=self.gen).squeeze(-1)
+            if self.scale < 1.0:  # curriculum: ramp jitter incidence like the constant path
+                age = age * (self._rand(self.n) < self.scale).long()
+            cand = self._step - age
+            self._applied_idx = torch.maximum(self._applied_idx, cand)
+            read = self._applied_idx % L
+        else:
+            read = (self._step - self.latency) % L  # (n,)
         delayed = self._buf[read, torch.arange(self.n, device=self.dev)]
         self._step += 1
         return delayed
