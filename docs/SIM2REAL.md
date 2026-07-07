@@ -285,6 +285,37 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 >   (`scripts/pilot.py` + `bench/msp.py`) — cheap, and it partly overturns the campaign's "fix it in
 >   firmware" handoff.
 
+### Horizontal drift → the sensing decision (2026-07-07)
+
+The vz fix closed the vertical loop, but the blind `hover_blind` policy still **drifts horizontally**:
+its obs is `[roll, pitch, p, q, r]` only — no position/velocity — so it holds *attitude*, not
+*station*. There is **no IMU-only fix** (accelerometer double-integration drifts like the vz ghost we
+just deleted). A deep-research pass (Flywheel `bitter-sun-1558` → decision `still-flower-6355`; 15 primary
+sources, 73 adversarially-verified claims) settled the path under the user's hard constraints
+(nothing off the drone for *sensing*; offboard laptop *compute* OK; cheap/accessible; close to stock):
+
+- **Learned gate/landmark detection + a dynamics-model/IMU beats classical VIO.** MonoRace (TU Delft
+  2026, arXiv 2601.15222) beat three FPV world champions with a single **monocular cam + IMU** +
+  learned gate segmentation + drone model + EKF (*not* VIO); the 72 g "Trashcan" (arXiv 1905.10110)
+  did whoop-mass onboard monocular racing the same way. Classical monocular VIO is the fragile path
+  (scale unobservable; SOTA VIO *fails* at racing speed) — but our **offboard laptop** runs VO at the
+  300-fps regime, so compute is a non-issue and link latency is the only real cost.
+- **Sensor decision — buy ONE module: a XIAO ESP32-S3 Sense (~$15, ~4 g, OV2640), mounted DOWNWARD,
+  + a ~$4 VL53L1x ToF on its I²C.** Rationale: the camera is the master key (unlocks horizontal hover
+  *and* racing *and* the end-to-end vision policy); the Sense **replaces the plain ESP32 bridge** (one
+  module = camera + MSP bridge, not an addition); it's a *separate* camera we can aim **down** for
+  clean flow (the easy case, unlike the fixed-forward analog FPV cam); digital frames beat the noisy
+  analog feed and cost *less* than an analog receiver. The ToF adds metric height + resolves monocular
+  scale → a complete DIY position deck for ~$19.
+- **Ruled out:** the analog FPV receiver (inferior forward-facing sensor, ground gear, ~$30); a
+  digital-FPV *system* (DJI/Walksnail/HDZero — wrong tool: heavy, $70+, needs its own receiver); UWB
+  (swarm-only, deferred, needs one per drone). Full cited analysis in `bitter-sun-1558`.
+- **Open risk (the real cost of this route):** streaming video off the ESP32-S3 over WiFi (QVGA
+  ~10–25 fps, jittery) *and* keeping the MSP bridge alive on the same chip is unproven firmware work.
+- **No-hardware progress in parallel:** open-loop **acro** (flips/rolls/power-loops) needs only the
+  IMU — buildable now via teacher-student privileged learning trained in sim (Learning High-Speed
+  Flight, Sci Robotics 2021). This is the next build while the Sense ships.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
