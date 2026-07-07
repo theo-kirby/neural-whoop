@@ -169,6 +169,17 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   M2 worsens down the ladder. **Final attribution: the honest noise amplitude itself** (2.5 rad/s
   gyro SD) makes the open-loop trim unlearnable in this recipe. `hover_blind_air65_long` remains
   the flagship; the flow-deck (Stage-1) path is confirmed with clean attribution.
+- **SUPERSEDED — stock-hardware campaign (2026-07-07, Flywheel `delicate-credit-2979`, closed):**
+  the amplitude verdict above was itself incomplete — the amplitude is *aliased frame vibration*,
+  and the killer was the **amplitude-LOCKED trim** of fixed-amplitude training (`polished-moon-9652`:
+  a d50-trained policy survives 81/43/0.3% at 0.8/1.0/1.2× its trained sd). **Per-episode
+  amplitude-DR (`obs_noise_amp_range U[0.5,2.0]`) + obs_stack 8 SOLVES the noise wall**:
+  `hover_blind_air65_d50var_s8` (`broken-wildflower-8398`, now ★ studio-baseline) survives M1-live
+  89–100% across 0.5–1.2× and **61.1% at the raw 2.5 rad/s floor** (old flagship: 0.05%) — the
+  "needs the flow deck" conclusion is **overturned for the noise axis**. Residual gap = **action
+  latency > ~40 ms alone** (knockout 29.8→98.2%); action-echo and jitter-matched-training levers
+  both RED (`red-fire-4210`, `bold-shadow-8014`); handed to the bench (link age histogram, 100 Hz
+  control rate, ESP command hold). See the SIM2REAL.md campaign block for the full record.
 - **Obs/oracle:** **[roll, pitch, p, q, r, vz_est]** (6) × `obs_stack 3` (deployed input 18).
   `vz_est` simulates the deployed pilot's leaky acc-integrated climb-rate estimate exactly
   (leak τ 4 s, clamp ±2 m/s, decay-only past 25° tilt — `scripts/pilot.py`'s VZ_* constants);

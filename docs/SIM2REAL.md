@@ -182,6 +182,31 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 > d50var trains U[0.5,2.0]× (band 0.625–2.5 rad/s, upper edge = the raw measured floor), so the
 > deploy story stops depending on the unvalidated oversampling assumptions.
 
+> **CAMPAIGN CLOSED (2026-07-07 — Flywheel `delicate-credit-2979`, stop_reason no_viable_branch;
+> 5 training runs).** Verdict in two halves:
+> 1. **The gyro-noise wall is SOLVED in software.** `hover_blind_air65_d50var_s8`
+>    (amplitude-DR + obs_stack 8, node `broken-wildflower-8398`, now the **★ studio-baseline**)
+>    survives M1-live **89–100% across 0.5–1.2×** the measured amplitude and **61.1% at the RAW
+>    2.5 rad/s vibration floor** — the exact condition where the old flagship scores 0.05% and
+>    where the v2/R-ladder verdict said "IMU-only cannot survive, needs the flow deck." That
+>    strategic conclusion is now **overturned for the noise axis**: no flow deck, no bridge
+>    oversampling assumption required. d50var mechanism chain (one factor per arm):
+>    amplitude-locked trim (Jensen) → amplitude-DR removes the cliff → capacity lifts the level.
+> 2. **The residual gap is a single isolated factor: action latency > ~40 ms during active
+>    noise-correction.** Knockout: latency-off takes M2-sensor 29.8→98.2% (bias/rate-gain: nil);
+>    per-latency survival ≈ 98/71/10/8/~0% at 0/1/2/3/4+ steps. Three levers failed honestly:
+>    action-history echo (`red-fire-4210`, RED — train/eval echo mismatch, fix identified but
+>    unbudgeted), measured-jitter distribution-matching (`bold-shadow-8014`, RED — +5 pts on its
+>    own distribution, loses noise robustness), honest re-metric alone (s8 under the measured
+>    link: 29.6% ≈ the constant hedge — the fragility is physical).
+> **First-flight read:** fly `d50var_s8` in calm air — at the bridge's measured p50 (24 ms) it
+> sits in its survivable zone; the p99 latency tail (112 ms) is the danger, and shrinking it is
+> **bridge work, not policy work** (100 Hz control rate, ESP-side command hold, MSP oversampling —
+> which also moves the noise operating point down the amplitude curve into the 90–100% zone).
+> Bench checklist before trust: link age histogram (jitter weights are percentile-approximated),
+> calm-hover gyro amplitude + lag-1 autocorr at 50 Hz (ρ still unvalidated). New seams on main:
+> `obs_noise_amp_range`, `action_latency_dist`, `append_prev_action` (+20 unit tests, suite 183).
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
