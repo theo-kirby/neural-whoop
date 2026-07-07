@@ -4,6 +4,7 @@ The autonomous agent grows this package: each new policy/behaviour in ``docs/TAS
 is a new :class:`~neural_whoop.envs.registry.DroneTask` module imported here.
 """
 
+from neural_whoop.tasks import acro_flip  # noqa: F401 - registers "acro_flip"
 from neural_whoop.tasks import command_follow  # noqa: F401 - registers "command_follow"
 from neural_whoop.tasks import gate_race  # noqa: F401 - registers "gate_race"
 from neural_whoop.tasks import gesture_follow  # noqa: F401 - registers "gesture_follow"
@@ -15,4 +16,4 @@ from neural_whoop.tasks import swarm_formation  # noqa: F401 - registers "swarm_
 from neural_whoop.tasks import swarm_race  # noqa: F401 - registers "swarm_race"
 from neural_whoop.tasks import target_follow  # noqa: F401 - registers "target_follow"
 
-__all__ = ["command_follow", "gate_race", "gesture_follow", "hand_follow", "hover", "hover_blind", "hover_blind_v2", "swarm_formation", "swarm_race", "target_follow"]
+__all__ = ["acro_flip", "command_follow", "gate_race", "gesture_follow", "hand_follow", "hover", "hover_blind", "hover_blind_v2", "swarm_formation", "swarm_race", "target_follow"]

@@ -195,6 +195,30 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   averaging path. When the policy consumes vz, the pilot's external climb-damper P/I turn OFF
   (the policy owns vertical damping; the RPM governor stays as the absolute thrust anchor).
 
+### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
+- **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,
+  with `mean_altitude_loss` (max `z0 − z`) + `mean_completion_time` + `post_recovery_tilt_deg`
+  characterizing the maneuver and `crash_rate_per_step` the guardrail.
+- **Obs/oracle:** **[gravity_body(3), p, q, r, rotation_remaining]** (7), deploy-honest / IMU-only.
+  `gravity_body` (`Rᵀ·[0,0,-1]`) is unambiguous through a full inversion where euler roll/pitch
+  wrap/gimbal-lock; `rotation_remaining` ∈ [1→0] is the maneuver-phase signal (tracked internally in
+  sim; supplied by the pilot's maneuver clock at deploy). No altitude channel — altitude is open-loop
+  for the brief maneuver (RPM thrust anchor defends it) and used only in the *reward* (privileged).
+- **Status:** implemented (`tasks/acro_flip.py`, `configs/acro_flip.yaml` barrel roll +
+  `configs/acro_flip_pitch.yaml` axis variant; tiny `[64,64]` net, obs 7). Reward-shaped discovery,
+  **no reference trajectory**: a monotone/saturating rotation-progress term toward Φ (`reward.rotation_progress`)
+  + one-time completion bonus + a recover term (upright bell − spin, gated after completion) +
+  privileged altitude-keep − smoothness − crash. Spawn = level hover at rest (the flip is the learned
+  behaviour). Config-selectable `axis` (roll→`p` / pitch→`q`) and `n_rotations`. No env/contract/dynamics
+  changes — the rate envelope (`ActionLimits.max_body_rate_rp_rps = 12` rad/s ≈ 690°/s) is already
+  acro-capable. Awaiting the first 5090 training run + Studio visual verdict.
+- **Sim2real basis:** pure IMU + the existing act-v2 CTBR contract → **zero new hardware** (the
+  productive agility milestone while the XIAO Sense camera module ships). The acro sim2real risk —
+  the attitude estimate degrading mid-flip — is modeled by per-channel obs noise/bias on the
+  `gravity_body` channels (config only). Real acro *flight* (a `scripts/pilot.py` deploy change:
+  `obs_from_msp_acro` + a relaxed `check_policy_family` + a maneuver trigger) is a later milestone;
+  sim train + eval + Studio need none of it.
+
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
 - **Basis:** swap the perception front-end (the seam is explicitly swappable); tests robustness to

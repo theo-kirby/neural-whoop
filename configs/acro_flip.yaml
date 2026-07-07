@@ -1,0 +1,74 @@
+# acro_flip: learned single-axis barrel ROLL — the first agility (acro) task. Pure IMU + the
+# existing act-v2 CTBR contract (no new hardware). The policy spins about the roll axis (body-rate
+# p) until an accumulated 360° is reached, then recovers to level flight. Reward-shaped discovery,
+# no reference trajectory. First run: a smaller step budget than the 3.2B hover flagship to get a
+# fast read on whether the trick emerges; scale up once GREEN. Metric: flip_success_rate.
+
+run:
+  name: acro_flip
+
+task:
+  name: acro_flip
+  axis: roll
+  n_rotations: 1.0
+  episode_len: 200
+  rot_scale: 1.0
+  completion_bonus: 10.0
+  upright_scale: 0.4
+  upright_sigma: 0.5
+  spin_penalty: 0.01
+  alt_scale: 0.1
+  alive_bonus: 0.1
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+  success_tilt_deg: 15.0
+  arena_radius: 1.0
+  z_min: 1.2
+  z_max: 2.2
+  bound_xy: 6.0
+  bound_z_min: 0.15
+  bound_z_max: 4.0
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05       # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.0            # superseded by the per-channel list below
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0]
+  action_latency_steps: 2
+  # The key acro sim2real risk: the attitude estimate degrades mid-flip (fast rotation confuses the
+  # complementary/Mahony filter) — modeled by noise+bias on the gravity_body channels above. Gyro
+  # stays low-noise (reliable through acro rates); rotation_remaining is a clean pilot-clock signal.
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band (from d50var_s8).
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 400_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

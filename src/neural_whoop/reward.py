@@ -34,6 +34,31 @@ def progress_reward(prev_dist: Tensor, curr_dist: Tensor, scale: float = 1.0) ->
     return scale * (prev_dist - curr_dist)
 
 
+def rotation_progress(
+    prev_phi: Tensor, curr_phi: Tensor, target: float, scale: float = 1.0
+) -> Tensor:
+    """Reward for signed rotation gained toward ``target`` this step, saturating at ``target``.
+
+    The acro sibling of :func:`progress_reward`: ``phi`` is a signed accumulated rotation about the
+    maneuver axis (already resolved into the intended direction). Reward is proportional to the
+    increase in ``clamp(phi, 0, target)`` — monotone progress that can't be farmed by over-spinning
+    past ``target`` (clamped above) or by counter-rotating below 0 (clamped below). Batched over any
+    leading shape.
+
+    Args:
+        prev_phi: Accumulated signed rotation before this step, shape ``(...)``.
+        curr_phi: Accumulated signed rotation after this step, shape ``(...)``.
+        target: The rotation goal Φ (radians); the reward saturates once ``phi`` reaches it.
+        scale: Weight on the progress term.
+
+    Returns:
+        Progress reward of shape ``(...)`` (zero once saturated, zero while below 0).
+    """
+    prev_c = prev_phi.clamp(0.0, target)
+    curr_c = curr_phi.clamp(0.0, target)
+    return scale * (curr_c - prev_c)
+
+
 def smoothness_penalty(action: Tensor, prev_action: Tensor, weight: float) -> Tensor:
     """Squared action-change penalty (anti bang-bang), batched over the last dim.
 
