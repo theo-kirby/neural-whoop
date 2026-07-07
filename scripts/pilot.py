@@ -35,8 +35,10 @@ Stacked/vz-aware policies (hover_blind_v2, meta.obs_stack/base_obs_dim): the bas
 the pilot's own leaky climb-rate estimate as channel 6, and the network sees the last obs_stack
 frames concatenated oldest->newest (history seeded by repeating the first frame — the env's
 reset semantics). When the policy consumes vz it OWNS vertical damping: the external climb
-damper's P/I trims are disabled; the RPM governor stays (it anchors ABSOLUTE thrust, which a
-high-passed climb rate cannot see).
+damper is disabled; the RPM governor stays (it anchors ABSOLUTE thrust, which a high-passed
+climb rate cannot see). A blind (5-dim) policy instead gets a proportional climb damper riding
+the DRIFTLESS RPM-anchored climb rate (rpm_climb_rate) — never the accel integral, which once
+railed at -2 m/s on a level hover and flew the drone into the ceiling (docs/SIM2REAL.md).
 
 Thrust mapping: act[0] -> normed thrust t in [0, 4] hover-units (contract.py), then
 us = 1000 + (hover_us - 1000) * sqrt(t)  (prop thrust ~ quadratic in throttle; sqrt inverts),
@@ -112,17 +114,26 @@ BOX_MSP_OVERRIDE = 50
 RPM_KI_US = 300.0    # us of throttle correction per (thrust-unit error * s); tau ~ 0.7 s
 RPM_CORR_CAP = 80.0  # us; the anchor is already within a few %, this is fine adjustment
 
-VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift)
-VZ_TRIM_CAP = 0.12   # act[0] units of P authority
-VZ_TRIM_KI = 0.15    # integral gain: absorbs the pack's constant thrust bias (P alone is
-VZ_ITRIM_CAP = 0.12  # DC-blind past the leak)
-VZ_TRIM_TOTAL = 0.18  # hard cap on P+I together. Flight 1783324924: a tilt-poisoned estimate
-#                      pinned the old 0.35 total for 14 s and FLEW the drone; the learned
-#                      anchor is now good to ~5%, so the damper only needs gentle authority.
-VZ_ITRIM_LEAK_TAU = 10.0  # s; a poisoned integrator must find its own way back to neutral
+VZ_LEAK_TAU = 4.0    # s; climb-rate estimate forgets (bounds acc-bias drift; vz-policy path only)
+VZ_TRIM_CAP = 0.12   # act[0] units: the RPM damper's proportional authority clamp. Flight
+#                      1783324924: a tilt-poisoned estimate pinned the old 0.35 total for 14 s and
+#                      FLEW the drone; the RPM anchor is good to ~5%, so the damper only needs
+#                      gentle authority. (The retired accel integrator's i_trim / VZ_ITRIM_* /
+#                      VZ_TRIM_TOTAL constants went with the vz-rail fix — the RPM governor's
+#                      integral now absorbs the pack's DC thrust bias the i_trim used to chase.)
 VZ_CLAMP = 2.0       # m/s; a whoop indoors doesn't do more — beyond this the estimate is lying
 VZ_TILT_LIMIT = math.radians(25.0)  # cos-tilt math reads sustained wobble as phantom descent
 #                     (1783324924: roll +-30-60 deg -> vz "-3 m/s" for 14 s). Freeze early.
+# RPM-anchored climb-rate (the blind-policy altitude damper's input since the vz-rail fix). The
+# accel-integrated vz above drifted on its acc-z DC bias and RAILED at -VZ_CLAMP while the drone
+# sat level (d50var_s8_f1: railed by t=8.24 s -> the damper piled +203 us of phantom thrust ->
+# ceiling). rpm_hover (breakaway = weight) is a driftless anchor: (rpm/rpm_hover)^2 - 1 is the
+# MEASURED net thrust-over-weight fraction, *g its net vertical specific force, *VZ_AERO_TAU the
+# quasi-steady climb rate it sustains against aero drag — instantaneous, no integrator, so it
+# cannot rail. Shares rpm_hover + (rpm/rpm_hover)^2 with the RPM governor below (that loop's
+# integral absorbs the pack's DC thrust bias the retired i_trim used to chase): one anchor, a
+# fast proportional damper and a slow command-tracking governor riding it.
+VZ_AERO_TAU = 0.25   # s; thrust-excess -> climb-rate scale (the --vz-gain tune absorbs its level)
 
 # Ground-takeoff (--takeoff): SEEK, don't assume. A fixed boost anchored to --hover-us shot
 # every fresh-pack flight straight into the ceiling (flights 1783323895/910/928: "1.18x" of
@@ -265,6 +276,40 @@ def action_to_us(act: list[float], hover_us: int, min_us: int, max_us: int,
     pitch_us = 1500.0 + 500.0 * max(-1.0, min(1.0, wy / BF_MAX_RATE_RP))   # + = nose down
     yaw_us = 1500.0 + 500.0 * max(-1.0, min(1.0, -wz / BF_MAX_RATE_YAW))   # sim nose-left+ -> BF nose-right+
     return [int(roll_us), int(pitch_us), thr_us, int(yaw_us)]
+
+
+def rpm_climb_rate(rpm_now: float | None, rpm_hover: float | None,
+                   aero_tau: float = VZ_AERO_TAU) -> float:
+    """RPM-anchored vertical climb-rate estimate (m/s) — driftless, replaces the accel integral.
+
+    ``rpm_hover`` is the RMS motor RPM learned at breakaway, i.e. by definition the RPM that
+    carries the weight, so ``(rpm_now/rpm_hover)**2 - 1`` is the *measured* net thrust-over-weight
+    fraction (thrust ~ rpm^2): >0 while producing climb thrust, <0 while sinking. Times ``g`` that
+    is the net vertical specific force; times ``aero_tau`` the quasi-steady climb rate it sustains
+    against aero drag. Instantaneous and bounded by the whoop's throttle range around hover — with
+    NO integrator it cannot drift to the -VZ_CLAMP rail that flew ``d50var_s8_f1`` into the ceiling.
+
+    Returns ``0.0`` until both the anchor and live RPM telemetry exist (pre-breakaway, or bidir-
+    DShot off) — the seek/rise phase owns the throttle then, so a zero damper trim is inert.
+    """
+    if not rpm_hover or not rpm_now:
+        return 0.0
+    return ((rpm_now / rpm_hover) ** 2 - 1.0) * 9.81 * aero_tau
+
+
+def rpm_damper_trim(rpm_now: float | None, rpm_hover: float | None, vz_gain: float,
+                    cap: float = VZ_TRIM_CAP) -> float:
+    """Proportional altitude-damper trim on act[0] (blind policy) — opposes RPM-measured climb.
+
+    ``-vz_gain`` times :func:`rpm_climb_rate`, clamped to ``+-cap``: negative (pull thrust back)
+    while climbing, positive while sinking, exactly zero at hover RPM and before the anchor is
+    live. A single cap suffices now that the damper is pure proportional (the retired accel path
+    needed a second cap on its P+I sum). Because the input is an instantaneous RPM measurement
+    with NO integrator, the trim is bounded by construction — it can never wind to a rail and
+    command the phantom climb that put ``d50var_s8_f1`` into the ceiling. Depends ONLY on the RPM
+    ratio, never on the accel vz.
+    """
+    return max(-cap, min(cap, -vz_gain * rpm_climb_rate(rpm_now, rpm_hover)))
 
 
 # --- MSP plumbing (non-blocking polling on top of MspUdpClient) -----------------------------
@@ -585,8 +630,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         #                          constant ~0.5 m/s^2 lateral push -> wall (flight 1783324924)
         vz = 0.0                 # leak-filtered climb-rate estimate (m/s, + = up)
         obs_hist: deque = deque(maxlen=pol.obs_stack)  # base-frame history (stacked policies)
-        thr_trim = 0.0
-        i_trim = 0.0             # integral trim: absorbs the pack's constant thrust bias
+        thr_trim = 0.0           # damper trim on act[0]: RPM-anchored (blind) / 0 (vz policy)
         t_last_fresh = None
         t_liftoff_tp = None      # seek-phase time at which the drone left the ground
         hover_learned = None     # this pack's true hover us, measured at breakaway
@@ -712,22 +756,30 @@ def cmd_fly(args: argparse.Namespace) -> int:
                             a_vert = (f_up / az_ref - 1.0) * 9.81
                             vz = (vz + a_vert * dt) * math.exp(-dt / VZ_LEAK_TAU)
                             vz = max(-VZ_CLAMP, min(VZ_CLAMP, vz))
-                            # I only in the hover window: not during boost (keeps the takeoff
-                            # punch) and not during ramp-down (intentional descent).
-                            if not pol.uses_vz and 0.0 < t_air <= args.seconds:
-                                i_trim = max(-VZ_ITRIM_CAP,
-                                             min(VZ_ITRIM_CAP, i_trim - VZ_TRIM_KI * vz * dt))
                         else:
                             vz *= math.exp(-dt / VZ_LEAK_TAU)  # tilted: no new evidence, decay
+                        # vz above is the accel-integrated estimate — still what a vz-consuming
+                        # policy sees (obs channel 6) and what the takeoff SEEK reads to detect
+                        # breakaway before any RPM anchor exists. It is NO LONGER a control input
+                        # for a blind policy: that damper rides the driftless RPM climb rate below.
                         if pol.uses_vz:
                             # The policy sees vz and owns vertical damping — external P/I stay
                             # zero (they fought the policy through a biased estimate). The RPM
                             # governor below stays: vz is high-passed and cannot see DC thrust.
-                            thr_trim = i_trim = 0.0
+                            thr_trim = 0.0
                         else:
-                            i_trim *= math.exp(-dt / VZ_ITRIM_LEAK_TAU)  # poisoned I self-heals
-                            p_term = max(-VZ_TRIM_CAP, min(VZ_TRIM_CAP, -args.vz_gain * vz))
-                            thr_trim = max(-VZ_TRIM_TOTAL, min(VZ_TRIM_TOTAL, p_term + i_trim))
+                            # RPM-anchored proportional damper (replaces the accel vz P + i_trim):
+                            # a driftless thrust-excess climb rate, so no -VZ_CLAMP rail can pile
+                            # on phantom thrust (the d50var_s8_f1 ceiling bug). The retired i_trim's
+                            # job — absorbing the pack's DC thrust bias — is now the RPM governor's
+                            # integral (one rpm_hover anchor, one (rpm/rpm_hover)^2 measurement
+                            # shared: fast proportional damper here, slow governor there).
+                            thr_trim = rpm_damper_trim(rpm_now, rpm_hover, args.vz_gain)
+                            if rpm_hover:
+                                # log the RPM climb rate (driftless) once anchored, in place of
+                                # the accel vz — so flight_metrics.vertical.vz_rail_* reads the
+                                # signal the damper actually used (bounded, cannot rail).
+                                vz = rpm_climb_rate(rpm_now, rpm_hover)
                     t_last_fresh = now
                     # Level reference + manual trim, policy's view only (estimator uses raw).
                     # Backwards drift -> positive --trim-pitch-deg (holds more nose-down).
@@ -879,7 +931,8 @@ def main() -> int:
                           "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
     fly.add_argument("--vz-gain", type=float, default=0.15,
-                     help="acc-z climb damper gain (act[0] per m/s of estimated climb); "
+                     help="climb damper gain (act[0] per m/s of RPM-anchored climb rate for a "
+                          "blind policy; vz-consuming policies own damping and ignore it); "
                           "0 disables")
     fly.add_argument("--trim-roll-deg", type=float, default=0.0,
                      help="manual level trim: + pushes RIGHT (drifts left -> positive)")

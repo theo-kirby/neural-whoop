@@ -248,11 +248,23 @@ to the policy as obs channel 6 and the pilot disables the external damper P/I fo
 >   (2) ρ≈0.7 empirically **corroborates the colored-noise seam** (`obs_noise_ar_channels`, modeled
 >   ρ 0.9/0.8) — the noise IS time-correlated, so the marginal-preserving AR(1) model is the right
 >   shape (measured ρ is a touch lower than modeled). This is one level hover; sweep more windows/flights.
-> - **Deferred immediate follow-on — RPM-anchor `vz` fix (chosen):** replace the accel-integrated
->   `vz_est` feeding the pilot's altitude damper with an `rpm_rms`-derived hover anchor (hover RPM ≈
->   const; `rpm_rms` is healthy here, ~26k rms, bidir-DShot working) so the −2.0 rail that caused the
->   ceiling hit can't recur. The `flight_metrics` vz-rail + thrust-divergence numbers above are exactly
->   how the fix gets proven from a later flight's pack.
+> - **RPM-anchor `vz` fix — IMPLEMENTED (2026-07-07, awaiting bench flight; Flywheel child of
+>   `royal-bar-2003`).** The blind-policy altitude damper in `scripts/pilot.py` no longer rides the
+>   accel-integrated `vz_est`; it rides a **driftless RPM-anchored climb rate**
+>   (`rpm_climb_rate` = `((rpm/rpm_hover)²−1)·g·VZ_AERO_TAU`) through a pure-**proportional** trim
+>   (`rpm_damper_trim`, clamped ±`VZ_TRIM_CAP`). No integrator ⇒ it cannot wind to the −2.0 rail, and
+>   at hover RPM the trim is **exactly 0** (statelessly, every frame) — so a level hover can't pile on
+>   phantom thrust. Reconciled with the existing RPM governor (`pilot.py` L~820): both now share the
+>   one `rpm_hover` anchor and the `(rpm/rpm_hover)²` measurement — the damper is the fast proportional
+>   path, the governor the slow command-tracking integral, and the governor's integral **subsumes** the
+>   retired accel `i_trim` (`i_trim` / `VZ_ITRIM_*` / `VZ_TRIM_TOTAL` deleted). The accel `vz` stays
+>   only for vz-consuming (`hover_blind_v2`) policies and the takeoff-seek breakaway detector. Covered
+>   by `tests/test_pilot_vz_damper.py` (14 tests); pilot `selftest` parity unchanged (4.6e-08).
+>   **Confirm from the next flight's `flight_report` pack:** `vertical.vz_rail_frames` ≈ **0** over the
+>   airborne window (was 48; the logged `vz_est` is now the bounded RPM climb rate),
+>   `vertical.thrust_divergence.detected` = **false** with `us_thr_rise` ≲ 40 µs across the stable
+>   hover (was +203 µs while `a_thr` never moved), and the hover holds altitude instead of climbing to
+>   the ceiling — a completed calm-air flight rather than a ~10 s ceiling contact.
 > - **Deferred — pilot obs-oversampling for the latency tail:** this flight's p99 obs_age is **122 ms**
 >   (32% past the 40 ms cliff) — but the bridge RTT p99 is ~24 ms, so the tail is the pilot's 50 Hz
 >   single-poll-per-tick coupling, **not** the bridge. Decouple obs polling from the command tick
