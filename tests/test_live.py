@@ -51,6 +51,12 @@ def test_live_session_steps_and_frame_schema(tmp_path):
     assert len(d["pos"]) == 3 and len(d["quat"]) == 4 and len(d["action"]) == 4
     # Hover surfaces its setpoint under the reused `target` scene marker.
     assert "scene" in d and len(d["scene"]["target"]) == 3
+    # Per-frame metrics feed the Bench parallel-sim HUD (reward + hero tilt/vz + task readouts).
+    m = frame["metrics"]
+    assert "reward" in m and "tilt_deg" in m and "vz" in m
+    assert isinstance(m["reward"], float)
+    # The hover task folds its running metrics in (mean_tilt_deg / hold_rate / crash_rate_per_step).
+    assert "mean_tilt_deg" in m and "hold_rate" in m
 
 
 def test_set_setpoint_moves_hover_target(tmp_path):

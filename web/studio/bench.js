@@ -15,14 +15,15 @@ import { makeDrone } from "./drone-model.js";
 
 const TREND = 180;                     // rolling trend length (frames) for the tilt/vz mini-chart
 const FLYING = new Set(["countdown", "seek", "rise", "hover", "land"]);
+const SIM_OFFSET = 2.0;                // the parallel-sim drone sits this far +x of the real one
+const SEED_HINTS = ["hover_blind_air65_d50var_s8", "hover_blind", "hover"];  // parallel-sim policy
 
-export function createBench({ mount, panel, toast }) {
+export function createBench({ mount, panel, toast, getPolicies }) {
   const view = createScene(mount);
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
 
   let ws = null;
   let connected = false;
-  let sim = null;                      // Phase 4: the parallel /ws/live session
   const tiltHist = [];
   const vzHist = [];
 
@@ -30,6 +31,10 @@ export function createBench({ mount, panel, toast }) {
   const drone = makeDrone(0xdcdcdc);
   drone.position.set(0, 0, 1.2);
   view.world.add(drone);
+
+  // Phase 4: the parallel CPU-torch sim of the same policy, shown +x of the real drone.
+  let simWs = null;
+  let simDrone = null;
 
   function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
@@ -53,7 +58,7 @@ export function createBench({ mount, panel, toast }) {
   function disconnect() {
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     connected = false;
-    if (sim) { sim.close(); sim = null; }
+    stopSim();
   }
 
   // ---- frame handling ---------------------------------------------------------------
@@ -155,13 +160,46 @@ export function createBench({ mount, panel, toast }) {
   $("b_abort").addEventListener("click", () => send({ type: "abort" }));
   if ($("b_sim")) $("b_sim").addEventListener("change", () => toggleSim($("b_sim").checked));
 
-  // ---- Phase 4: parallel CPU-torch sim (wired in bench.js's sim companion) ----------
-  function toggleSim(on) { /* Phase 4 fills this in */ }
+  // ---- Phase 4: parallel CPU-torch sim of the same policy --------------------------
+  async function toggleSim(on) {
+    if (!on) { stopSim(); return; }
+    let path = null;
+    try {
+      const policies = await getPolicies();
+      for (const hint of SEED_HINTS) {
+        const hit = policies.find((p) => p.name === hint) || policies.find((p) => (p.name || "").includes(hint) || p.task === hint);
+        if (hit) { path = hit.path; break; }
+      }
+    } catch (err) { toast(`sim: couldn't load policies: ${err.message}`, true); }
+    if (!path) { toast("no hover policy found for the parallel sim", true); $("b_sim").checked = false; return; }
+
+    simDrone = makeDrone(0x6ff0f0);              // cyan = the sim twin
+    view.world.add(simDrone);
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    simWs = new WebSocket(`${proto}://${location.host}/ws/live`);
+    simWs.onopen = () => simWs.send(JSON.stringify({ policy: path, drone_count: 1, dr: false }));
+    simWs.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "error") { toast(`sim: ${msg.detail}`, true); stopSim(); $("b_sim").checked = false; return; }
+      if (msg.type === "frame" && msg.drones && msg.drones[0] && simDrone) {
+        const d = msg.drones[0];
+        simDrone.position.set(d.pos[0] + SIM_OFFSET, d.pos[1], d.pos[2]);
+        simDrone.quaternion.set(d.quat[0], d.quat[1], d.quat[2], d.quat[3]);
+      }
+    };
+    simWs.onclose = () => { simWs = null; };
+    simWs.onerror = () => { toast("sim socket error", true); };
+  }
+
+  function stopSim() {
+    if (simWs) { simWs.onclose = null; simWs.close(); simWs = null; }
+    if (simDrone) { view.world.remove(simDrone); simDrone = null; }
+  }
 
   return {
     onShow() { view.resize(); if (!ws) connect(); },
-    tick() { view.render(); if (sim) sim.tick(); },
-    resize() { view.resize(); if (sim) sim.resize(); },
+    tick() { view.render(); },
+    resize() { view.resize(); },
     disconnect,
   };
 }

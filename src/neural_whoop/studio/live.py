@@ -20,6 +20,7 @@ recorder uses, so the live wire-format can't drift from the replay schema (``doc
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,7 @@ class LiveSession:
         self._dw_queue = torch.zeros(self.env.n_drones, 3, device=self.dev)  # pending rate kicks
         self.paused = False
         self.step_idx = 0
+        self._last_reward = 0.0
         self.obs = self.env.reset_all()
 
     @classmethod
@@ -116,7 +118,8 @@ class LiveSession:
             self.env.dyn.add_body_rate(self._dw_queue)
             self._dv_queue.zero_()
             self._dw_queue.zero_()
-            self.obs, _, _, _, _ = self.env.step(action)
+            self.obs, reward, _, _, _ = self.env.step(action)
+            self._last_reward = float(reward[self.h].mean().item())
             self.step_idx += 1
             return self._frame(action)
 
@@ -139,7 +142,23 @@ class LiveSession:
             if scene:
                 d["scene"] = {k: v[j].tolist() for k, v in scene.items()}
             drones.append(d)
-        return {"step": self.step_idx, "t": self.step_idx * self.dt, "drones": drones}
+        # Per-frame metrics for the Bench parallel-sim HUD (and the Live tab). Hero-0 tilt/vz plus
+        # the last reward; task.metrics(env) folds in the running task-specific readouts (e.g. hover
+        # pos-error / hold-rate) when the task exposes them.
+        rpy0 = snap["rpy"][0].tolist()
+        vel0 = snap["vel"][0].tolist()
+        metrics: dict[str, Any] = {
+            "reward": self._last_reward,
+            "tilt_deg": math.degrees(math.hypot(rpy0[0], rpy0[1])),
+            "vz": vel0[2],
+        }
+        if hasattr(self.env.task, "metrics"):
+            try:
+                metrics.update(self.env.task.metrics(self.env))
+            except Exception:  # noqa: BLE001 - a metrics hiccup must never break the live stream
+                pass
+        return {"step": self.step_idx, "t": self.step_idx * self.dt,
+                "drones": drones, "metrics": metrics}
 
     # --- command dispatch (browser messages) ---
     def command(self, msg: dict) -> None:

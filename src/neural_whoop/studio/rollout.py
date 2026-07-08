@@ -36,7 +36,8 @@ SWARM_TASKS = frozenset({"swarm_race", "swarm_formation"})
 #: Tasks with no gate course — they supply their own arena and a moving target/anchor instead, so
 #: course resolution + gate sizing is skipped (the ``scene`` channel carries what they track).
 GATELESS_TASKS = frozenset(
-    {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation", "hover"}
+    {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation",
+     "hover", "hover_blind"}
 )
 
 
