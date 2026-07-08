@@ -116,6 +116,25 @@
 
     .view3d-editor { position: absolute; inset: 0; }
     .view3d-live { position: absolute; inset: 0; }
+    .view3d-bench { position: absolute; inset: 0; }
+
+    /* Bench (real-drone) status dots + big Start/Abort. */
+    .dotrow { display: flex; gap: 9px; }
+    .dotrow .chip { flex: 1; text-align: center; padding: 6px 0; border-radius: var(--radius-sm);
+      background: var(--panel-3); color: var(--muted); font-size: 12px; font-weight: 600;
+      border: var(--bw) solid var(--line); }
+    .chip.cmd-1 { background: #163d3d; color: #6ff0f0; border-color: #2a5a5a; }  /* on/armed */
+    .chip.cmd-0 { background: #3a2020; color: #ff9d9d; border-color: #5a2a2a; }  /* off */
+    .btn.danger { background: #3a1c1c; border-color: #6a3030; color: #ffd6d6; font-weight: 600; }
+    .btn.danger:hover { border-color: #a04040; }
+    .btn.big { padding: 13px; font-size: 15px; }
+    .bench-trend { width: 100%; height: 70px; background: var(--panel-2);
+      border: var(--bw) solid var(--line); border-radius: var(--radius-sm); }
+    .bench-msg { color: var(--muted); font-size: 11.5px; min-height: 15px; font-variant-numeric: tabular-nums; }
+    .report { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--panel-2);
+      border: var(--bw) solid var(--line-strong); display: flex; flex-direction: column; gap: 4px; }
+    .report .title { color: var(--fg); font-weight: 600; }
+    .report a { color: var(--accent); }
 
     /* Live wind pad: a square top-down map; drag to set the horizontal wind vector. */
     .windpad { position: relative; width: 100%; aspect-ratio: 1; max-width: 168px; margin: 2px auto 0;
@@ -195,6 +214,7 @@
       <div class="view3d"></div>
       <div class="view3d-editor hidden"></div>
       <div class="view3d-live hidden"></div>
+      <div class="view3d-bench hidden"></div>
       <!-- Hero overlay boxes: fixed left column (FPV top, top-down middle, stats bottom), matching
            the exported MP4. Positioned each frame from the layout rects (main.js). -->
       <div id="hero-fpv" class="hero-box"><div class="hlabel">FPV</div><div class="hsub" data-h="fpvcap"></div></div>
@@ -218,6 +238,7 @@
       <div class="brand">neural-whoop <small>· studio</small></div>
       <div class="tabbar">
         <button class="tab active" data-tab="player">Player</button>
+        <button class="tab" data-tab="bench">Bench</button>
         <button class="tab" data-tab="live">Live</button>
         <button class="tab" data-tab="editor">Editor</button>
       </div>
@@ -338,6 +359,52 @@
           </label>
         </div>
       </div><!-- /#live-controls -->
+
+      <!-- ============================ BENCH (real drone) ============================ -->
+      <div id="bench-controls" class="hidden">
+        <div class="section">
+          <h4>bench · real drone</h4>
+          <div class="status" data-h="b_link">connecting…</div>
+          <div class="dotrow">
+            <span class="chip cmd-0" data-h="b_armed">ARMED</span>
+            <span class="chip cmd-0" data-h="b_override">OVERRIDE</span>
+            <span class="chip" data-h="b_phase">waiting</span>
+          </div>
+          <button class="btn primary block big" data-h="b_start" disabled>▶ Start (3·2·1 → hover)</button>
+          <button class="btn danger block" data-h="b_abort" disabled>◼ Abort (release to radio)</button>
+          <div class="bench-msg" data-h="b_msg"></div>
+          <div class="hint">Start is a software clock — enabled only when the radio shows ARMED +
+            OVERRIDE. The radio still owns enable + instant kill (drop override / disarm = abort).</div>
+        </div>
+
+        <div class="section">
+          <h4>telemetry</h4>
+          <div class="hud" data-h="b_hud"></div>
+          <canvas class="bench-trend" data-h="b_trend"></canvas>
+          <div class="hint">grey = tilt°, cyan = vz est (−2…2 m/s)</div>
+        </div>
+
+        <div class="section">
+          <h4>flight params</h4>
+          <label class="field"><span>mode</span>
+            <select data-h="b_mode">
+              <option value="takeoff" selected>ground takeoff (recommended)</option>
+              <option value="launch">hand launch</option>
+              <option value="none">no staging (throttle at hover)</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label class="field"><span>seconds</span><input data-h="b_seconds" type="number" min="1" max="120" value="15" /></label>
+            <label class="field"><span>hz</span><input data-h="b_hz" type="number" min="10" max="100" value="50" /></label>
+          </div>
+          <label class="field"><span>hover throttle (µs)</span><input data-h="b_hover_us" type="number" min="1000" max="1600" value="1410" /></label>
+          <label class="chk"><input data-h="b_sim" type="checkbox" /> parallel sim (CPU torch)</label>
+        </div>
+
+        <div class="section">
+          <div class="report hidden" data-h="b_report"></div>
+        </div>
+      </div><!-- /#bench-controls -->
 
       <!-- ============================ EDITOR ============================ -->
       <div id="editor-controls" class="hidden">

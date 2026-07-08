@@ -8,6 +8,7 @@ import { createScene } from "./scene.js";
 import { Playback } from "./playback.js";
 import { createEditor } from "./editor.js";
 import { createLive } from "./live.js";
+import { createBench } from "./bench.js";
 import { layoutInsets, layoutInsetsCss } from "./layout.js";
 import { getPolicies, getCourses, getScalars, postRollout, exportVideo, runFileUrl } from "./api.js";
 import { loadRunByPath } from "./run-loader.js";
@@ -443,24 +444,36 @@ const live = createLive({
   getPolicies,
 });
 
+// ---- bench tab (always-on real drone) -----------------------------------------------
+const bench = createBench({
+  mount: document.querySelector(".view3d-bench"),
+  panel: document.getElementById("bench-controls"),
+  toast,
+  getPolicies,
+});
+
 // ---- tab routing --------------------------------------------------------------------
 let activeTab = "player";
 function switchTab(name) {
   activeTab = name;
   for (const b of document.querySelectorAll(".tabbar .tab")) b.classList.toggle("active", b.dataset.tab === name);
   document.getElementById("player-controls").classList.toggle("hidden", name !== "player");
+  document.getElementById("bench-controls").classList.toggle("hidden", name !== "bench");
   document.getElementById("live-controls").classList.toggle("hidden", name !== "live");
   document.getElementById("editor-controls").classList.toggle("hidden", name !== "editor");
   view.mount.classList.toggle("hidden", name !== "player");
+  bench_mount().classList.toggle("hidden", name !== "bench");
   live_mount().classList.toggle("hidden", name !== "live");
   editor_mount().classList.toggle("hidden", name !== "editor");
   syncHeroBoxes();
   if (name === "player") view.resize();
+  else if (name === "bench") bench.onShow();
   else if (name === "live") live.onShow();
   else editor.onShow();
 }
 const editor_mount = () => document.querySelector(".view3d-editor");
 const live_mount = () => document.querySelector(".view3d-live");
+const bench_mount = () => document.querySelector(".view3d-bench");
 for (const b of document.querySelectorAll(".tabbar .tab")) {
   b.addEventListener("click", () => switchTab(b.dataset.tab));
 }
@@ -473,6 +486,7 @@ function loop(now) {
   last = now;
   if (activeTab === "editor") { editor.tick(delta); return; }
   if (activeTab === "live") { live.tick(delta); return; }
+  if (activeTab === "bench") { bench.tick(delta); return; }
   playback.tick(delta);
   compositeHero();
 }
@@ -480,6 +494,7 @@ requestAnimationFrame(loop);
 addEventListener("resize", () => {
   if (activeTab === "player") view.resize();
   else if (activeTab === "live") live.resize();
+  else if (activeTab === "bench") bench.resize();
   else editor.resize();
   if ($("chartfold").open) renderCharts();
 });
