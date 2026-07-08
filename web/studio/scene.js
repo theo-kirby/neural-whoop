@@ -54,7 +54,10 @@ export function createScene(mount, { grid = true } = {}) {
 
   function resize() {
     const w = mount.clientWidth || 1, h = mount.clientHeight || 1;
-    renderer.setSize(w, h, false);
+    // updateStyle MUST stay on: it sets canvas.style = w/h CSS px so the displayed size is
+    // DPR-independent. With it off the canvas renders at its buffer size (w*devicePixelRatio),
+    // so on a retina display (DPR 2) it doubles and overflows #view, painting over the sidebar.
+    renderer.setSize(w, h);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
   }

@@ -47,8 +47,11 @@
     input[type=number]:focus, input[type=text]:focus { outline: none; border-color: var(--accent-dim); }
 
     #shell { position: fixed; inset: 0; display: flex; }
-    #view { position: relative; flex: 1; min-width: 0; }
+    #view { position: relative; flex: 1; min-width: 0; overflow: hidden; }
     .view3d { position: absolute; inset: 0; }
+    /* Keep the WebGL canvas glued to its mount regardless of buffer/DPR so it can't overflow
+       #view onto the sidebar (retina DPR>1 would otherwise render it at 2× width). */
+    #view > div > canvas { width: 100% !important; height: 100% !important; display: block; }
 
     /* Right control sidebar. */
     #sidebar { width: 348px; flex: none; height: 100%; overflow-y: auto;
