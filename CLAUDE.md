@@ -151,8 +151,17 @@ drone_count` (ring around one moving anchor). The gateless families have **no co
 `/api/policies` `family`/`needs_course` flag hides the course selector); what they track rides in the
 replay's `scene` channel, drawn as a target/anchor/slot marker (+ command chip). The frontend loads three.js from a CDN importmap (no Node toolchain in this
 repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab
-(author/validate/save a course) and the Live interaction tab are both implemented. See
-`docs/STUDIO.md`.
+(author/validate/save a course) and the Live interaction tab are both implemented. A **Bench** tab
+(`studio/flight.py` + `/ws/flight` + `web/studio/bench.js`) is the always-on **real-drone** dashboard:
+it flies the actual Air65 II over the MSP bridge via the pure-stdlib flight engine extracted from
+`scripts/pilot.py` into `neural_whoop.pilot` (`FlightController`/`config`/`policy`/`telemetry`;
+`pilot.py` is now a thin CLI shim). An always-on `FlightManager` (a background thread, **zero
+torch/numpy**, **not** under `ROLLOUT_LOCK`) runs the `pilot.py fly` 3·2·1→hover→land state machine and
+streams telemetry; the software **Start** only sets the flight clock and is enabled **only when
+telemetry shows ARMED + MSP-OVERRIDE** on the radio (which still owns enable + instant kill). An opt-in
+**parallel CPU-torch sim** (`/ws/live`) flies the same policy beside the real drone, and a completed
+flight auto-runs `flight_report.py`. A **fake bridge** (`--bridge fake` / `NW_FLIGHT_FAKE=1`) runs it
+all with no hardware. See `docs/STUDIO.md` and `docs/SIM2REAL.md`.
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).

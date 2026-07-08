@@ -316,6 +316,25 @@ sources, 73 adversarially-verified claims) settled the path under the user's har
   IMU — buildable now via teacher-student privileged learning trained in sim (Learning High-Speed
   Flight, Sci Robotics 2021). This is the next build while the Sense ships.
 
+### Unified bench dashboard (tooling, 2026-07-08)
+
+The manual per-flight grind (`export $NW_BRIDGE`, `pilot.py selftest/check`, `pilot.py fly --takeoff
+--ack-props-on`, watch a console, re-invoke) is now **one always-on browser page** — the Studio's
+**Bench** tab (`docs/STUDIO.md`). The `pilot.py fly` state machine was **extracted verbatim** into a
+steppable, pure-stdlib engine (`neural_whoop.pilot.FlightController` + `config`/`policy`/`telemetry`;
+`pilot.py` is now a thin CLI shim re-exporting the surface), wrapped in an always-on background
+`FlightManager` (`studio/flight.py`) served over `/ws/flight`. Open the page → the bench is connected
+→ click **Start** to run the real 3·2·1 → hover → land, watch live telemetry/metrics, optionally
+watch a parallel CPU-torch sim of the same policy, and get an auto flight-report on landing.
+
+**The safety interlock is preserved end-to-end and is the design's spine:** the software **Start** only
+sets the flight clock, and is **enabled only when telemetry shows ARMED + MSP-OVERRIDE engaged** on the
+Pocket. The radio still owns enable + instant kill (drop override / disarm → abort via the ~300 ms MSP
+freshness handback). Software never writes arm/aux; stopping the RC stream is the only stop. The real
+path imports **zero torch/numpy** and is not gated by the GPU sim's `ROLLOUT_LOCK`. A self-driving
+**fake bridge** (`--bridge fake` / `NW_FLIGHT_FAKE=1`) runs the whole dashboard with no hardware, and
+backs the headless tests (`tests/test_flight_controller.py`, `tests/test_flight_ws.py`).
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 

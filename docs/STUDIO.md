@@ -1,7 +1,12 @@
 # neural-whoop Studio
 
-An interactive browser viewer with three tabs:
+An interactive browser viewer with four tabs:
 
+- **Bench** — the **always-on real-drone dashboard**. Open the page and the bench controller is
+  already connected to the Air65 II over the WiFi MSP bridge; click **Start** to run the
+  3·2·1 → liftoff → hover → land sequence on the *real* drone, watch live telemetry + flight metrics
+  + a real-drone attitude glyph, and optionally toggle a **parallel CPU-torch sim** of the same
+  policy flying beside it. See below.
 - **Player** — pick a saved policy, a course, and a drone count, hit **Run**, and watch the policy
   fly in a **hero-layout viewport that matches the exported MP4**: a wide 3/4 main shot fills the
   view, with three fixed 4:3 cells stacked down the left edge — **FPV** (top), **top-down** (middle),
@@ -43,7 +48,10 @@ uv run python scripts/seed_courses.py  # (once) seed bigger assets/courses/*.yam
 uv run python scripts/serve.py         # -> http://127.0.0.1:8000
 ```
 
-Flags: `--host`, `--port`, `--device` (`cuda` default; `cpu` works for small rollouts), `--reload`.
+Flags: `--host`, `--port`, `--device` (`cuda` default; `cpu` works for small rollouts), `--reload`,
+`--bridge HOST[:PORT]` (the XIAO bridge for the **Bench** tab; default `$NW_BRIDGE`; pass `fake` or set
+`NW_FLIGHT_FAKE=1` to run the self-driving fake bridge with **no hardware**), `--flight-weights` (the
+deploy `policy_weights.json` the Bench dashboard flies).
 
 Open the URL, choose:
 - **policy** — any `runs/*/ckpt_final.pt` (labelled with its task + best lap if an `eval.json` is
@@ -55,6 +63,48 @@ Open the URL, choose:
 
 Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays in the
 hero layout. Transport: play/pause, scrub, speed, follow-cam, FPV box, top-down box, trail toggle.
+
+## Bench — the real-drone dashboard (Bench tab)
+
+The **Bench** tab unifies the Studio with the offboard pilot (`scripts/pilot.py`): one always-on page,
+served from the Mac bench controller, that flies the *real* Air65 II. Serve with a bridge:
+
+```bash
+export NW_BRIDGE=<xiao-ip>            # or pass --bridge <ip>
+uv run python scripts/serve.py --device cpu --bridge $NW_BRIDGE
+#   no hardware?  uv run python scripts/serve.py --bridge fake   (self-driving fake bridge)
+```
+
+On startup the server spins up an always-on **`FlightManager`** (`studio/flight.py`) on a background
+thread: it connects to the bridge (retrying if it's down), runs the extracted flight engine
+(`neural_whoop.pilot.FlightController` — the same 3·2·1 → liftoff → hover → land state machine
+`pilot.py fly` runs), and publishes a telemetry frame ~50 Hz over **`/ws/flight`**. This path imports
+**zero torch/numpy** and is **not** wrapped in the GPU sim's `ROLLOUT_LOCK` (the MSP link is a
+different resource; several viewers may watch one flight).
+
+Open the Bench tab and:
+- The **link** line + **ARMED** / **OVERRIDE** dots show the radio state live.
+- **Start** is a **software clock only**, and is **enabled only when telemetry shows the drone ARMED
+  + MSP-OVERRIDE engaged** on the Pocket radio. The radio still owns **enable + instant kill**:
+  dropping override or disarming aborts instantly via Betaflight's ~300 ms MSP-freshness handback.
+  Software **never** writes arm/aux — stopping the RC stream is the only "stop". Click **Start** to
+  run the countdown → liftoff → hover → land on the real drone.
+- **Abort** stops the stream (releases to the radio) at any time. The **phase** chip walks
+  `waiting → countdown → seek/rise → hover → land → released`.
+- The **telemetry HUD** shows tilt°, vz-estimate, thrust, throttle µs, link age, battery V, RPM, with
+  a rolling **tilt/vz trend**. **Flight params** (mode: ground-takeoff / hand-launch / none; seconds;
+  hz; hover µs) default to the safe CLI values and ride along with **Start**.
+- **parallel sim (CPU torch)** — an opt-in toggle that opens a `/ws/live` session flying the **same
+  deployed policy** in sim (a cyan twin beside the real drone), so you can watch the real and
+  simulated hover side-by-side. Off by default so the real-flight path stays pure-stdlib; it needs a
+  CPU torch wheel on the Mac (`pip install torch`).
+- On a **completed** flight (RELEASED, not a mid-air abort) the manager auto-runs
+  `scripts/flight_report.py` on the flight's CSV in a detached process and surfaces a **flight report
+  ready** panel (hover-tilt median, vz-rail flags, link p99, battery sag) with a link to the CSV.
+
+The whole backend is exercised headlessly by the fake bridge (`tests/test_flight_ws.py`,
+`tests/test_flight_controller.py`): Start-gating interlock, phase walk, abort, link-down, and the
+auto-report — all with no drone.
 
 ## Live interaction (Live tab)
 
