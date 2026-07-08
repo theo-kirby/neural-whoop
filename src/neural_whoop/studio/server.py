@@ -329,7 +329,7 @@ def create_app(
                 from neural_whoop.studio.flight_report import run_flight_report
             except ImportError:
                 return
-            run_flight_report(csv_path, released, app.state.flight)
+            run_flight_report(csv_path, released, app.state.flight, runs_root=runs_dir)
 
         weights_abs = _resolve_under(root, flight_weights)
         mgr = FlightManager(
@@ -376,6 +376,8 @@ def create_app(
         try:
             while True:
                 await asyncio.sleep(0.02)
+                for m in mgr.drain_messages():   # out-of-band (e.g. flight-report ready)
+                    await ws.send_json(m)
                 f = mgr.latest()
                 if f is not None and f.get("seq") != last_seq:
                     last_seq = f["seq"]

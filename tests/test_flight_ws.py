@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from neural_whoop.pilot import FlightParams
 from neural_whoop.studio.flight import FakeFlightBridge, FlightManager
+from neural_whoop.studio.flight_report import run_flight_report
 from neural_whoop.studio.server import ROLLOUT_LOCK, create_app
 
 
@@ -103,6 +104,32 @@ def test_fake_flight_gating_phase_walk_and_abort(tmp_path):
             ws.send_json({"type": "abort"})
             aborted = _read_until(ws, lambda m: m.get("phase") == "aborted")
             assert aborted["phase"] == "aborted"
+    assert not ROLLOUT_LOCK.locked()
+
+
+def test_flight_report_emitted_on_landing(tmp_path):
+    """A completed (RELEASED) fake flight fires the auto flight-report and emits {type: report}."""
+    runs = tmp_path / "runs"
+    fake = FakeFlightBridge(armed=True, override=True)
+    mgr = FlightManager(
+        "fake", weights=_synth_weights(tmp_path),
+        params=FlightParams(launch=True, hold_seconds=0.15, seconds=0.5, ramp_s=0.1),
+        runs_dir=runs / "pilot", client_factory=lambda *_a, **_k: fake)
+    # Wire the manager's own auto-report at itself (the server does this via runs_dir in production).
+    mgr._on_flight_done = lambda csv, released: run_flight_report(csv, released, mgr, runs_root=runs)
+
+    app = create_app(repo_root=tmp_path, runs_dir=runs, courses_dir=tmp_path / "courses",
+                     device="cpu", flight_manager=mgr)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/flight") as ws:
+            _read_until(ws, lambda m: m.get("status", {}).get("armed")
+                        and m["status"]["override_on"])
+            ws.send_json({"type": "start"})
+            report = _read_until(ws, lambda m: m.get("type") == "report", max_reads=3000)
+    assert report is not None and report["type"] == "report"
+    assert set(("median_tilt_deg", "vz_rail_frames", "link_p99_ms", "battery_sag_v")) \
+        <= set(report["metrics"])
+    assert list((runs / "pilot").glob("*_report/flight_summary.json")), "no report pack written"
     assert not ROLLOUT_LOCK.locked()
 
 

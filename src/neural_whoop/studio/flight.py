@@ -125,6 +125,7 @@ class FlightManager:
         self._lock = threading.Lock()
         self._cmds: queue.Queue = queue.Queue()
         self._latest: dict | None = None
+        self._msgs: list[dict] = []          # out-of-band messages (e.g. flight-report ready)
         self._seq = 0
         self._link_state = "down"
         self._ctrl: FlightController | None = None
@@ -170,6 +171,19 @@ class FlightManager:
         """A thread-safe copy of the most recent published frame (carries ``seq``/``link_state``)."""
         with self._lock:
             return dict(self._latest) if self._latest is not None else None
+
+    def emit(self, msg: dict) -> None:
+        """Queue an out-of-band message (e.g. a flight-report-ready notice) for the websocket."""
+        with self._lock:
+            self._msgs.append(dict(msg))
+
+    def drain_messages(self) -> list[dict]:
+        """Pop all queued out-of-band messages (the websocket sends these alongside frames)."""
+        with self._lock:
+            if not self._msgs:
+                return []
+            out, self._msgs = self._msgs, []
+            return out
 
     # ------------------------------------------------------------------ background thread
     def _run(self) -> None:
