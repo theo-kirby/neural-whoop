@@ -77,6 +77,10 @@ class ExportRequest(BaseModel):
     crf: int = Field(default=18, ge=0, le=51)
 
 
+#: The deployed hover policy the Bench dashboard flies by default.
+_DEFAULT_FLIGHT_WEIGHTS = "runs/hover_blind_air65_d50var_s8/policy_weights.json"
+
+
 def create_app(
     repo_root: Path | None = None,
     *,
@@ -84,14 +88,24 @@ def create_app(
     courses_dir: Path | None = None,
     studio_dir: Path | None = None,
     device: str = "cuda",
+    bridge: str | None = None,
+    flight_weights: str = _DEFAULT_FLIGHT_WEIGHTS,
+    flight_manager=None,
 ) -> FastAPI:
-    """Build the Studio FastAPI app. Dirs default to the repo layout; override for tests."""
+    """Build the Studio FastAPI app. Dirs default to the repo layout; override for tests.
+
+    ``bridge`` (``host[:port]`` / ``"fake"`` / ``None``) enables the always-on real-drone Bench
+    dashboard: when set, a :class:`~neural_whoop.studio.flight.FlightManager` is spun up in the
+    startup hook (torch-free) and served over ``/ws/flight``. ``None`` (and no ``NW_FLIGHT_FAKE``)
+    leaves ``/ws/flight`` reporting "no bridge configured".
+    """
     root = Path(repo_root) if repo_root is not None else _REPO_ROOT
     runs_dir = (runs_dir or (root / "runs")).resolve()
     courses_dir = (courses_dir or (root / "assets" / "courses")).resolve()
     studio_dir = studio_dir or (root / "web" / "studio")
 
     app = FastAPI(title="neural-whoop studio", version="0.1.0")
+    app.state.flight = None
 
     @app.middleware("http")
     async def _no_store_static(request, call_next):
@@ -294,6 +308,83 @@ def create_app(
             )
         return {"video_path": out_mp4.resolve().relative_to(runs_dir.resolve()).as_posix()}
 
+    # ----------------------------------------------------------------- flight (real drone)
+    _flight_enabled = bool(bridge) or _flight_fake_env()
+
+    @app.on_event("startup")
+    def _start_flight() -> None:
+        """Spin up the always-on FlightManager (lazy import so torch-less/bridge-less installs
+        still import the app). No-op when no bridge is configured."""
+        if flight_manager is not None:      # tests inject a pre-built manager
+            flight_manager.start()
+            app.state.flight = flight_manager
+            return
+        if not _flight_enabled:
+            return
+        from neural_whoop.studio.flight import FlightManager
+
+        def _on_done(csv_path, released):
+            # Phase 5: auto flight-report on landing (lazy + optional so the manager stands alone).
+            try:
+                from neural_whoop.studio.flight_report import run_flight_report
+            except ImportError:
+                return
+            run_flight_report(csv_path, released, app.state.flight)
+
+        weights_abs = _resolve_under(root, flight_weights)
+        mgr = FlightManager(
+            bridge or "fake", weights=weights_abs, runs_dir=runs_dir / "pilot",
+            on_flight_done=_on_done,
+        )
+        mgr.start()
+        app.state.flight = mgr
+
+    @app.on_event("shutdown")
+    def _stop_flight() -> None:
+        mgr = app.state.flight
+        if mgr is not None:
+            mgr.stop()
+            app.state.flight = None
+
+    @app.websocket("/ws/flight")
+    async def flight(ws: WebSocket) -> None:
+        """Stream the always-on real-drone flight to the browser; forward start/abort/params.
+
+        NOT wrapped in :data:`ROLLOUT_LOCK` (that guards the GPU sim; the MSP link is a separate
+        resource and multiple viewers may watch the same telemetry). The FlightManager is itself the
+        single-flight guard for the sequence, and it never writes arm/aux — the radio owns kill.
+        """
+        await ws.accept()
+        mgr = app.state.flight
+        if mgr is None:
+            await ws.send_json({"type": "error", "detail": "no bridge configured "
+                                "(set NW_BRIDGE or pass --bridge / NW_FLIGHT_FAKE=1)"})
+            await ws.close()
+            return
+
+        async def _reader() -> None:
+            try:
+                while True:
+                    msg = await ws.receive_json()
+                    if msg.get("type") in ("start", "abort", "params"):
+                        mgr.command(msg)
+            except (WebSocketDisconnect, ValueError, RuntimeError):
+                pass
+
+        reader = asyncio.create_task(_reader())
+        last_seq = -1
+        try:
+            while True:
+                await asyncio.sleep(0.02)
+                f = mgr.latest()
+                if f is not None and f.get("seq") != last_seq:
+                    last_seq = f["seq"]
+                    await ws.send_json(f)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+        finally:
+            reader.cancel()
+
     # ----------------------------------------------------------------- static studio (LAST)
     if studio_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(studio_dir), html=True), name="studio")
@@ -301,12 +392,23 @@ def create_app(
     return app
 
 
-def app_factory() -> FastAPI:
-    """Import-string factory for ``uvicorn --reload`` (needs a re-importable target, not an app
-    instance). Device comes from ``NW_STUDIO_DEVICE`` (set by ``scripts/serve.py``), default cuda."""
+def _flight_fake_env() -> bool:
     import os
 
-    return create_app(device=os.environ.get("NW_STUDIO_DEVICE", "cuda"))
+    return str(os.environ.get("NW_FLIGHT_FAKE", "")).lower() in ("1", "true", "yes", "on")
+
+
+def app_factory() -> FastAPI:
+    """Import-string factory for ``uvicorn --reload`` (needs a re-importable target, not an app
+    instance). Device/bridge/weights come from env (set by ``scripts/serve.py`` across the reloader
+    boundary), mirroring the ``NW_STUDIO_DEVICE`` pattern."""
+    import os
+
+    return create_app(
+        device=os.environ.get("NW_STUDIO_DEVICE", "cuda"),
+        bridge=os.environ.get("NW_BRIDGE") or None,
+        flight_weights=os.environ.get("NW_FLIGHT_WEIGHTS", _DEFAULT_FLIGHT_WEIGHTS),
+    )
 
 
 # --------------------------------------------------------------------------- helpers

@@ -21,17 +21,29 @@ def main() -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--device", default="cuda", help="Torch device for rollouts (cuda/cpu).")
+    p.add_argument("--bridge", default=os.environ.get("NW_BRIDGE"), metavar="HOST[:PORT]",
+                   help="XIAO bridge address for the always-on Bench dashboard (default: $NW_BRIDGE). "
+                        "Pass 'fake' (or set NW_FLIGHT_FAKE=1) to run the self-driving fake bridge "
+                        "with no hardware. Omit to disable the real-drone tab.")
+    p.add_argument("--flight-weights", default=os.environ.get("NW_FLIGHT_WEIGHTS",
+                   "runs/hover_blind_air65_d50var_s8/policy_weights.json"),
+                   help="Deploy policy_weights.json the Bench dashboard flies.")
     p.add_argument("--reload", action="store_true", help="Auto-reload on Python edits under src/ (dev).")
     args = p.parse_args()
 
     import uvicorn
 
-    print(f"[studio] http://{args.host}:{args.port}  (device={args.device}{', reload' if args.reload else ''})")
+    bridge_note = f", bridge={args.bridge}" if args.bridge else ""
+    print(f"[studio] http://{args.host}:{args.port}  "
+          f"(device={args.device}{bridge_note}{', reload' if args.reload else ''})")
     if args.reload:
         # uvicorn's reloader re-imports the app in a child process, so it needs an import-string
-        # target (an app instance can't be reload-watched). Pass the device via env across that
+        # target (an app instance can't be reload-watched). Pass config via env across that
         # boundary, and watch only src/ so per-rollout writes under runs/ never trigger a reload.
         os.environ["NW_STUDIO_DEVICE"] = args.device
+        if args.bridge:
+            os.environ["NW_BRIDGE"] = args.bridge
+        os.environ["NW_FLIGHT_WEIGHTS"] = args.flight_weights
         src_dir = Path(__file__).resolve().parents[1] / "src"
         uvicorn.run(
             "neural_whoop.studio.server:app_factory", factory=True,
@@ -40,7 +52,9 @@ def main() -> int:
     else:
         from neural_whoop.studio.server import create_app
 
-        uvicorn.run(create_app(device=args.device), host=args.host, port=args.port)
+        uvicorn.run(create_app(device=args.device, bridge=args.bridge or None,
+                               flight_weights=args.flight_weights),
+                    host=args.host, port=args.port)
     return 0
 
 
