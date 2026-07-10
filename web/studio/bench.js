@@ -152,8 +152,13 @@ export function createBench({ mount, panel, toast, getPolicies }) {
 
   // ---- controls ---------------------------------------------------------------------
   $("b_start").addEventListener("click", () => {
+    // Level trim (deg), policy's-view obs offset: + pushes right / nose-down-forward, so dial it
+    // OPPOSITE the drift (drifts forward -> negative pitch trim). Backend field names are the
+    // FlightParams ones (_PARAM_FIELDS).
     send({ type: "params", seconds: Number($("b_seconds").value) || 15,
            hz: Number($("b_hz").value) || 50, hover_us: Number($("b_hover_us").value) || 1410,
+           trim_roll_deg: Number($("b_trim_roll").value) || 0,
+           trim_pitch_deg: Number($("b_trim_pitch").value) || 0,
            mode: $("b_mode").value });
     send({ type: "start" });
   });

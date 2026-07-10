@@ -122,12 +122,15 @@ def test_params_then_start_same_batch_flies(tmp_path):
         with client.websocket_connect("/ws/flight") as ws:
             _read_until(ws, lambda m: m.get("status", {}).get("armed")
                         and m["status"]["override_on"])
-            # Exactly what the Start button sends: params immediately followed by start.
+            # Exactly what the Start button sends: params immediately followed by start
+            # (incl. the level-trim fields the Bench UI exposes).
             ws.send_json({"type": "params", "seconds": 5, "hz": 50, "hover_us": 1410,
+                          "trim_roll_deg": 0.5, "trim_pitch_deg": -2.5,
                           "mode": "ground-takeoff"})
             ws.send_json({"type": "start"})
             flying = _read_until(ws, lambda m: m.get("phase") not in (None, "waiting"))
             assert flying["phase"] in ("countdown", "seek", "rise", "hover", "land")
+    assert mgr._params.trim_pitch_deg == -2.5 and mgr._params.trim_roll_deg == 0.5
     assert not ROLLOUT_LOCK.locked()
 
 
