@@ -107,6 +107,30 @@ def test_fake_flight_gating_phase_walk_and_abort(tmp_path):
     assert not ROLLOUT_LOCK.locked()
 
 
+def test_params_then_start_same_batch_flies(tmp_path):
+    """Regression: bench.js fires {params} then {start} back-to-back on one Start click. The params
+    message rebuilds a fresh WAITING controller; a fresh controller hasn't polled RC yet, so unless
+    the manager carries over the radio-observed armed/override state, request_start rejects the start
+    queued in the same drain and the drone silently never leaves WAITING."""
+    fake = FakeFlightBridge(armed=True, override=True)
+    mgr = FlightManager(
+        "fake", weights=_synth_weights(tmp_path),
+        params=FlightParams(launch=True, hold_seconds=0.1, seconds=5.0, ramp_s=0.1),
+        runs_dir=tmp_path / "pilot", client_factory=lambda *_a, **_k: fake)
+    app = _app_with(tmp_path, mgr)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/flight") as ws:
+            _read_until(ws, lambda m: m.get("status", {}).get("armed")
+                        and m["status"]["override_on"])
+            # Exactly what the Start button sends: params immediately followed by start.
+            ws.send_json({"type": "params", "seconds": 5, "hz": 50, "hover_us": 1410,
+                          "mode": "ground-takeoff"})
+            ws.send_json({"type": "start"})
+            flying = _read_until(ws, lambda m: m.get("phase") not in (None, "waiting"))
+            assert flying["phase"] in ("countdown", "seek", "rise", "hover", "land")
+    assert not ROLLOUT_LOCK.locked()
+
+
 def test_flight_report_emitted_on_landing(tmp_path):
     """A completed (RELEASED) fake flight fires the auto flight-report and emits {type: report}."""
     runs = tmp_path / "runs"

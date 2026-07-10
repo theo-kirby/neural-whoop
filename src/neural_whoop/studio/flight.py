@@ -253,8 +253,15 @@ class FlightManager:
                 ctrl.abort("user")
             elif t == "params" and ctrl.t_start is None and not ctrl.done:
                 self._params = params_from_message(msg, self._params)
+                prev = ctrl
                 ctrl = self._new_controller(fc)
                 ctrl.setup()
+                # A fresh controller hasn't stepped yet, so armed_seen/override_on are False.
+                # Carry over what the previous (live) controller just observed from the radio, so
+                # a `start` queued in the SAME drain isn't spuriously rejected by request_start.
+                # The next step() re-reads RC and re-verifies; the radio still owns enable + kill.
+                ctrl.armed_seen = prev.armed_seen
+                ctrl.override_on = prev.override_on
                 self._ctrl = ctrl
         return ctrl
 
