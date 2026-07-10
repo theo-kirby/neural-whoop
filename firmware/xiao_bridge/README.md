@@ -9,15 +9,16 @@ controller and ships the FC's replies back. Protocol-transparent by design — t
 
 | XIAO | FC |
 |---|---|
-| D6 / TX (GPIO43) | UART1 RX pad (R1) |
-| D8 (GPIO7) | UART1 TX pad (T1) |
+| D10 / MOSI (GPIO9) | UART1 RX pad (R1) |
+| D9 / MISO (GPIO8) | UART1 TX pad (T1) |
 | GND | GND |
 | 5V | 5V pad (FC BEC) |
 
 The natural RX choice would be D7/GPIO44, but on our unit that input is dead (line idles at a
 healthy 3.3 V, yet neither UART1-matrix nor native-UART0 reception ever sees a byte — presumed
-ESD/heat casualty). Any free GPIO works as UART RX via the ESP32-S3 matrix; we use D8. Match
-`FC_RX_PIN` in `wifi_config.h` to wherever the FC's T1 wire actually lands.
+ESD/heat casualty). Any free GPIO works as UART TX/RX via the ESP32-S3 matrix; the wiring was
+moved to the SPI-side pins D9/D10 on 2026-07-10. Match `FC_TX_PIN`/`FC_RX_PIN` in
+`wifi_config.h` to wherever the FC's R1/T1 wires actually land.
 
 Mount with the antenna clear of the frame; the plain (camera-less) XIAO is enough for the
 bridge (~3 g + wiring).
