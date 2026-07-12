@@ -101,6 +101,20 @@ def check_policy_family(pol: Policy) -> None:
                  "(RPM governor stays: absolute thrust anchor)" if pol.uses_vz else ""))
 
 
+def check_policy_family_acro(pol: Policy) -> None:
+    """The acro-flip family: obs-7 ``[gravity_body(3), p, q, r, rotation_remaining]`` (IMU-only).
+
+    Used ONLY for the acro policy that drives the bounded FLIP window (the primary hover policy
+    still goes through :func:`check_policy_family`'s 5/6-dim guard). Single-frame — no stacking.
+    """
+    if pol.base_obs_dim != 7:
+        sys.exit(f"unsupported acro policy: base_obs_dim {pol.base_obs_dim} (the acro-flip pilot "
+                 "feeds the 7-dim [gravity_body(3), p, q, r, rotation_remaining] obs only)")
+    if pol.obs_stack > 1:
+        sys.exit(f"unsupported acro policy: obs_stack {pol.obs_stack} (the acro-flip family is "
+                 "single-frame; stacking is a hover-family feature)")
+
+
 # --- conversions ----------------------------------------------------------------------------
 
 
@@ -123,6 +137,49 @@ def obs_from_msp(att: dict, imu: dict) -> list[float]:
     q = math.radians(gy)                           # + = nose-down rate (event-verified)
     r = math.radians(gz)                           # + = CCW-from-above rate (spin-check-verified)
     return [roll, pitch, p, q, r]
+
+
+def _gravity_body(roll: float, pitch: float, yaw: float = 0.0) -> list[float]:
+    """World-down in the body frame, ``world_to_body([0,0,-1], R) = -R[2,:]`` — byte-parity with
+    the sim (``tasks/acro_flip.py``'s ``gravity_body``, obs channels 0-2).
+
+    Ports the sim's ``euler_to_quaternion`` (real-last xyzw) + ``quaternion_to_matrix`` (which the
+    dynamics core feeds ``q.roll(1)`` = real-first wxyz) to pure stdlib. ``gravity_body`` is the
+    yaw-invariant tilt-of-gravity — rotation about world-z (yaw) leaves world-down unchanged — so
+    the deploy caller passes ``yaw=0``; the parity test grids yaw to prove that invariance holds.
+    """
+    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+    # euler_to_quaternion -> xyzw (real-last), matching diffaero/utils/math.py.
+    qx = cy * sr * cp - sy * cr * sp
+    qy = cy * cr * sp + sy * sr * cp
+    qz = sy * cr * cp - cy * sr * sp
+    qw = cy * cr * cp + sy * sr * sp
+    # quaternion_to_matrix consumes real-first (r, i, j, k) = (w, x, y, z); we need only R's row 2.
+    r, i, j, k = qw, qx, qy, qz
+    two_s = 2.0 / (qx * qx + qy * qy + qz * qz + qw * qw)
+    r20 = two_s * (i * k - j * r)
+    r21 = two_s * (j * k + i * r)
+    r22 = 1.0 - two_s * (i * i + j * j)
+    return [-r20, -r21, -r22]
+
+
+def obs_from_msp_acro(att: dict, imu: dict, rotation_remaining: float) -> list[float]:
+    """acro obs-7 ``[gravity_body(3), p, q, r, rotation_remaining]`` from MSP attitude + gyro.
+
+    Deploy-honest, IMU-only (no altitude/position). ``gravity_body`` is byte-parity with the sim
+    task (:func:`_gravity_body`); ``p,q,r`` reuse the empirically-verified gyro signs from
+    :func:`obs_from_msp`; ``rotation_remaining`` ∈ [1→0] is the pilot's maneuver-clock phase.
+    """
+    roll = math.radians(att["roll_deg"])           # + = roll right (sim convention)
+    pitch = math.radians(att["pitch_deg"])         # + = nose down on this board (sim convention)
+    grav_b = _gravity_body(roll, pitch)            # yaw-invariant -> yaw=0
+    gx, gy, gz = (v * GYRO_RAW_TO_DPS for v in imu["gyro_raw"])  # raw LSB -> deg/s
+    p = math.radians(gx)                           # + = roll-right rate
+    q = math.radians(gy)                           # + = nose-down rate
+    r = math.radians(gz)                           # + = CCW-from-above rate
+    return grav_b + [p, q, r, rotation_remaining]
 
 
 def action_to_us(act: list[float], hover_us: int, min_us: int, max_us: int,

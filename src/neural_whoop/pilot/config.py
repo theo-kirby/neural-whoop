@@ -74,6 +74,16 @@ RISE_S = 0.5
 # this window before the link is released so the drone settles rather than dropping.
 RAMP_DOWN_S = 1.5
 
+# Acro FLIP maneuver (docs/SIM2REAL.md): the learned single-axis flip inserted as a bounded window
+# at HOVER. The system-level split — the pilot owns takeoff/land, the acro policy owns the flip.
+# The task side fixes Φ = 2π·n_rotations and the 15° recovered-tilt success gate; these mirror it.
+ACRO_AXIS = "roll"            # "roll" (drives gyro p) or "pitch" (drives gyro q) — matches acro_flip
+ACRO_N_ROTATIONS = 1.0        # Φ = 2π·n_rotations (1 = a single barrel roll / loop)
+ACRO_FLIP_MAX_S = 1.0         # HARD bounded window: exit FLIP no later than this (safety — a failed
+#                              flip must hand the crash detector back before a real tumble persists)
+ACRO_SETTLE_TILT_DEG = 15.0   # a completed flip counts as recovered (-> HOVER) when tilt < this
+#                              (= acro_flip's success_tilt_deg)
+
 # MSP_RAW_IMU gyro scale. Betaflight's gyroRateDps() (sensors/gyro_init.c) returns
 # gyroADCf / rawSensorDev->scale — i.e. the FILTERED rate converted back to raw LSB units,
 # 16.384 LSB per deg/s on a +-2000 dps gyro. Confirmed empirically from flight_1783271742:
