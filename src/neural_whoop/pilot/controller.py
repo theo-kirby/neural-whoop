@@ -35,6 +35,10 @@ from neural_whoop.bench.msp import (
 )
 
 from .config import (
+    ACRO_AXIS,
+    ACRO_FLIP_MAX_S,
+    ACRO_N_ROTATIONS,
+    ACRO_SETTLE_TILT_DEG,
     BOX_ARM,
     BOX_MSP_OVERRIDE,
     LIFT_LAG_US,
@@ -53,7 +57,14 @@ from .config import (
     VZ_LEAK_TAU,
     VZ_TILT_LIMIT,
 )
-from .policy import Policy, action_to_us, rpm_climb_rate, rpm_damper_trim, stack_frames
+from .policy import (
+    Policy,
+    action_to_us,
+    obs_from_msp_acro,
+    rpm_climb_rate,
+    rpm_damper_trim,
+    stack_frames,
+)
 from .telemetry import Telemetry, stream_rc
 
 
@@ -73,6 +84,7 @@ class Phase(Enum):
     SEEK = "seek"            # --takeoff: slow throttle ramp seeking the liftoff point
     RISE = "rise"            # gentle climb-out on the learned hover anchor (or --launch ramp)
     HOVER = "hover"          # the policy is flying
+    FLIP = "flip"            # the acro policy owns a bounded, learned single-axis flip window
     LAND = "land"            # end-of-flight thrust ramp-down
     RELEASED = "released"    # flight completed, link handed back to the radio
     ABORTED = "aborted"      # override dropped / obs stale / crash / user stop -> released early
@@ -99,10 +111,20 @@ class FlightParams:
     min_us: int = 1000
     max_us: int = 1600
     ramp_s: float = RAMP_DOWN_S   # end-of-flight thrust ramp-down window (s)
+    # Acro FLIP maneuver (an optional bounded window inserted at HOVER; only active with an
+    # acro_policy). flip_at_s auto-triggers N s into free flight (headless/CLI/fake-bridge);
+    # None = manual trigger only (request_flip, e.g. the Bench Flip button).
+    flip_at_s: float | None = None
+    acro_axis: str = ACRO_AXIS
+    acro_n_rotations: float = ACRO_N_ROTATIONS
+    acro_flip_max_s: float = ACRO_FLIP_MAX_S
+    acro_settle_tilt_deg: float = ACRO_SETTLE_TILT_DEG
 
     def __post_init__(self) -> None:
         if self.takeoff and self.launch:
             raise ValueError("pick one of takeoff / launch")
+        if self.acro_axis not in ("roll", "pitch"):
+            raise ValueError(f"acro_axis must be 'roll' or 'pitch', got {self.acro_axis!r}")
 
 
 class FlightController:
@@ -123,12 +145,14 @@ class FlightController:
     """
 
     def __init__(self, fc, policy: Policy, params: FlightParams, *,
+                 acro_policy: Policy | None = None,
                  start_mode: str = "switch", clock=time.monotonic, sleep=time.sleep,
                  on_log=None, log=None) -> None:
         if start_mode not in ("switch", "software"):
             raise ValueError(f"start_mode must be 'switch' or 'software', got {start_mode!r}")
         self.fc = fc
         self.pol = policy
+        self.acro_pol = acro_policy
         self.params = params
         self.start_mode = start_mode
         self._clock = clock
@@ -181,6 +205,16 @@ class FlightController:
         self.us_corr = 0.0
         self.trim_roll_rad = math.radians(params.trim_roll_deg)
         self.trim_pitch_rad = math.radians(params.trim_pitch_deg)
+
+        # --- acro FLIP maneuver clock (only ever advances while `flipping`) ---
+        self.axis_idx = 0 if params.acro_axis == "roll" else 1   # 0 -> gyro p, 1 -> gyro q
+        self.direction = 1.0                                     # v1: fixed rotation direction
+        self.phi_target = 2.0 * math.pi * params.acro_n_rotations
+        self.t_flip_start: float | None = None
+        self.phi_flip = 0.0            # signed accumulated rotation about the maneuver axis (rad)
+        self.rot_rem = 1.0            # rotation_remaining ∈ [1->0], the acro policy's phase signal
+        self.flipping = False
+        self.flip_triggered = False   # a flip was requested this flight (gates the auto-trigger)
 
         # Frame-display state (kept between ticks so idle/stale frames still carry last-known).
         self.roll = self.pitch = self.p = self.q = self.r = 0.0
@@ -266,6 +300,31 @@ class FlightController:
             self._log("software START accepted -> policy flying")
             return True
         return False
+
+    def request_flip(self) -> bool:
+        """Trigger the learned FLIP maneuver. Returns whether it was accepted.
+
+        Gated exactly like a maneuver should be: an acro policy must be loaded, we must be in free
+        HOVER (not still climbing out, not already flipping/landing), the link must be fresh, and the
+        drone near-level (so the flip starts from a known attitude). The radio still owns kill; this
+        only opens a bounded window (``acro_flip_max_s``) in which the acro policy drives the rates.
+        """
+        if self.acro_pol is None or self.flipping or self._done or self.t_start is None:
+            return False
+        if self._derive_phase() is not Phase.HOVER:
+            return False
+        if not (math.isfinite(self.age) and self.age <= self.params.max_obs_age):
+            return False
+        if math.hypot(self.roll, self.pitch) > math.radians(self.params.acro_settle_tilt_deg):
+            return False
+        self.t_flip_start = self._clock()
+        self.phi_flip = 0.0
+        self.rot_rem = 1.0
+        self.flipping = True
+        self.flip_triggered = True
+        self._log(f"\nFLIP requested (axis={self.params.acro_axis}, "
+                  f"Φ={self.phi_target:.2f} rad) -> acro policy owns the maneuver")
+        return True
 
     def abort(self, reason: str = "user") -> None:
         """Stop the flight — stopping the RC stream IS the safe action (never touches arm/aux)."""
@@ -374,9 +433,13 @@ class FlightController:
         # --- fresh obs: the full control tick ---
         o = self.tel.obs()
         self.roll, self.pitch, self.p, self.q, self.r = o[0], o[1], o[2], o[3], o[4]
-        # Crash detector: sustained extreme attitude -> cut + release.
+        # Crash detector: sustained extreme attitude -> cut + release. SUSPENDED while `flipping`:
+        # a legitimate flip passes |roll|>110° by design, so the detector would false-fire. The
+        # bounded FLIP window (acro_flip_max_s) + the re-level exit gate re-arm it the instant the
+        # maneuver ends (this branch resets bad_att_since every flipping tick), so a *failed* flip
+        # that tumbles past the window still cuts. This is the safety-critical interaction.
         hopeless = abs(o[0]) > math.radians(110) or abs(o[1]) > math.radians(80)
-        if self.t_start is not None and hopeless:
+        if self.t_start is not None and hopeless and not self.flipping:
             if self.bad_att_since is None:
                 self.bad_att_since = now
             elif now - self.bad_att_since > 0.3:
@@ -413,7 +476,13 @@ class FlightController:
                 self._log(f"  level reference: roll {math.degrees(self.lvl[0]):+.1f} / "
                           f"pitch {math.degrees(self.lvl[1]):+.1f} deg (floor-rest bias, "
                           "subtracted from the policy's view)")
-        if (self.az_ref is not None and (p.vz_gain > 0 or self.pol.uses_vz)
+        if self.flipping:
+            # SUSPEND the climb damper during the flip: the maneuver deliberately dumps altitude,
+            # and vz is unobservable through the inversion (tilt > 25°). Freeze the trim to zero and
+            # let the estimate decay — the acro policy owns thrust for the sub-second window.
+            self.thr_trim = 0.0
+            self.vz *= math.exp(-dt_tick / VZ_LEAK_TAU)
+        elif (self.az_ref is not None and (p.vz_gain > 0 or self.pol.uses_vz)
                 and self.t_start is not None and t_fl >= self.hold_s):
             dt = dt_tick
             ax, ay = self.tel.imu["acc_raw"][0], self.tel.imu["acc_raw"][1]
@@ -435,15 +504,42 @@ class FlightController:
                 if self.rpm_hover:
                     self.vz = rpm_climb_rate(rpm_now, self.rpm_hover)
         self.t_last_fresh = now
+        # Auto-trigger the FLIP one time, flip_at_s into free flight (headless/CLI/fake-bridge; the
+        # UI/CLI Flip button calls request_flip directly). request_flip re-checks every gate.
+        if (self.acro_pol is not None and p.flip_at_s is not None and not self.flip_triggered
+                and not self.flipping and self._derive_phase() is Phase.HOVER
+                and t_air >= p.flip_at_s):
+            self.request_flip()
         # Level reference + manual trim, policy's view only (estimator uses raw).
         o = [o[0] - self.lvl[0] - self.trim_roll_rad,
              o[1] - self.lvl[1] - self.trim_pitch_rad, o[2], o[3], o[4]]
 
-        frame = o + [self.vz] if self.pol.uses_vz else o
-        act = self.pol(stack_frames(self.obs_hist, frame, self.pol.obs_stack))
-        if t_air > p.seconds:  # ramp down: ease thrust action toward floor
-            k = (t_air - p.seconds) / self.ramp_s
-            act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
+        if self.flipping:
+            # The acro policy owns the maneuver. Advance the maneuver clock by integrating the
+            # maneuver-axis gyro (mirrors tasks/acro_flip.py's phi accumulation), then feed the
+            # acro obs-7 — NO stacking / vz for the 7-dim family.
+            rate_axis = self.p if self.axis_idx == 0 else self.q
+            self.phi_flip += rate_axis * self.direction * dt_tick
+            self.rot_rem = (self.phi_target - min(max(self.phi_flip, 0.0), self.phi_target)) \
+                / self.phi_target
+            act = self.acro_pol(obs_from_msp_acro(self.tel.att, self.tel.imu, self.rot_rem))
+            # Exit -> HOVER when the rotation completed AND we re-leveled, or when the bounded
+            # window elapses (the safety backstop that re-arms the crash detector).
+            tilt = math.hypot(self.roll, self.pitch)
+            elapsed = (now - self.t_flip_start) if self.t_flip_start is not None else 0.0
+            completed = self.phi_flip >= self.phi_target
+            if (completed and tilt < math.radians(p.acro_settle_tilt_deg)) \
+                    or elapsed >= p.acro_flip_max_s:
+                self.flipping = False
+                self.rot_rem = 0.0
+                self._log(f"\nFLIP done (rot {self.phi_flip / self.phi_target:.2f}·Φ, "
+                          f"tilt {math.degrees(tilt):.0f}°, {elapsed:.2f}s) -> HOVER")
+        else:
+            frame = o + [self.vz] if self.pol.uses_vz else o
+            act = self.pol(stack_frames(self.obs_hist, frame, self.pol.obs_stack))
+            if t_air > p.seconds:  # ramp down: ease thrust action toward floor
+                k = (t_air - p.seconds) / self.ramp_s
+                act = [act[0] * (1 - k) + (-1.0) * k, act[1], act[2], act[3]]
         self._thrust_norm = (max(-1.0, min(1.0, act[0] + p.trim_thrust + self.thr_trim)) + 1.0) \
             * 0.5 * MAX_THRUST_NORMED
         # Hover anchor: the liftoff-learned value, sag-adjusted relative to the liftoff voltage.
@@ -510,7 +606,8 @@ class FlightController:
             self.last_countdown = -2  # throttle is fully up now — only NOW let go
             self._log("  GO — release!")
         # RPM thrust governor (free flight only): steer throttle so measured thrust tracks command.
-        if (self.rpm_hover and rpm_now and self.t_start is not None
+        # SUSPENDED while flipping so it doesn't fight the maneuver's aggressive thrust commands.
+        if (self.rpm_hover and rpm_now and self.t_start is not None and not self.flipping
                 and t_fl >= self.hold_s + self.ramp_in_s):
             a0c = max(-1.0, min(1.0, act[0] + p.trim_thrust + self.thr_trim))
             t_des = (a0c + 1.0) * 0.5 * MAX_THRUST_NORMED
@@ -542,6 +639,8 @@ class FlightController:
             return Phase.RELEASED
         if self.t_start is None:
             return Phase.WAITING
+        if self.flipping:
+            return Phase.FLIP
         t_fl, t_air = self._t_fl, self._t_air
         if self.staged and t_fl < self.hold_s:
             return Phase.COUNTDOWN
@@ -576,6 +675,7 @@ class FlightController:
                 "tilt_deg": tilt_deg, "vz_est": self.vz, "thrust_norm": self._thrust_norm,
                 "hover_eff": self.hover_eff, "trim": self.thr_trim, "us_corr": self.us_corr,
                 "link_age_ms": age_ms, "battery_v": self.tel.vbat,
+                "rotation_remaining": self.rot_rem, "flipping": self.flipping,
             },
             "status": {
                 "armed": self.armed_seen, "override_on": self.override_on,
