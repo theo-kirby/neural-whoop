@@ -145,8 +145,10 @@ def test_params_then_start_same_batch_flies(tmp_path):
     assert not ROLLOUT_LOCK.locked()
 
 
-def test_flip_command_only_from_hover(tmp_path):
-    """{type:"flip"} is inert until the flight is in free HOVER, then opens the FLIP window."""
+def test_flip_command_as_starter_takes_off_flips_then_hovers(tmp_path):
+    """{type:"flip"} while WAITING doubles as the starter (same ARMED+override gate as start): the
+    flight takes off, the FLIP window auto-opens once free hover settles — no further command — and
+    the flight returns to HOVER and keeps flying."""
     fake = FakeFlightBridge(armed=True, override=True)
     mgr = FlightManager(
         "fake", weights=_synth_weights(tmp_path), acro_weights=_synth_acro_weights(tmp_path),
@@ -156,21 +158,21 @@ def test_flip_command_only_from_hover(tmp_path):
     app = _app_with(tmp_path, mgr)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/flight") as ws:
-            # A flip while still WAITING (pre-start) has no effect.
             _read_until(ws, lambda m: m.get("status", {}).get("armed")
                         and m["status"]["override_on"])
-            ws.send_json({"type": "flip"})
-            still = _read_until(ws, lambda m: m.get("seq", 0) > 0, max_reads=8)
-            assert still["phase"] == "waiting"
+            ws.send_json({"type": "flip"})            # the one press, from WAITING
+            flying = _read_until(ws, lambda m: m.get("phase") not in ("waiting",), max_reads=100)
+            assert flying["phase"] in ("countdown", "rise", "hover")
 
-            # Start, reach HOVER, then flip -> the FLIP phase appears.
-            ws.send_json({"type": "start"})
-            _read_until(ws, lambda m: m.get("phase") == "hover")
-            ws.send_json({"type": "flip"})
-            flip = _read_until(ws, lambda m: m.get("phase") == "flip", max_reads=200)
+            # The FLIP auto-fires after the settle window, with no further command.
+            flip = _read_until(ws, lambda m: m.get("phase") == "flip")
             assert flip is not None and flip["phase"] == "flip"
             assert flip["metrics"]["flipping"] is True
             assert flip["metrics"]["rotation_remaining"] is not None
+
+            # ... and hands back to the hover policy (the flight keeps flying).
+            after = _read_until(ws, lambda m: m.get("phase") == "hover")
+            assert after["phase"] == "hover"
     assert not ROLLOUT_LOCK.locked()
 
 

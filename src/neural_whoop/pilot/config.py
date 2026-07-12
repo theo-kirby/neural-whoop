@@ -83,6 +83,8 @@ ACRO_FLIP_MAX_S = 1.0         # HARD bounded window: exit FLIP no later than thi
 #                              flip must hand the crash detector back before a real tumble persists)
 ACRO_SETTLE_TILT_DEG = 15.0   # a completed flip counts as recovered (-> HOVER) when tilt < this
 #                              (= acro_flip's success_tilt_deg)
+ACRO_START_SETTLE_S = 1.0     # flip-as-starter: free-hover time before the pending flip fires (the
+#                              climb-out needs a beat to settle so the near-level gate passes)
 
 # MSP_RAW_IMU gyro scale. Betaflight's gyroRateDps() (sensors/gyro_init.c) returns
 # gyroADCf / rawSensorDev->scale — i.e. the FILTERED rate converted back to raw LSB units,

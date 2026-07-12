@@ -255,7 +255,9 @@ class FlightManager:
             if t == "start":
                 ctrl.request_start()
             elif t == "flip":
-                ctrl.request_flip()   # gated to HOVER + fresh link + near-level (like request_start)
+                # In HOVER: gated to fresh link + near-level. While WAITING: doubles as a software
+                # Start (same ARMED+override gate) with the flip auto-firing once free hover settles.
+                ctrl.request_flip()
             elif t == "abort":
                 ctrl.abort("user")
             elif t == "params" and ctrl.t_start is None and not ctrl.done:

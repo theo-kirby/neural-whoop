@@ -92,12 +92,15 @@ Open the Bench tab and:
   run the countdown → liftoff → hover → land on the real drone.
 - **Abort** stops the stream (releases to the radio) at any time. The **phase** chip walks
   `waiting → countdown → seek/rise → hover → [flip →] land → released`.
-- **Flip** (enabled only in **HOVER**, needs an acro policy loaded via `--flight-acro-weights`,
-  default `runs/acro_flip`) fires the learned, **blind** single-axis flip: a bounded FLIP window in
-  which the acro policy owns the rates while the pilot's crash detector / RPM governor / climb damper
-  are suspended, re-arming the instant the window closes. The HUD shows a **flip rot left**
-  (`rotation_remaining` 1→0) chip while flipping. Backend-gated exactly like Start (fresh link +
-  near-level); the real-drone flip is hardware-gated — the fake bridge exercises it end-to-end.
+- **Flip** (needs an acro policy loaded via `--flight-acro-weights`, default `runs/acro_flip`)
+  fires the learned, **blind** single-axis flip: a bounded FLIP window in which the acro policy owns
+  the rates while the pilot's crash detector / RPM governor / climb damper are suspended, re-arming
+  the instant the window closes. Enabled in **HOVER** (fires immediately, backend-gated like Start:
+  fresh link + near-level) **and while WAITING** under the same ARMED+override gate as Start — there
+  it *is* the starter: one press takes off, auto-fires the flip `ACRO_START_SETTLE_S` (1 s) into
+  free hover, then keeps hovering out the flight. The HUD shows a **flip rot left**
+  (`rotation_remaining` 1→0) chip while flipping. The real-drone flip is hardware-gated — the fake
+  bridge exercises it end-to-end.
 - The **telemetry HUD** shows tilt°, vz-estimate, thrust, throttle µs, link age, battery V, RPM, with
   a rolling **tilt/vz trend**. **Flight params** (mode: ground-takeoff / hand-launch / none; seconds;
   hz; hover µs) default to the safe CLI values and ride along with **Start**.

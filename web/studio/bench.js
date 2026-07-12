@@ -24,6 +24,7 @@ export function createBench({ mount, panel, toast, getPolicies }) {
 
   let ws = null;
   let connected = false;
+  let lastPhase = "waiting";           // Flip doubles as a starter when pressed while WAITING
   const tiltHist = [];
   const vzHist = [];
 
@@ -67,6 +68,7 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   function onFrame(msg) {
     const st = msg.status || {};
     const phase = msg.phase || "waiting";
+    lastPhase = phase;
     const link = msg.link_state || "down";
     $("b_link").textContent = `link: ${link}`;
     $("b_link").className = "status " + (link === "flying" ? "" : "");
@@ -78,9 +80,11 @@ export function createBench({ mount, panel, toast, getPolicies }) {
 
     // Start is a software clock, permitted ONLY when the radio already reports armed + override and
     // we're still WAITING. Abort is live during any flying phase. Flip is a learned acro maneuver,
-    // permitted only in free HOVER (the backend re-gates it: fresh link + near-level).
-    $("b_start").disabled = !(st.armed && st.override_on && phase === "waiting");
-    if ($("b_flip")) $("b_flip").disabled = phase !== "hover";
+    // permitted in free HOVER (the backend re-gates it: fresh link + near-level) — or while WAITING
+    // under the same gate as Start, where it starts the flight and auto-flips once hover settles.
+    const startable = st.armed && st.override_on && phase === "waiting";
+    $("b_start").disabled = !startable;
+    if ($("b_flip")) $("b_flip").disabled = !(phase === "hover" || startable);
     $("b_abort").disabled = !FLYING.has(phase);
 
     const m = msg.metrics || {};
@@ -154,7 +158,7 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   }
 
   // ---- controls ---------------------------------------------------------------------
-  $("b_start").addEventListener("click", () => {
+  function sendParams() {
     // Level trim (deg), policy's-view obs offset: + pushes right / nose-down-forward, so dial it
     // OPPOSITE the drift (drifts forward -> negative pitch trim). Backend field names are the
     // FlightParams ones (_PARAM_FIELDS).
@@ -163,9 +167,14 @@ export function createBench({ mount, panel, toast, getPolicies }) {
            trim_roll_deg: Number($("b_trim_roll").value) || 0,
            trim_pitch_deg: Number($("b_trim_pitch").value) || 0,
            mode: $("b_mode").value });
-    send({ type: "start" });
+  }
+  $("b_start").addEventListener("click", () => { sendParams(); send({ type: "start" }); });
+  if ($("b_flip")) $("b_flip").addEventListener("click", () => {
+    // Mid-hover: fire the maneuver. While WAITING: this IS the starter — apply the panel knobs
+    // first (like Start), then take off, auto-flip once hover settles, and keep hovering.
+    if (lastPhase === "waiting") sendParams();
+    send({ type: "flip" });
   });
-  if ($("b_flip")) $("b_flip").addEventListener("click", () => send({ type: "flip" }));
   $("b_abort").addEventListener("click", () => send({ type: "abort" }));
   if ($("b_sim")) $("b_sim").addEventListener("change", () => toggleSim($("b_sim").checked));
 

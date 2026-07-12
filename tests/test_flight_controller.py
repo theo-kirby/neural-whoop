@@ -354,3 +354,85 @@ def test_flip_not_triggered_without_acro_policy(weights):
         clk.t += 0.02
         ctrl.step()
         assert not ctrl.flipping and ctrl.phase is not Phase.FLIP
+
+
+def test_flip_as_starter_gating(weights, acro_weights):
+    """request_flip while WAITING is a starter: rejected under the exact request_start gate (ARMED +
+    override on the radio; no acro policy = inert), accepted = the flight clock starts + a flip is
+    armed pending free hover."""
+    fake = FakeMsp()
+    clk = Clock()
+    # No acro policy: request_flip must NOT double as a bare Start.
+    pol, ctrl = _make(weights, fake, clk, takeoff=False, launch=False, seconds=5.0)
+    fake.set_armed(True)
+    fake.set_override(True)
+    for _ in range(6):
+        clk.t += 0.02
+        ctrl.step()
+    assert ctrl.request_flip() is False and ctrl.t_start is None
+
+    # With an acro policy but not armed: rejected, still WAITING.
+    fake2 = FakeMsp()
+    clk2 = Clock()
+    ctrl2 = FlightController(fake2, Policy(str(weights)), FlightParams(seconds=5.0),
+                             acro_policy=Policy(str(acro_weights)), start_mode="software",
+                             clock=clk2, sleep=lambda _s: None)
+    ctrl2.setup()
+    fake2.set_override(True)                  # override on but NOT armed
+    for _ in range(6):
+        clk2.t += 0.02
+        ctrl2.step()
+    assert ctrl2.request_flip() is False and ctrl2.t_start is None
+
+    # Armed + override: accepted -> flight clock set + the flip pending.
+    fake2.set_armed(True)
+    for _ in range(6):
+        clk2.t += 0.02
+        ctrl2.step()
+    assert ctrl2.request_flip() is True
+    assert ctrl2.t_start is not None and ctrl2.flip_pending
+
+
+def test_flip_as_starter_takes_off_flips_then_keeps_hovering(weights, acro_weights):
+    """One press from WAITING: the flight starts, the flip auto-fires only after ACRO_START_SETTLE_S
+    of free hover, and the flight returns to HOVER and keeps flying (no early land/abort)."""
+    from neural_whoop.pilot.config import ACRO_START_SETTLE_S
+
+    fake = FakeMsp()
+    clk = Clock()
+    params = FlightParams(takeoff=False, launch=False, seconds=8.0, ramp_s=0.2,
+                          acro_axis="roll", acro_flip_max_s=1.5)   # no flip_at_s: pending only
+    ctrl = FlightController(fake, Policy(str(weights)), params,
+                            acro_policy=Policy(str(acro_weights)), start_mode="software",
+                            clock=clk, sleep=lambda _s: None)
+    ctrl.setup()
+    fake.set_armed(True)
+    fake.set_override(True)
+    for _ in range(6):
+        clk.t += 0.02
+        ctrl.step()
+    assert ctrl.request_flip() is True        # the one press
+
+    # Free hover but before the settle window: pending, NOT flipping yet.
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    assert ctrl.flip_pending and not ctrl.flipping
+
+    fake.gyro_raw = (_ROLL_RATE_RAW, 0, 0)     # spin about roll while the acro policy "flies"
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.FLIP, max_steps=100)
+    assert ctrl._t_air >= ACRO_START_SETTLE_S  # fired only once free hover settled
+    assert not ctrl.flip_pending
+
+    # Ride the flip out (inverted mid-maneuver, re-level near the end) -> back to HOVER, still flying.
+    for _ in range(200):
+        if not ctrl.flipping:
+            break
+        fake.roll_deg = 120.0 if ctrl.rot_rem > 0.05 else 0.0
+        clk.t += 0.02
+        ctrl.step()
+    assert not ctrl.flipping and ctrl.phase is Phase.HOVER
+    assert not ctrl.done and ctrl.abort_reason is None
+    # It keeps hovering — a second flip is NOT re-armed by the starter press.
+    for _ in range(40):
+        clk.t += 0.02
+        ctrl.step()
+        assert not ctrl.flipping and ctrl.phase is Phase.HOVER

@@ -349,7 +349,10 @@ each trained GREEN — flip_success_rate 0.845 / 0.840, crash 0.000).
   mismatch feeds the policy an obs it never trained on. It is yaw-invariant, so deploy passes yaw=0.
 - **FLIP window (`pilot/controller.py`):** a bounded maneuver inserted at HOVER. `request_flip()`
   (Bench **Flip** button / `fly --flip-at` / auto `flip_at_s`) is gated to HOVER + fresh link +
-  near-level; a maneuver clock integrates the axis gyro toward Φ=2π·n (`rotation_remaining` 1→0);
+  near-level; pressed while still WAITING it doubles as the software Start (same ARMED+override
+  gate), arming a pending flip that auto-fires `ACRO_START_SETTLE_S` into free hover — one button
+  for take-off → flip → keep hovering.
+  A maneuver clock integrates the axis gyro toward Φ=2π·n (`rotation_remaining` 1→0);
   the acro policy drives the rates; FLIP exits → HOVER on rotation-complete + re-level or the hard
   `acro_flip_max_s` backstop, then the hover policy re-stabilizes before the normal LAND.
 - **Safety-critical:** the crash detector (a real flip legitimately passes |roll| > 110°), the RPM

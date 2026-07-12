@@ -39,6 +39,7 @@ from .config import (
     ACRO_FLIP_MAX_S,
     ACRO_N_ROTATIONS,
     ACRO_SETTLE_TILT_DEG,
+    ACRO_START_SETTLE_S,
     BOX_ARM,
     BOX_MSP_OVERRIDE,
     LIFT_LAG_US,
@@ -215,6 +216,8 @@ class FlightController:
         self.rot_rem = 1.0            # rotation_remaining ∈ [1->0], the acro policy's phase signal
         self.flipping = False
         self.flip_triggered = False   # a flip was requested this flight (gates the auto-trigger)
+        self.flip_pending = False     # flip-as-starter: fire once free HOVER settles (request_flip
+        #                               while WAITING = software Start + this pending maneuver)
 
         # Frame-display state (kept between ticks so idle/stale frames still carry last-known).
         self.roll = self.pitch = self.p = self.q = self.r = 0.0
@@ -308,9 +311,21 @@ class FlightController:
         HOVER (not still climbing out, not already flipping/landing), the link must be fresh, and the
         drone near-level (so the flip starts from a known attitude). The radio still owns kill; this
         only opens a bounded window (``acro_flip_max_s``) in which the acro policy drives the rates.
+
+        **Flip-as-starter:** while still WAITING, this doubles as a software Start (same ARMED +
+        override gate as :meth:`request_start`) that additionally arms a *pending* flip — the whole
+        take-off flow runs as usual, the flip auto-fires ``ACRO_START_SETTLE_S`` into free HOVER
+        (re-checking every maneuver gate), and the flight then simply keeps hovering.
         """
-        if self.acro_pol is None or self.flipping or self._done or self.t_start is None:
+        if self.acro_pol is None or self.flipping or self._done:
             return False
+        if self.t_start is None:
+            if not self.request_start():
+                return False
+            self.flip_pending = True
+            self._log(f"FLIP armed with the start -> auto-fires {ACRO_START_SETTLE_S:.1f}s "
+                      "into free hover")
+            return True
         if self._derive_phase() is not Phase.HOVER:
             return False
         if not (math.isfinite(self.age) and self.age <= self.params.max_obs_age):
@@ -322,6 +337,7 @@ class FlightController:
         self.rot_rem = 1.0
         self.flipping = True
         self.flip_triggered = True
+        self.flip_pending = False
         self._log(f"\nFLIP requested (axis={self.params.acro_axis}, "
                   f"Φ={self.phi_target:.2f} rad) -> acro policy owns the maneuver")
         return True
@@ -504,11 +520,14 @@ class FlightController:
                 if self.rpm_hover:
                     self.vz = rpm_climb_rate(rpm_now, self.rpm_hover)
         self.t_last_fresh = now
-        # Auto-trigger the FLIP one time, flip_at_s into free flight (headless/CLI/fake-bridge; the
-        # UI/CLI Flip button calls request_flip directly). request_flip re-checks every gate.
-        if (self.acro_pol is not None and p.flip_at_s is not None and not self.flip_triggered
-                and not self.flipping and self._derive_phase() is Phase.HOVER
-                and t_air >= p.flip_at_s):
+        # Auto-trigger the FLIP one time, flip_at_s into free flight (headless/CLI/fake-bridge) or
+        # ACRO_START_SETTLE_S in when it was armed with the start (flip-as-starter); the in-HOVER
+        # Flip button calls request_flip directly. request_flip re-checks every gate, so a
+        # not-yet-level tick just retries on the next one.
+        flip_due = ((p.flip_at_s is not None and t_air >= p.flip_at_s)
+                    or (self.flip_pending and t_air >= ACRO_START_SETTLE_S))
+        if (self.acro_pol is not None and flip_due and not self.flip_triggered
+                and not self.flipping and self._derive_phase() is Phase.HOVER):
             self.request_flip()
         # Level reference + manual trim, policy's view only (estimator uses raw).
         o = [o[0] - self.lvl[0] - self.trim_roll_rad,
