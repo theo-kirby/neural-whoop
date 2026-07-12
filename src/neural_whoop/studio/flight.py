@@ -42,6 +42,7 @@ from neural_whoop.bench.msp import (
     encode_msp_v1,
 )
 from neural_whoop.pilot import FlightController, FlightParams, FlightSetupError, Policy
+from neural_whoop.pilot.config import BF_MAX_RATE_RP, GYRO_RAW_TO_DPS
 
 #: The 24-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
 #: here so this module — like the pilot engine — imports without numpy).
@@ -103,6 +104,7 @@ class FlightManager:
     """
 
     def __init__(self, bridge: str, *, weights: str | Path,
+                 acro_weights: str | Path | None = None,
                  params: FlightParams | None = None,
                  runs_dir: str | Path = "runs/pilot",
                  client_factory=None, controller_factory=FlightController,
@@ -111,6 +113,9 @@ class FlightManager:
         self._host, self._port = _parse_bridge(bridge)
         self._policy = Policy(str(weights))
         self._weights = str(weights)
+        # Optional acro-flip policy: enables the {type:"flip"} command (a bounded FLIP window at
+        # HOVER). None = the Flip button is inert (the base take-off/land/hover flow is unchanged).
+        self._acro_policy = Policy(str(acro_weights)) if acro_weights else None
         self._params = params or FlightParams(takeoff=True)
         self._runs_dir = Path(runs_dir)
         self._use_fake = str(bridge).lower() == "fake" or _truthy(os.environ.get("NW_FLIGHT_FAKE"))
@@ -237,7 +242,7 @@ class FlightManager:
     def _new_controller(self, fc) -> FlightController:
         self._logbuf = []
         return self._controller_factory(
-            fc, self._policy, self._params, start_mode="software",
+            fc, self._policy, self._params, acro_policy=self._acro_policy, start_mode="software",
             on_log=self._log_row, log=self._logbuf.append)
 
     def _apply_commands(self, fc, ctrl: FlightController) -> FlightController:
@@ -249,6 +254,8 @@ class FlightManager:
             t = msg.get("type")
             if t == "start":
                 ctrl.request_start()
+            elif t == "flip":
+                ctrl.request_flip()   # gated to HOVER + fresh link + near-level (like request_start)
             elif t == "abort":
                 ctrl.abort("user")
             elif t == "params" and ctrl.t_start is None and not ctrl.done:
@@ -349,10 +356,17 @@ class FakeFlightBridge(_MspEndpoint):
         self._sock = _DummySock()
         self._out = bytearray()
         self._thr = 1000
+        self._gyro = (0, 0, 0)     # echoed from the commanded roll/pitch rate (crude flip model)
+        self._roll = 0.0           # attitude integrated from the commanded rate (deg): a real flip
+        self._pitch = 0.0
         self._i = 0
         self._vbat = 4.05
         self._armed = armed
         self._override = override
+
+    @staticmethod
+    def _wrap180(a: float) -> float:
+        return (a + 180.0) % 360.0 - 180.0
 
     def set_armed(self, on: bool) -> None:
         self._armed = on
@@ -372,12 +386,15 @@ class FakeFlightBridge(_MspEndpoint):
             self._resp(cmd, bytes([0, 0, 32, 48, 50, 2, 32, 48]))  # ARM aux1, OVERRIDE aux3
         elif cmd == MSP_ATTITUDE:
             self._i += 1
-            roll = 2.5 * math.sin(self._i * 0.05)
-            pitch = 2.0 * math.cos(self._i * 0.037)
+            # Integrated attitude (a commanded flip really rolls the airframe over) + a gentle idle
+            # wobble so a plain hover still looks alive.
+            roll = self._wrap180(self._roll + 2.5 * math.sin(self._i * 0.05))
+            pitch = self._wrap180(self._pitch + 2.0 * math.cos(self._i * 0.037))
             self._resp(cmd, struct.pack("<hhh", int(roll * 10), int(pitch * 10), 0))
         elif cmd == MSP_RAW_IMU:
             az = 2048 + max(0, (self._thr - 1300)) * 3   # acc-z rises with throttle -> liftoff
-            self._resp(cmd, struct.pack("<9h", 0, 0, int(az), 0, 0, 0, 0, 0, 0))
+            gx, gy, _gz = self._gyro                       # echoed commanded rate -> the flip spins
+            self._resp(cmd, struct.pack("<9h", 0, 0, int(az), int(gx), int(gy), 0, 0, 0, 0))
         elif cmd == MSP_ANALOG:
             self._vbat = max(3.4, self._vbat - 0.0002)   # gentle sag
             self._resp(cmd, struct.pack("<BHHh", int(self._vbat * 10), 0, 0, 0)
@@ -396,6 +413,16 @@ class FakeFlightBridge(_MspEndpoint):
             ch = decode_u16s(raw[5:5 + raw[3]])
             if len(ch) >= 3:
                 self._thr = ch[2]
+            if len(ch) >= 2:
+                # Echo the commanded roll/pitch rate (AETR us -> deg/s) into both the gyro (raw LSB,
+                # so obs_from_msp_acro reads it back) and an integrated attitude at the ~50 Hz tick,
+                # so a FLIP actually rolls the airframe through Φ and the policy re-levels out of it.
+                dps_per_us = BF_MAX_RATE_RP * 180.0 / math.pi / 500.0   # us above 1500 -> deg/s
+                roll_dps = (ch[0] - 1500) * dps_per_us
+                pitch_dps = (ch[1] - 1500) * dps_per_us
+                self._gyro = (int(roll_dps / GYRO_RAW_TO_DPS), int(pitch_dps / GYRO_RAW_TO_DPS), 0)
+                self._roll = self._wrap180(self._roll + roll_dps * 0.02)   # fixed 50 Hz control tick
+                self._pitch = self._wrap180(self._pitch + pitch_dps * 0.02)
 
     def _read(self) -> bytes:
         d = bytes(self._out)

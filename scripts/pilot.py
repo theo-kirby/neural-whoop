@@ -85,7 +85,9 @@ from neural_whoop.pilot import (  # noqa: E402,F401
     Telemetry,
     action_to_us,
     check_policy_family,
+    check_policy_family_acro,
     obs_from_msp,
+    obs_from_msp_acro,
     rpm_climb_rate,
     rpm_damper_trim,
     stack_frames,
@@ -236,7 +238,8 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 
 def cmd_fly(args: argparse.Namespace) -> int:
-    if not args.ack_props_on:
+    fake = getattr(args, "fake", False)
+    if not args.ack_props_on and not fake:
         sys.exit("refusing: fly streams live flight commands. Re-run with --ack-props-on once\n"
                  "the drone is tethered, the area is clear, and YOUR thumb is on the override\n"
                  "switch + arm/kill on the Pocket.")
@@ -244,6 +247,13 @@ def cmd_fly(args: argparse.Namespace) -> int:
         sys.exit("pick one of --takeoff / --launch")
     pol = Policy(args.weights)
     check_policy_family(pol)
+    acro_pol = None
+    if args.acro_weights:
+        acro_pol = Policy(args.acro_weights)
+        check_policy_family_acro(acro_pol)
+        print(f"acro policy loaded ({args.acro_weights}): FLIP window enabled "
+              f"(axis={args.axis}, {args.n_rotations}x"
+              + (f", auto @ {args.flip_at}s" if args.flip_at is not None else ", manual") + ")")
     log_path = Path(args.log or f"runs/pilot/flight_{int(time.time())}.csv")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     # Never silently clobber a prior flight: if --log names an existing file, wedge a timestamp
@@ -264,19 +274,27 @@ def cmd_fly(args: argparse.Namespace) -> int:
         vz_gain=args.vz_gain, trim_roll_deg=args.trim_roll_deg, trim_pitch_deg=args.trim_pitch_deg,
         aux=args.aux, hover_us=args.hover_us, vbat_ref=args.vbat_ref, trim_thrust=args.trim_thrust,
         min_us=args.min_us, max_us=args.max_us,
+        flip_at_s=args.flip_at, acro_axis=args.axis, acro_n_rotations=args.n_rotations,
     )
     period = 1.0 / args.hz
-    with MspUdpClient(args.udp_host, args.udp_port) as fc:
+    # The fake in-process bridge (NW_FLIGHT_FAKE=1 / --udp fake) self-reports ARMED + OVERRIDE, so
+    # the physical override edge never fires: use software start and auto-accept it each tick.
+    if fake:
+        from neural_whoop.studio.flight import FakeFlightBridge
+        fc, start_mode = FakeFlightBridge(), "software"
+    else:
+        fc, start_mode = MspUdpClient(args.udp_host, args.udp_port), "switch"
+    try:
         # The override edge auto-starts the flight clock (start_mode="switch"); the human log lines
         # and the 24-col CSV rows route through the injected callbacks so console + log are unchanged.
-        ctrl = FlightController(fc, pol, params, start_mode="switch",
+        ctrl = FlightController(fc, pol, params, acro_policy=acro_pol, start_mode=start_mode,
                                 on_log=writer.writerow, log=print)
         try:
             ctrl.setup()
         except FlightSetupError as e:
             fout.close()
             sys.exit(str(e))
-        print("Ctrl+C = instant release.")
+        print("Ctrl+C = instant release." + (" [FAKE BRIDGE — no hardware]" if fake else ""))
         if args.trim_roll_deg or args.trim_pitch_deg:
             print(f"manual trim: roll {args.trim_roll_deg:+.1f} / pitch {args.trim_pitch_deg:+.1f} deg "
                   "(+ = right / nose-down push)")
@@ -297,6 +315,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
         try:
             while not stop["flag"] and not ctrl.done:
                 now = time.monotonic()
+                if fake and ctrl.t_start is None:
+                    ctrl.request_start()   # fake bridge is always armed+override: software auto-start
                 ctrl.step(now)
                 time.sleep(max(0.0, period - (time.monotonic() - now)))
         finally:
@@ -305,6 +325,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
               f"worst obs age {ctrl.worst_age * 1e3:.0f} ms. Log: {log_path}"
               + (f"\nlearned hover anchor this pack: {ctrl.hover_learned} us (breakaway-measured)"
                  if ctrl.hover_learned else ""))
+    finally:
+        fc.close()
     return 0
 
 
@@ -358,14 +380,27 @@ def main() -> int:
     fly.add_argument("--aux", type=int, default=None, metavar="N",
                      help="override-switch aux channel number (1-4); normally auto-detected "
                           "from the FC's MSP OVERRIDE mode range")
+    fly.add_argument("--acro-weights", default=None, metavar="PATH",
+                     help="deploy weights for a 7-dim acro-flip policy: enables a bounded FLIP "
+                          "window at HOVER (the pilot still owns takeoff/land; the acro policy "
+                          "owns the flip). System take-off -> flip -> land, flown blind.")
+    fly.add_argument("--flip-at", type=float, default=None, metavar="SEC",
+                     help="auto-trigger the FLIP this many seconds into free flight (needs "
+                          "--acro-weights); omit to trigger only via the dashboard Flip button")
+    fly.add_argument("--axis", choices=["roll", "pitch"], default="roll",
+                     help="flip axis (matches the acro policy's trained axis)")
+    fly.add_argument("--n-rotations", type=float, default=1.0,
+                     help="flip rotations Φ = 2π·n (1 = a single barrel roll / loop)")
     fly.add_argument("--log", default=None)
     fly.add_argument("--ack-props-on", action="store_true")
     args = ap.parse_args()
 
-    if not args.udp:
+    args.fake = str(os.environ.get("NW_FLIGHT_FAKE", "")).lower() in ("1", "true", "yes", "on") \
+        or (args.udp or "").lower() == "fake"
+    if not args.udp and not args.fake:
         ap.error("no bridge address: pass --udp HOST[:PORT] or set $NW_BRIDGE "
-                 "(e.g. `export NW_BRIDGE=<ip>`)")
-    host, _, port = args.udp.partition(":")
+                 "(e.g. `export NW_BRIDGE=<ip>`), or NW_FLIGHT_FAKE=1 for the in-process bridge")
+    host, _, port = (args.udp or "fake").partition(":")
     args.udp_host, args.udp_port = host, int(port or 14550)
     return {"selftest": cmd_selftest, "check": cmd_check, "probe": cmd_probe,
             "fly": cmd_fly}[args.cmd](args)

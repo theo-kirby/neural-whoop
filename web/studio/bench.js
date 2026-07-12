@@ -14,7 +14,7 @@ import { createScene } from "./scene.js";
 import { makeDrone } from "./drone-model.js";
 
 const TREND = 180;                     // rolling trend length (frames) for the tilt/vz mini-chart
-const FLYING = new Set(["countdown", "seek", "rise", "hover", "land"]);
+const FLYING = new Set(["countdown", "seek", "rise", "hover", "flip", "land"]);
 const SIM_OFFSET = 2.0;                // the parallel-sim drone sits this far +x of the real one
 const SEED_HINTS = ["hover_blind_air65_d50var_s8", "hover_blind", "hover"];  // parallel-sim policy
 
@@ -77,8 +77,10 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     $("b_phase").className = "v cmd bench-phase-" + phase;
 
     // Start is a software clock, permitted ONLY when the radio already reports armed + override and
-    // we're still WAITING. Abort is live during any flying phase.
+    // we're still WAITING. Abort is live during any flying phase. Flip is a learned acro maneuver,
+    // permitted only in free HOVER (the backend re-gates it: fresh link + near-level).
     $("b_start").disabled = !(st.armed && st.override_on && phase === "waiting");
+    if ($("b_flip")) $("b_flip").disabled = phase !== "hover";
     $("b_abort").disabled = !FLYING.has(phase);
 
     const m = msg.metrics || {};
@@ -87,6 +89,7 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     $("b_hud").innerHTML = [
       row("phase", phase),
       row("t (air)", fmt(msg.t, 2, " s")),
+      ...(m.flipping ? [row("flip rot left", fmt(m.rotation_remaining, 2))] : []),
       row("tilt", fmt(m.tilt_deg, 1, "°")),
       row("vz est", fmt(m.vz_est, 2, " m/s")),
       row("thrust", fmt(m.thrust_norm, 2)),
@@ -162,6 +165,7 @@ export function createBench({ mount, panel, toast, getPolicies }) {
            mode: $("b_mode").value });
     send({ type: "start" });
   });
+  if ($("b_flip")) $("b_flip").addEventListener("click", () => send({ type: "flip" }));
   $("b_abort").addEventListener("click", () => send({ type: "abort" }));
   if ($("b_sim")) $("b_sim").addEventListener("change", () => toggleSim($("b_sim").checked));
 

@@ -79,6 +79,8 @@ class ExportRequest(BaseModel):
 
 #: The deployed hover policy the Bench dashboard flies by default.
 _DEFAULT_FLIGHT_WEIGHTS = "runs/hover_blind_air65_d50var_s8/policy_weights.json"
+#: The acro-flip policy the Bench Flip button drives (obs-7, IMU-only) by default.
+_DEFAULT_FLIGHT_ACRO_WEIGHTS = "runs/acro_flip/policy_weights.json"
 
 
 def create_app(
@@ -90,6 +92,7 @@ def create_app(
     device: str = "cuda",
     bridge: str | None = None,
     flight_weights: str = _DEFAULT_FLIGHT_WEIGHTS,
+    flight_acro_weights: str | None = _DEFAULT_FLIGHT_ACRO_WEIGHTS,
     flight_manager=None,
 ) -> FastAPI:
     """Build the Studio FastAPI app. Dirs default to the repo layout; override for tests.
@@ -332,9 +335,11 @@ def create_app(
             run_flight_report(csv_path, released, app.state.flight, runs_root=runs_dir)
 
         weights_abs = _resolve_under(root, flight_weights)
+        acro_abs = _resolve_under(root, flight_acro_weights) if flight_acro_weights else None
         mgr = FlightManager(
-            bridge or "fake", weights=weights_abs, runs_dir=runs_dir / "pilot",
-            on_flight_done=_on_done,
+            bridge or "fake", weights=weights_abs,
+            acro_weights=str(acro_abs) if acro_abs and acro_abs.is_file() else None,
+            runs_dir=runs_dir / "pilot", on_flight_done=_on_done,
         )
         mgr.start()
         app.state.flight = mgr
@@ -366,7 +371,7 @@ def create_app(
             try:
                 while True:
                     msg = await ws.receive_json()
-                    if msg.get("type") in ("start", "abort", "params"):
+                    if msg.get("type") in ("start", "abort", "params", "flip"):
                         mgr.command(msg)
             except (WebSocketDisconnect, ValueError, RuntimeError):
                 pass
@@ -410,6 +415,7 @@ def app_factory() -> FastAPI:
         device=os.environ.get("NW_STUDIO_DEVICE", "cuda"),
         bridge=os.environ.get("NW_BRIDGE") or None,
         flight_weights=os.environ.get("NW_FLIGHT_WEIGHTS", _DEFAULT_FLIGHT_WEIGHTS),
+        flight_acro_weights=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS", _DEFAULT_FLIGHT_ACRO_WEIGHTS),
     )
 
 

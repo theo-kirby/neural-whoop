@@ -28,6 +28,10 @@ def main() -> int:
     p.add_argument("--flight-weights", default=os.environ.get("NW_FLIGHT_WEIGHTS",
                    "runs/hover_blind_air65_d50var_s8/policy_weights.json"),
                    help="Deploy policy_weights.json the Bench dashboard flies.")
+    p.add_argument("--flight-acro-weights", default=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS",
+                   "runs/acro_flip/policy_weights.json"),
+                   help="Acro-flip policy_weights.json the Bench Flip button drives (obs-7). "
+                        "Missing file -> the Flip button is inert.")
     p.add_argument("--reload", action="store_true", help="Auto-reload on Python edits under src/ (dev).")
     args = p.parse_args()
 
@@ -44,6 +48,7 @@ def main() -> int:
         if args.bridge:
             os.environ["NW_BRIDGE"] = args.bridge
         os.environ["NW_FLIGHT_WEIGHTS"] = args.flight_weights
+        os.environ["NW_FLIGHT_ACRO_WEIGHTS"] = args.flight_acro_weights
         src_dir = Path(__file__).resolve().parents[1] / "src"
         uvicorn.run(
             "neural_whoop.studio.server:app_factory", factory=True,
@@ -53,7 +58,8 @@ def main() -> int:
         from neural_whoop.studio.server import create_app
 
         uvicorn.run(create_app(device=args.device, bridge=args.bridge or None,
-                               flight_weights=args.flight_weights),
+                               flight_weights=args.flight_weights,
+                               flight_acro_weights=args.flight_acro_weights),
                     host=args.host, port=args.port)
     return 0
 

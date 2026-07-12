@@ -32,6 +32,17 @@ def _synth_weights(tmp_path):
     return p
 
 
+def _synth_acro_weights(tmp_path):
+    """A tiny deterministic 7->4 linear acro policy JSON (obs-7 [gravity_body(3),p,q,r,rot_rem])."""
+    W = [[0.05] * 7, [0.05] * 7, [0.05] * 7, [0.05] * 7]
+    data = {"meta": {"obs_dim": 7, "act_dim": 4, "base_obs_dim": 7, "obs_stack": 1,
+                     "log_std": [-1.0, -1.0, -1.0, -1.0]},
+            "layers": [{"W": W, "b": [0.0, 0.0, 0.0, 0.0]}]}
+    p = tmp_path / "acro.json"
+    p.write_text(json.dumps(data))
+    return p
+
+
 def _app_with(tmp_path, mgr):
     return create_app(repo_root=tmp_path, runs_dir=tmp_path / "runs",
                       courses_dir=tmp_path / "courses", device="cpu", flight_manager=mgr)
@@ -131,6 +142,35 @@ def test_params_then_start_same_batch_flies(tmp_path):
             flying = _read_until(ws, lambda m: m.get("phase") not in (None, "waiting"))
             assert flying["phase"] in ("countdown", "seek", "rise", "hover", "land")
     assert mgr._params.trim_pitch_deg == -2.5 and mgr._params.trim_roll_deg == 0.5
+    assert not ROLLOUT_LOCK.locked()
+
+
+def test_flip_command_only_from_hover(tmp_path):
+    """{type:"flip"} is inert until the flight is in free HOVER, then opens the FLIP window."""
+    fake = FakeFlightBridge(armed=True, override=True)
+    mgr = FlightManager(
+        "fake", weights=_synth_weights(tmp_path), acro_weights=_synth_acro_weights(tmp_path),
+        params=FlightParams(launch=True, hold_seconds=0.1, seconds=8.0, ramp_s=0.1,
+                            acro_flip_max_s=1.0),
+        runs_dir=tmp_path / "pilot", client_factory=lambda *_a, **_k: fake)
+    app = _app_with(tmp_path, mgr)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/flight") as ws:
+            # A flip while still WAITING (pre-start) has no effect.
+            _read_until(ws, lambda m: m.get("status", {}).get("armed")
+                        and m["status"]["override_on"])
+            ws.send_json({"type": "flip"})
+            still = _read_until(ws, lambda m: m.get("seq", 0) > 0, max_reads=8)
+            assert still["phase"] == "waiting"
+
+            # Start, reach HOVER, then flip -> the FLIP phase appears.
+            ws.send_json({"type": "start"})
+            _read_until(ws, lambda m: m.get("phase") == "hover")
+            ws.send_json({"type": "flip"})
+            flip = _read_until(ws, lambda m: m.get("phase") == "flip", max_reads=200)
+            assert flip is not None and flip["phase"] == "flip"
+            assert flip["metrics"]["flipping"] is True
+            assert flip["metrics"]["rotation_remaining"] is not None
     assert not ROLLOUT_LOCK.locked()
 
 
