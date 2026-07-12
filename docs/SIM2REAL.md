@@ -335,6 +335,33 @@ path imports **zero torch/numpy** and is not gated by the GPU sim's `ROLLOUT_LOC
 **fake bridge** (`--bridge fake` / `NW_FLIGHT_FAKE=1`) runs the whole dashboard with no hardware, and
 backs the headless tests (`tests/test_flight_controller.py`, `tests/test_flight_ws.py`).
 
+### Blind acro flip — take-off → flip → land (harness, 2026-07-12)
+
+The first *agility* deploy path, flown **blind** (IMU-only — no altitude/position/camera). We chose
+the **system-level** split: the learned policy owns only the *flip*; the pilot's existing
+`3·2·1 → RISE → HOVER → LAND` state machine owns take-off and landing. So "take off, flip, land" =
+pilot(open-loop) + policy(learned flip), for both axes (roll `acro_flip`, pitch `acro_flip_pitch`,
+each trained GREEN — flip_success_rate 0.845 / 0.840, crash 0.000).
+
+- **Deploy obs (`pilot.obs_from_msp_acro`, obs-7):** `[gravity_body(3), p, q, r, rotation_remaining]`.
+  `gravity_body` (`-R[2,:]`) is a pure-stdlib port of the sim's euler→quat→matrix, **byte-parity
+  with `tasks/acro_flip.py` (< 1e-6, `test_pilot_acro_obs.py`)** — the make-or-break gate, since a
+  mismatch feeds the policy an obs it never trained on. It is yaw-invariant, so deploy passes yaw=0.
+- **FLIP window (`pilot/controller.py`):** a bounded maneuver inserted at HOVER. `request_flip()`
+  (Bench **Flip** button / `fly --flip-at` / auto `flip_at_s`) is gated to HOVER + fresh link +
+  near-level; a maneuver clock integrates the axis gyro toward Φ=2π·n (`rotation_remaining` 1→0);
+  the acro policy drives the rates; FLIP exits → HOVER on rotation-complete + re-level or the hard
+  `acro_flip_max_s` backstop, then the hover policy re-stabilizes before the normal LAND.
+- **Safety-critical:** the crash detector (a real flip legitimately passes |roll| > 110°), the RPM
+  governor, and the climb damper are **suspended only inside the window** and re-arm the instant it
+  closes — the bounded window + re-level exit guarantee a *failed* flip that tumbles still cuts.
+- **Verified:** sim training + fake-bridge system integration
+  (`NW_FLIGHT_FAKE=1 pilot.py fly --takeoff --acro-weights … --flip-at 3`) walks
+  WAITING→…→HOVER→**FLIP**→HOVER→LAND→RELEASED with no crash-abort through the inversion. The
+  **real-drone flip is NOT validated here (hardware-gated).** Blind-flip altitude is open-loop
+  through the inversion (vz freezes > 25° tilt); the flip is sub-second so drift is bounded, but a
+  real flight must keep generous ceiling headroom.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 

@@ -17,8 +17,11 @@ don't are honest research bets, not blockers.
   **But** the policy is architecturally blind to translation, so hover is non-stationary — it marches
   (consistent +2.5° pitch trim bias) and shakes (a ~2.5 Hz delay-induced limit cycle) with
   latency-tail excursions. `hover_blind_v2` (added vz + noise DR) is RED — do not deploy.
-- **Acro (`acro_flip`)** — task + configs coded (barrel-roll + pitch), obs 7-dim
-  `[gravity_body, p, q, r, rotation_remaining]`. **Never trained**; no pilot flight path exists.
+- **Acro (`acro_flip`)** — obs 7-dim `[gravity_body, p, q, r, rotation_remaining]`, IMU-only/blind.
+  **Trained GREEN on both axes** (roll flip_success_rate 0.845, pitch 0.840, crash 0.000 — a clean
+  axis ablation). **Pilot harness wired**: a bounded FLIP window at HOVER (the pilot owns
+  takeoff/land, the acro policy owns the flip), verified end-to-end on the fake bridge. Real-drone
+  flip is still hardware-gated (sim + fake-bridge integration only).
 - **Bench dashboard** — 4 tabs shipped (Bench/Player/Live/Editor); Start interlock fixed; auto
   flight-report on landing; parallel CPU-sim twin. Link p99 tail doubled (137-170 ms) vs the CLI —
   an open confound.
@@ -46,9 +49,10 @@ don't are honest research bets, not blockers.
    *SOTA:* SimpleFlight / "What Matters in Zero-Shot Sim-to-Real" (2024) names action-smoothness as
    its anti-oscillation lever; Delay-Aware MDP (action-augmentation restores Markovness).
 
-3. **Train `acro_flip` on the 5090.** It's coded and waiting. Blind is *sufficient* for a single
-   attitude maneuver (Deep Drone Acrobatics ablation: IMU carries the maneuver, vision only fixes
-   inter-maneuver drift; Crazyflie-Brushless double backflip in 1.8 m). First real agility verdict.
+3. ~~**Train `acro_flip` on the 5090.**~~ **DONE** — roll + pitch both GREEN (0.845 / 0.840
+   flip_success_rate, crash 0.000). Blind was *sufficient* for the single attitude maneuver (Deep
+   Drone Acrobatics ablation: IMU carries the maneuver, vision only fixes inter-maneuver drift).
+   Next agility verdict is the *real-drone* flip (hardware-gated).
 
 4. **Fiducial mocap rig (Mac-only, the measurement backbone).** One fixed webcam + a 6-8 cm
    ArUco/AprilTag on top of the whoop → ground-truth XY at ~0.5-2 cm, 30 fps. Retires the
@@ -63,8 +67,11 @@ don't are honest research bets, not blockers.
    firmware, dashboard stays the single arbiter/kill-switch. (Not the ESP-side path — see declined.)
 6. **Real Air65 II chassis mesh in Studio.** Replace the procedural box glyph with the actual
    airframe. Self-contained tooling-viz win; needs a GLTF/STL of the Air65 II.
-7. **Pilot acro harness.** `obs_from_msp_acro` + a maneuver trigger + relaxed family check — pairs
-   with #3 to actually fly a flip on the bench.
+7. ~~**Pilot acro harness.**~~ **DONE** — `obs_from_msp_acro` (sim-parity gravity_body) +
+   `check_policy_family_acro` + a FLIP phase/maneuver-clock in `pilot/controller.py` (crash detector
+   + RPM governor + climb damper all suspended only inside the bounded window). Triggered by
+   `request_flip()` (Bench Flip button / `fly --flip-at`), gated to HOVER + fresh link + near-level.
+   System take-off->flip->land flies blind on the fake bridge; real-drone flip stays hardware-gated.
 
 ### Tier 3 — hardware-gated / bigger research bets
 

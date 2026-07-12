@@ -51,7 +51,8 @@ uv run python scripts/serve.py         # -> http://127.0.0.1:8000
 Flags: `--host`, `--port`, `--device` (`cuda` default; `cpu` works for small rollouts), `--reload`,
 `--bridge HOST[:PORT]` (the XIAO bridge for the **Bench** tab; default `$NW_BRIDGE`; pass `fake` or set
 `NW_FLIGHT_FAKE=1` to run the self-driving fake bridge with **no hardware**), `--flight-weights` (the
-deploy `policy_weights.json` the Bench dashboard flies).
+deploy `policy_weights.json` the Bench dashboard flies), `--flight-acro-weights` (the obs-7 acro
+policy the **Flip** button drives; default `runs/acro_flip`; a missing file leaves Flip inert).
 
 Open the URL, choose:
 - **policy** — any `runs/*/ckpt_final.pt` (labelled with its task + best lap if an `eval.json` is
@@ -90,7 +91,13 @@ Open the Bench tab and:
   Software **never** writes arm/aux — stopping the RC stream is the only "stop". Click **Start** to
   run the countdown → liftoff → hover → land on the real drone.
 - **Abort** stops the stream (releases to the radio) at any time. The **phase** chip walks
-  `waiting → countdown → seek/rise → hover → land → released`.
+  `waiting → countdown → seek/rise → hover → [flip →] land → released`.
+- **Flip** (enabled only in **HOVER**, needs an acro policy loaded via `--flight-acro-weights`,
+  default `runs/acro_flip`) fires the learned, **blind** single-axis flip: a bounded FLIP window in
+  which the acro policy owns the rates while the pilot's crash detector / RPM governor / climb damper
+  are suspended, re-arming the instant the window closes. The HUD shows a **flip rot left**
+  (`rotation_remaining` 1→0) chip while flipping. Backend-gated exactly like Start (fresh link +
+  near-level); the real-drone flip is hardware-gated — the fake bridge exercises it end-to-end.
 - The **telemetry HUD** shows tilt°, vz-estimate, thrust, throttle µs, link age, battery V, RPM, with
   a rolling **tilt/vz trend**. **Flight params** (mode: ground-takeoff / hand-launch / none; seconds;
   hz; hover µs) default to the safe CLI values and ride along with **Start**.
