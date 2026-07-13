@@ -64,6 +64,12 @@ class DomainRandomizationConfig:
             across an amplitude band is what forces an amplitude-invariant/adaptive trim. The
             factor deliberately does NOT scale ``obs_bias_channels`` (a DC error is not vibration).
             Requires ``obs_noise_std_channels``.
+        obs_noise_amp_curriculum: If True, the amp band itself rides the DR curriculum scale:
+            at scale ``s`` the per-episode factor is drawn from the band interpolated from
+            ``(1, 1)`` toward ``(lo, hi)`` — ``(1-(1-lo)*s, 1+(hi-1)*s)`` — so early training
+            masters the nominal amplitude before the tail widens (the w-ladder showed nominal
+            leveling and tail robustness compete when both are trained from step 0). Default
+            False = the legacy fixed-spread band from step 0.
         action_latency_steps: Max actuation delay in control steps (per-drone 0..max).
         action_latency_dist: Per-STEP jittered actuation delay — probability weights for packet
             age 0..len-1 (steps), replacing the per-episode-constant model when non-empty. Each
@@ -99,6 +105,7 @@ class DomainRandomizationConfig:
     obs_noise_ar_channels: tuple[float, ...] = ()
     obs_bias_channels: tuple[float, ...] = ()
     obs_noise_amp_range: tuple[float, ...] = ()
+    obs_noise_amp_curriculum: bool = False
     action_latency_steps: int = 1
     action_latency_dist: tuple[float, ...] = ()
     uplink_latency_steps: int = 0
@@ -269,9 +276,14 @@ class DomainRandomizer:
         if self._bias_range is not None:
             self.obs_bias[idx] = (self._rand(n, self._bias_range.numel()) * 2 - 1) * self._bias_range * s
         if self._amp_range is not None:
-            # NOT curriculum-scaled: the overall noise level already ramps via `scale` at read
-            # time; the amplitude *spread* is the thing being trained against and stays fixed.
-            self._noise_amp[idx, 0] = self._rand(n, lo=self._amp_range[0], hi=self._amp_range[1])
+            lo, hi = self._amp_range
+            if c.obs_noise_amp_curriculum:
+                # The amp *spread* rides the curriculum: band interpolates (1,1) -> (lo,hi) with
+                # s, so the nominal amplitude is mastered before the tail widens.
+                lo, hi = 1.0 - (1.0 - lo) * s, 1.0 + (hi - 1.0) * s
+            # else: NOT curriculum-scaled — the overall noise level already ramps via `scale` at
+            # read time; the amplitude spread is the thing being trained against and stays fixed.
+            self._noise_amp[idx, 0] = self._rand(n, lo=lo, hi=hi)
         if self._noise_state is not None:
             # Fresh episodes start the AR(1) noise at its stationary marginal N(0, sigma^2)
             # (not zero), so the read-time variance is exactly sigma^2 from t=0 — a real filtered

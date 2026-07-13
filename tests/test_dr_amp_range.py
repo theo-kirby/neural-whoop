@@ -119,3 +119,27 @@ def test_requires_std_channels():
     cfg = DomainRandomizationConfig(enabled=True, obs_noise_amp_range=(0.5, 1.5))
     with pytest.raises(ValueError, match="requires obs_noise_std_channels"):
         DomainRandomizer(cfg, n_drones=8, act_dim=4, dt=0.02, device="cpu")
+
+
+def test_amp_curriculum_band_widens_with_scale():
+    # At scale s the drawn band is (1-(1-lo)*s, 1+(hi-1)*s): pinned at 1.0 when s=0, the full
+    # configured band at s=1, and strictly inside it in between.
+    for s, (want_lo, want_hi) in [(0.0, (1.0, 1.0)), (0.5, (0.75, 1.5)), (1.0, (0.5, 2.0))]:
+        dr = _dr(obs_noise_amp_range=(0.5, 2.0), obs_noise_amp_curriculum=True)
+        dr.scale = s
+        dr.reset(torch.arange(dr.n))
+        amp = dr._noise_amp[:, 0]
+        assert (amp >= want_lo - 1e-6).all() and (amp <= want_hi + 1e-6).all()
+        if want_hi > want_lo:  # the band is actually used, not collapsed
+            assert amp.max() > want_lo + 0.5 * (want_hi - want_lo) > amp.min()
+        else:
+            assert torch.allclose(amp, torch.ones_like(amp))
+
+
+def test_amp_curriculum_off_ignores_scale():
+    dr = _dr(obs_noise_amp_range=(0.5, 2.0))
+    dr.scale = 0.0
+    dr.reset(torch.arange(dr.n))
+    amp = dr._noise_amp[:, 0]
+    # Legacy behavior: full spread regardless of the curriculum scale.
+    assert amp.min() < 0.75 and amp.max() > 1.5
