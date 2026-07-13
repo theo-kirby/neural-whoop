@@ -377,14 +377,23 @@ direct answer to the vz_est-drift smoking gun above:
   everything else, no FC config touched, and the bridge still boots/proxies with no sensor wired.
   Wiring + `bench.py --udp <ip> tof` bring-up in `firmware/xiao_bridge/README.md`.
 - **Pilot:** `Telemetry.poll(want_tof=True)` every tick; `tof_m` is CSV column 25 (validity-gated:
-  status 0 + age < 200 ms; pre-ToF 24-col logs still load). Telemetry-only — **not in obs, no
-  control coupling yet** (measure before you use).
+  status 0 + age < 200 ms; pre-ToF 24-col logs still load).
 - **Flight report:** `flight_metrics()["height"]` (hover mean/sd, max, airborne coverage) and the
   replay's `pos` z becomes the **measured** height (`meta.pos_z_measured=true`; the ∫vz_est
   vertical-only stub remains the fallback). The ceiling-crash class of flight above would now show
   its true altitude trace.
-- **Next uses (in order):** height ground-truth for vz_est error characterization → a height-hold
-  damper for the blind pilot → obs channel for a height-aware hover retrain → flow×height velocity
+- **Obs channel (2026-07-13, `hover_tof`):** the height-aware hover retrain is implemented — task
+  `hover_tof` (obs-6 `[roll,pitch,p,q,r,height_err]` × stack 8; `configs/hover_tof_air65.yaml` =
+  the flight-proven d50var_s8 + the channel, setpoint band lowered into the sensor's 0.5–1.1 m
+  valid band). Sensor modeled deploy-exactly in-task (~40 Hz ZOH refresh, 1.3 m slant-saturation
+  hold, 45° tilt hold); ranging noise sd 0.02 m / bias ±0.03 m ride the per-channel DR —
+  **datasheet placeholders until the first ToF-equipped flight calibrates them**. Deploy: the pilot
+  feeds `--target-height − tof·cosr·cosp` (flat-floor tilt correction), last-valid-held; the family
+  is keyed off the export meta's `task` (a 6-dim file without it stays the vz family); setup
+  refuses to fly without a live ToF and >1 s in-flight silence aborts (`tof_lost`); the external
+  climb damper turns OFF (the policy owns altitude; RPM governor stays). The exact fed channel is
+  logged as CSV col 26 `h_err`, so `sim_vs_real.py` replays it byte-exactly.
+- **Next uses:** height ground-truth for vz_est error characterization → flow×height velocity
   fusion when the PMW3901 lands (ROADMAP #9).
 
 ### Stage 2 — Closed-loop `hover` / position-hold

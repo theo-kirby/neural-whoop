@@ -85,8 +85,9 @@ don't are honest research bets, not blockers.
    Betaflight quads and adapt in ms; frame-stacks are the weaker form of the same memory. Privileged
    critic + our existing DR seam as the latent (wind/rate-gain/thrust/latency).
 9. **When PMW3901 + VL53L1X arrive.** *(VL53L1X arrived + integrated 2026-07-13 — bridge-answered
-   `MSP_BRIDGE_TOF`, `tof_m` telemetry, measured replay z; the fusion below still waits on the
-   PMW3901.)* Plan A (matches all published Crazyflie practice): fuse
+   `MSP_BRIDGE_TOF`, `tof_m` telemetry, measured replay z; same day: `hover_tof` puts the measured
+   height in the obs — the policy owns the altitude loop, docs/TASK_CATALOG.md. The fusion below
+   still waits on the PMW3901.)* Plan A (matches all published Crazyflie practice): fuse
    flow×height → v_body on the bridge, feed obs-v4's `vel_body` unchanged. Plan B (novel): raw flow +
    ToF + gyro in obs, DR over flow-scale/dropout — publishable if it works, our seam already supports it.
 10. **Measured end-to-end latency in DR.** Identify true latency incl. motor time constant (not just

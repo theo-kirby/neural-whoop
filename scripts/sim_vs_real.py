@@ -65,7 +65,11 @@ def main() -> int:
     n_air = 0
     for r in rows:
         base = [_f(r["roll"]), _f(r["pitch"]), _f(r["p"]), _f(r["q"]), _f(r["r"])]
-        if pol.uses_vz:
+        if pol.uses_tof:
+            # h_err (col 26) is the channel exactly as the pilot fed it (tilt-corrected,
+            # last-valid-held, minus the flight's target height) — replay is exact.
+            base = base + [_f(r.get("h_err", ""))]
+        elif pol.uses_vz:
             base = base + [_f(r["vz_est"])]
         obs = pilot.stack_frames(hist, base, pol.obs_stack)
         pred = pol(obs)

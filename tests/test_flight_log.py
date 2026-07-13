@@ -39,10 +39,10 @@ _VZ_STABLE = [0.0, -0.3, -0.6, -0.9, -1.2, -1.5, -1.8, -2.0, -2.0, -2.0]
 
 
 def _row(**over) -> list:
-    """One CSV row (25 cols) with hover-ish defaults; override any column by name.
+    """One CSV row (26 cols) with hover-ish defaults; override any column by name.
 
-    ``tof_m`` defaults blank — the synthetic baseline flight predates the bridge ToF, so the
-    legacy code paths (∫vz_est replay z, height.present=False) stay exercised.
+    ``tof_m``/``h_err`` default blank — the synthetic baseline flight predates the bridge ToF,
+    so the legacy code paths (∫vz_est replay z, height.present=False) stay exercised.
     """
     base = {
         "t": 0.0, "obs_age_ms": 25, "roll": 0.0, "pitch": 0.0, "p": 0.0, "q": 0.0, "r": 0.0,
@@ -50,6 +50,7 @@ def _row(**over) -> list:
         "us_roll": 1500, "us_pitch": 1500, "us_thr": _IDLE_US, "us_yaw": 1500,
         "vbat": 4.10, "hover_eff": 1330, "vz_est": 0.0, "trim": 0.0,
         "acc_x": 0, "acc_y": 0, "acc_z": 2048, "rpm_rms": 26000, "us_corr": 0, "tof_m": "",
+        "h_err": "",
     }
     base.update(over)
     return [base[c] for c in LOG_COLUMNS]
@@ -98,18 +99,32 @@ def test_load_flight_shape_and_empty_cell_coercion(flight_csv):
 
 
 def test_load_flight_accepts_legacy_24col(tmp_path):
-    # Pre-ToF flights wrote 24 columns (no tof_m): they must still load, with tof_m all-NaN.
+    # Pre-ToF flights wrote 24 columns (no tof_m/h_err): they must still load, all-NaN tails.
     p = tmp_path / "legacy.csv"
     with open(p, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(LOG_COLUMNS[:-1])
+        w.writerow(LOG_COLUMNS[:-2])
         for i in range(4):
-            w.writerow(_row(t=0.02 * i, us_thr=1300)[:-1])
+            w.writerow(_row(t=0.02 * i, us_thr=1300)[:-2])
     log = load_flight(p)
     assert log.n == 4
     assert np.isnan(log.tof_m).all()
     m = flight_metrics(log)
     assert m["height"]["present"] is False
+
+
+def test_load_flight_accepts_legacy_25col(tmp_path):
+    # ToF-era pre-h_err flights wrote 25 columns: still load, h_err all-NaN.
+    p = tmp_path / "legacy25.csv"
+    with open(p, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(LOG_COLUMNS[:-1])
+        for i in range(4):
+            w.writerow(_row(t=0.02 * i, us_thr=1300, tof_m=0.5)[:-1])
+    log = load_flight(p)
+    assert log.n == 4
+    assert np.isnan(log.data["h_err"]).all()
+    assert (log.tof_m == 0.5).all()
 
 
 def test_load_flight_rejects_bad_header(tmp_path):

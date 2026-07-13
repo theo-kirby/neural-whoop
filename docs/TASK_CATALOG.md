@@ -195,6 +195,30 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   averaging path. When the policy consumes vz, the pilot's external climb-damper P/I turn OFF
   (the policy owns vertical damping; the RPM governor stays as the absolute thrust anchor).
 
+### 🚧 `hover_tof` — measured-height hover: the bridge VL53L1X closes the altitude loop (2026-07-13)
+- **Why:** every blind flight's remaining ceiling was open-loop altitude (the v2/R-ladder record
+  above: an IMU-integrated vz is unusable, the RPM damper only *damps*). The CJMCU-531 ToF soldered
+  under the frame is the first *measured* state channel — so the policy can finally observe height
+  and own the vertical loop.
+- **Obs/oracle:** **[roll, pitch, p, q, r, height_err]** (6) × `obs_stack 8` (deployed input 48).
+  `height_err = setpoint_z − h_meas` (the obs-v4 "target minus measurement" sign: + = climb).
+  `h_meas` mirrors the deployed estimator exactly: true z when fresh+valid (~40 Hz ranging vs the
+  50 Hz loop → per-step Bernoulli refresh), zero-order-held on staleness / >1.3 m slant saturation /
+  >45° tilt. Ranging noise (sd 0.02 m) + mount/surface bias (±0.03 m) ride the per-channel DR —
+  datasheet-plausible until the first ToF-equipped flight calibrates them.
+- **Deploy contract (`neural_whoop.pilot`):** the pilot feeds `--target-height − tof·cosr·cosp`
+  (flat-floor tilt correction), last-valid-held; family is task-keyed off the export meta (a 6-dim
+  file without `task: hover_tof` stays the vz family). Setup refuses to fly without a live ToF;
+  >1 s sensor silence in flight aborts (`tof_lost`). External climb damper OFF (the policy owns
+  altitude; RPM governor stays). The exact channel is logged as CSV col 26 `h_err`, so
+  `sim_vs_real.py` replays it byte-exactly.
+- **Metric:** `mean_z_error` (new, whole hover family) + the standard hover accumulators; the
+  deploy-relevant bar is M1-live-style survival with the altitude now *closed-loop* — the sim Δ
+  to beat is `d50var_s8`'s open-loop z drift.
+- **Status:** implemented (`tasks/hover_tof.py`, `configs/hover_tof_air65.yaml` — d50var_s8 + ONE
+  factor: the height channel, setpoint band lowered into the sensor band 0.5–1.1 m). Training run
+  pending.
+
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,
   with `mean_altitude_loss` (max `z0 − z`) + `mean_completion_time` + `post_recovery_tilt_deg`

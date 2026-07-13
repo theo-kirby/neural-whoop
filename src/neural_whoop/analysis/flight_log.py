@@ -1,7 +1,7 @@
 """Pure flight-log load + metrics — the characterization core, unit-testable without the sim.
 
-A ``scripts/pilot.py`` flight writes a 25-column CSV (:data:`LOG_COLUMNS`; 24-column pre-ToF
-logs still load) — one row per control
+A ``scripts/pilot.py`` flight writes a 26-column CSV (:data:`LOG_COLUMNS`; the 25-column ToF-era
+and 24-column pre-ToF schemas still load) — one row per control
 step of a real tiny-whoop flight. This module parses that CSV into a :class:`FlightLog` (per-column
 numpy arrays, empty cells -> NaN) and derives :func:`flight_metrics`: the phase segmentation, hover
 quality, the vertical-estimator smoking-gun metrics (``vz_est`` railing + thrust-vs-``a_thr``
@@ -36,17 +36,19 @@ import numpy as np
 #: column order :func:`load_flight` expects. Angles (roll/pitch) are radians in sim convention;
 #: body rates (p/q/r) rad/s; ``us_*`` are AETR microseconds; ``vz_est`` m/s; ``acc_*`` raw LSB;
 #: ``tof_m`` the bridge's downward VL53L1X range in metres (empty when absent/invalid/stale —
-#: the first *measured* height channel, everything before it is IMU-integrated estimate).
+#: the first *measured* height channel, everything before it is IMU-integrated estimate);
+#: ``h_err`` the hover_tof obs channel exactly as the policy saw it
+#: (``target_height_m − tilt-corrected last-valid-held height``; empty before the first reading).
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr", "tof_m",
+    "rpm_rms", "us_corr", "tof_m", "h_err",
 ]
 
-#: Pre-ToF flights (through 2026-07) wrote 24 columns — everything up to ``us_corr``.
-#: :func:`load_flight` still accepts them, padding ``tof_m`` with NaN.
-_LEGACY_LOG_COLUMNS = LOG_COLUMNS[:-1]
+#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 25 columns
+#: (ToF-era, pre-``h_err``) and 24 columns (pre-ToF, through 2026-07).
+_LEGACY_HEADERS = (LOG_COLUMNS[:-1], LOG_COLUMNS[:-2])
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose
 #: ``|vz_est|`` reaches this is "railed" — the estimator has saturated and is lying about descent.
@@ -162,7 +164,7 @@ def load_flight(path: str | Path) -> FlightLog:
             header = next(reader)
         except StopIteration:
             raise ValueError(f"{path}: empty flight log (no header row)")
-        if header not in (LOG_COLUMNS, _LEGACY_LOG_COLUMNS):
+        if header != LOG_COLUMNS and header not in _LEGACY_HEADERS:
             raise ValueError(
                 f"{path}: unexpected flight-log schema.\n  expected {LOG_COLUMNS}\n  got      {header}"
             )

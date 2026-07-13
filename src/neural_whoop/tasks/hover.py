@@ -18,8 +18,9 @@ term (reward level, penalize ``roll²+pitch²``) + a velocity-damping penalty + 
 alive − action-smoothness − crash. No time/progress term — this is a hold, not a race.
 Termination = crash (out of arena / ground / ceiling); truncation = env time limit.
 
-Metrics (all ground truth): ``mean_pos_error``, ``mean_speed``, ``mean_tilt_deg``,
-``hold_rate`` (fraction of steps within ``hold_radius`` of the setpoint), ``crash_rate_per_step``.
+Metrics (all ground truth): ``mean_pos_error``, ``mean_z_error`` (vertical-only — the altitude
+story the blind/ToF obs ablations are about), ``mean_speed``, ``mean_tilt_deg``, ``hold_rate``
+(fraction of steps within ``hold_radius`` of the setpoint), ``crash_rate_per_step``.
 """
 
 from __future__ import annotations
@@ -110,6 +111,7 @@ class HoverTask(DroneTask):
         self.steps = torch.zeros(n, device=dev, dtype=torch.long)
         self.held = torch.zeros(n, device=dev, dtype=torch.long)
         self.pos_err_sum = torch.zeros(n, device=dev)
+        self.z_err_sum = torch.zeros(n, device=dev)
         self.speed_sum = torch.zeros(n, device=dev)
         self.tilt_sum = torch.zeros(n, device=dev)
         self.crash_sum = torch.zeros(n, device=dev, dtype=torch.long)
@@ -155,6 +157,7 @@ class HoverTask(DroneTask):
         self.steps[d_idx] = 0
         self.held[d_idx] = 0
         self.pos_err_sum[d_idx] = 0.0
+        self.z_err_sum[d_idx] = 0.0
         self.speed_sum[d_idx] = 0.0
         self.tilt_sum[d_idx] = 0.0
         self.crash_sum[d_idx] = 0
@@ -175,6 +178,7 @@ class HoverTask(DroneTask):
         pos, vel, rpy, w = env.dyn.pos, env.dyn.vel_world, env.dyn.rpy, env.dyn.ang_vel_body
 
         dist = (self.setpoint - pos).norm(dim=-1)
+        z_err = (self.setpoint[..., 2] - pos[..., 2]).abs()
         pos_bell = torch.exp(-((dist / c.pos_sigma) ** 2))
         tilt_sq = rpy[..., 0] ** 2 + rpy[..., 1] ** 2  # roll² + pitch²
         upright = torch.exp(-(tilt_sq / (c.upright_sigma ** 2)))
@@ -200,6 +204,7 @@ class HoverTask(DroneTask):
         self.steps = self.steps + 1
         self.held = self.held + held.long()
         self.pos_err_sum = self.pos_err_sum + dist
+        self.z_err_sum = self.z_err_sum + z_err
         self.speed_sum = self.speed_sum + speed
         self.tilt_sum = self.tilt_sum + tilt
         self.crash_sum = self.crash_sum + crashed.long()
@@ -212,6 +217,7 @@ class HoverTask(DroneTask):
             "crashed": crashed,
             "metrics": {
                 "mean_pos_error": dist,
+                "mean_z_error": z_err,
                 "mean_speed": speed,
                 "mean_tilt_deg": tilt * (180.0 / math.pi),
                 "hold_rate": held.float(),
@@ -232,6 +238,7 @@ class HoverTask(DroneTask):
         steps = self.steps.clamp_min(1).float()
         return {
             "mean_pos_error": (self.pos_err_sum / steps).mean().item(),
+            "mean_z_error": (self.z_err_sum / steps).mean().item(),
             "mean_speed": (self.speed_sum / steps).mean().item(),
             "mean_tilt_deg": math.degrees((self.tilt_sum / steps).mean().item()),
             "hold_rate": (self.held.float() / steps).mean().item(),

@@ -53,7 +53,14 @@ class Policy:
         if self.base_obs_dim * self.obs_stack != self.obs_dim:
             raise ValueError(f"inconsistent meta: base_obs_dim {self.base_obs_dim} x obs_stack "
                              f"{self.obs_stack} != obs_dim {self.obs_dim}")
-        self.uses_vz = self.base_obs_dim >= 6
+        # Channel-6 semantics are task-keyed: hover_tof's 6th channel is the measured height
+        # error, every other 6-dim file is the vz_est family (pre-tof exports without a task
+        # field are all vz-era, so the dim fallback stays correct for them).
+        self.task = str(self.meta.get("task", ""))
+        self.uses_tof = self.task == "hover_tof"
+        self.uses_vz = self.base_obs_dim >= 6 and not self.uses_tof
+        # Either 6th-channel family owns the vertical loop itself -> external damper trim off.
+        self.owns_altitude = self.uses_vz or self.uses_tof
 
     @staticmethod
     def _clipped_gaussian_mean(mu: float, sd: float, lo: float = -1.0, hi: float = 1.0) -> float:
@@ -90,11 +97,16 @@ def stack_frames(hist: deque, frame: list[float], stack: int) -> list[float]:
 
 
 def check_policy_family(pol: Policy) -> None:
-    """This pilot builds [roll, pitch, p, q, r] (+ vz_est) frames — refuse anything else."""
+    """This pilot builds [roll, pitch, p, q, r] (+ vz_est | ToF height_err) frames — refuse
+    anything else."""
     if pol.base_obs_dim not in (5, 6):
         sys.exit(f"unsupported policy: base_obs_dim {pol.base_obs_dim} (this pilot feeds the "
-                 "5-dim hover_blind or 6-dim hover_blind_v2 obs layout only)")
-    if pol.obs_stack > 1 or pol.uses_vz:
+                 "5-dim hover_blind, 6-dim hover_blind_v2, or 6-dim hover_tof obs layouts only)")
+    if pol.uses_tof:
+        print(f"policy: base obs 6 (incl. ToF height_err) x {pol.obs_stack} stacked frames; "
+              "external climb damper DISABLED — the policy owns altitude from the measured "
+              "height (RPM governor stays: absolute thrust anchor). ToF telemetry is REQUIRED.")
+    elif pol.obs_stack > 1 or pol.uses_vz:
         print(f"policy: base obs {pol.base_obs_dim}{' (incl. vz_est)' if pol.uses_vz else ''}"
               f" x {pol.obs_stack} stacked frames"
               + ("; external climb-damper P/I DISABLED — the policy owns vertical damping "

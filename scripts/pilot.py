@@ -101,7 +101,7 @@ LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr", "tof_m",
+    "rpm_rms", "us_corr", "tof_m", "h_err",
 ]
 
 
@@ -273,7 +273,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         takeoff=args.takeoff, launch=args.launch, hold_seconds=args.hold_seconds,
         vz_gain=args.vz_gain, trim_roll_deg=args.trim_roll_deg, trim_pitch_deg=args.trim_pitch_deg,
         aux=args.aux, hover_us=args.hover_us, vbat_ref=args.vbat_ref, trim_thrust=args.trim_thrust,
-        min_us=args.min_us, max_us=args.max_us,
+        min_us=args.min_us, max_us=args.max_us, target_height_m=args.target_height,
         flip_at_s=args.flip_at, acro_axis=args.axis, acro_n_rotations=args.n_rotations,
     )
     period = 1.0 / args.hz
@@ -286,7 +286,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
         fc, start_mode = MspUdpClient(args.udp_host, args.udp_port), "switch"
     try:
         # The override edge auto-starts the flight clock (start_mode="switch"); the human log lines
-        # and the 24-col CSV rows route through the injected callbacks so console + log are unchanged.
+        # and the CSV rows (LOG_COLUMNS order) route through the injected callbacks so console +
+        # log are unchanged.
         ctrl = FlightController(fc, pol, params, acro_policy=acro_pol, start_mode=start_mode,
                                 on_log=writer.writerow, log=print)
         try:
@@ -368,6 +369,9 @@ def main() -> int:
                      help="hand-launch flow: after the override switch, idle countdown, throttle "
                           "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
+    fly.add_argument("--target-height", type=float, default=0.6, metavar="M",
+                     help="hover_tof policies: height to hold (m); the obs channel is "
+                          "target - measured (tilt-corrected bridge ToF, last-valid-held)")
     fly.add_argument("--vz-gain", type=float, default=0.15,
                      help="climb damper gain (act[0] per m/s of RPM-anchored climb rate for a "
                           "blind policy; vz-consuming policies own damping and ignore it); "

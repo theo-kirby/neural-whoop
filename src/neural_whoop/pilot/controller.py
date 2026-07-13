@@ -15,7 +15,7 @@ calls :meth:`abort`. The radio owns enable + kill; software only ever sets a clo
 RC stream is the only "stop" (Betaflight's ~300 ms MSP-freshness window hands control back).
 
 Pure stdlib (``math`` + ``time`` + ``enum``): imports zero torch/numpy. Human messages route through
-the injected ``log`` callback (the CLI passes ``print``; the web manager captures them); the 25-col
+the injected ``log`` callback (the CLI passes ``print``; the web manager captures them); the 26-col
 CSV row goes to ``on_log`` (``analysis/flight_log.py::LOG_COLUMNS`` order).
 """
 
@@ -109,6 +109,7 @@ class FlightParams:
     hover_us: int = 1410
     vbat_ref: float = 0.0
     trim_thrust: float = 0.0
+    target_height_m: float = 0.6  # hover_tof family: the height the policy is asked to hold
     min_us: int = 1000
     max_us: int = 1600
     ramp_s: float = RAMP_DOWN_S   # end-of-flight thrust ramp-down window (s)
@@ -140,7 +141,7 @@ class FlightController:
             override).
         clock: monotonic time source (injectable for tests).
         sleep: sleeper used only inside :meth:`setup`'s telemetry-acquire loop (injectable).
-        on_log: called with each 25-col CSV row (LOG_COLUMNS order); ``None`` disables logging.
+        on_log: called with each 26-col CSV row (LOG_COLUMNS order); ``None`` disables logging.
         log: called with each human-readable status line; ``None`` is silent (the CLI passes
             ``print`` to preserve its console output; the web manager captures the lines).
     """
@@ -204,6 +205,10 @@ class FlightController:
         self.rpm_buf: list[tuple] = []
         self.rpm_hover: float | None = None
         self.us_corr = 0.0
+        # ToF height estimate: tilt-corrected, zero-order-held at the last valid reading (the
+        # hover_tof obs contract). t_last_tof gates the sensor-lost abort for ToF policies.
+        self.h_est: float | None = None
+        self.t_last_tof: float | None = None
         self.trim_roll_rad = math.radians(params.trim_roll_deg)
         self.trim_pitch_rad = math.radians(params.trim_pitch_deg)
 
@@ -283,6 +288,20 @@ class FlightController:
                     "no telemetry from the bridge — is the battery in and the LED blinking?")
         self._log(f"telemetry live (vbat {self.tel.vbat or 0:.2f} V). hover_us={p.hover_us} "
                   f"trim={p.trim_thrust:+.4f} yaw={p.yaw}.")
+        if self.pol.uses_tof:
+            # A hover_tof policy is blind vertically WITHOUT the sensor — refuse to fly on a
+            # frozen channel. In flight, brief dropouts are held; >1 s loss aborts (see step).
+            t0 = self._clock()
+            while self.tel.height_m(self._clock()) is None:
+                self.tel.poll(self._clock(), want_tof=True)
+                self._sleep(0.02)
+                if self._clock() - t0 > 5.0:
+                    raise FlightSetupError(
+                        "this policy observes the bridge ToF height but no valid reading "
+                        "arrived in 5 s — sensor wired? Check: python3 scripts/bench.py "
+                        "--udp <bridge-ip> tof")
+            self._log(f"ToF live: {self.tel.height_m(self._clock()):.3f} m "
+                      f"(target height {p.target_height_m:.2f} m)")
         return {
             "override_aux": override_rng["aux_idx"] + 1,
             "arm_aux": (arm_rng["aux_idx"] + 1) if arm_rng else None,
@@ -449,6 +468,18 @@ class FlightController:
         # --- fresh obs: the full control tick ---
         o = self.tel.obs()
         self.roll, self.pitch, self.p, self.q, self.r = o[0], o[1], o[2], o[3], o[4]
+        # ToF height: tilt-correct (the ray leaves along body -z, so slant·cosr·cosp IS the
+        # height over a flat floor — exactly the sim task's h_meas) and hold the last valid
+        # value across dropouts. A ToF policy flying >1 s without the sensor must not keep
+        # trusting a frozen channel -> abort.
+        tof_m = self.tel.height_m(now)
+        if tof_m is not None:
+            self.h_est = tof_m * math.cos(o[0]) * math.cos(o[1])
+            self.t_last_tof = now
+        elif (self.pol.uses_tof and self.t_start is not None
+                and (self.t_last_tof is None or now - self.t_last_tof > 1.0)):
+            self._log("\nToF height lost > 1 s and the policy observes it -> releasing")
+            return self._abort("tof_lost")
         # Crash detector: sustained extreme attitude -> cut + release. SUSPENDED while `flipping`:
         # a legitimate flip passes |roll|>110° by design, so the detector would false-fire. The
         # bounded FLIP window (acro_flip_max_s) + the re-level exit gate re-arm it the instant the
@@ -513,7 +544,7 @@ class FlightController:
                 self.vz = max(-VZ_CLAMP, min(VZ_CLAMP, self.vz))
             else:
                 self.vz *= math.exp(-dt / VZ_LEAK_TAU)  # tilted: no new evidence, decay
-            if self.pol.uses_vz:
+            if self.pol.owns_altitude:  # vz_est or ToF family: the policy owns the vertical loop
                 self.thr_trim = 0.0
             else:
                 self.thr_trim = rpm_damper_trim(rpm_now, self.rpm_hover, p.vz_gain)
@@ -554,7 +585,16 @@ class FlightController:
                 self._log(f"\nFLIP done (rot {self.phi_flip / self.phi_target:.2f}·Φ, "
                           f"tilt {math.degrees(tilt):.0f}°, {elapsed:.2f}s) -> HOVER")
         else:
-            frame = o + [self.vz] if self.pol.uses_vz else o
+            if self.pol.uses_tof:
+                # No reading yet (setup gates on ToF-live, so ~never): feed a neutral zero
+                # error, NOT target - 0 — a dead sensor must not read as "climb". Matches the
+                # blank h_err CSV cell, so the offline sim_vs_real replay stays exact.
+                err = p.target_height_m - self.h_est if self.h_est is not None else 0.0
+                frame = o + [err]
+            elif self.pol.uses_vz:
+                frame = o + [self.vz]
+            else:
+                frame = o
             act = self.pol(stack_frames(self.obs_hist, frame, self.pol.obs_stack))
             if t_air > p.seconds:  # ramp down: ease thrust action toward floor
                 k = (t_air - p.seconds) / self.ramp_s
@@ -643,13 +683,15 @@ class FlightController:
             self.n_sent += 1
         self.us = us
         self.hover_eff = hover_eff
-        tof_m = self.tel.height_m(now)
+        # tof_m: the raw (uncorrected) reading from the fresh-obs section above — CSV col 25
+        # keeps its "measured range, validity-gated" semantics; h_est is the policy's view.
         self._on_log([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                       *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
                       *us, self.tel.vbat or "", hover_eff,
                       f"{self.vz:.3f}", f"{self.thr_trim:+.4f}", *self.tel.imu["acc_raw"],
                       f"{rpm_now:.0f}" if rpm_now else "", f"{self.us_corr:+.0f}",
-                      f"{tof_m:.3f}" if tof_m is not None else ""])
+                      f"{tof_m:.3f}" if tof_m is not None else "",
+                      f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else ""])
         return self._make_frame()
 
     # ------------------------------------------------------------------ frame / phase

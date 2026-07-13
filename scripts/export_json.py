@@ -38,6 +38,9 @@ OBS_LAYOUTS = {
     "hover_blind": "hover_blind: [roll, pitch, p, q, r] (rad, rad/s; frame x fwd/y left/z up)",
     "hover_blind_v2": "hover_blind_v2: [roll, pitch, p, q, r, vz_est] (rad, rad/s, m/s; "
                       "frame x fwd/y left/z up; vz_est = leaky acc-integrated climb rate)",
+    "hover_tof": "hover_tof: [roll, pitch, p, q, r, height_err] (rad, rad/s, m; frame x fwd/"
+                 "y left/z up; height_err = target_height - measured height, tilt-corrected "
+                 "bridge ToF held at the last valid reading)",
 }
 ACT_LAYOUT = "act-v2: [thrust(-1..1 -> 0..4x hover), roll_rate, pitch_rate, yaw_rate]"
 
@@ -56,7 +59,7 @@ def _stack_dims(d: dict) -> tuple[int, int]:
     return base, obs_dim // base
 
 
-def _probes(base_dim: int, seed: int = 0) -> dict[str, list[float]]:
+def _probes(base_dim: int, task: str = "", seed: int = 0) -> dict[str, list[float]]:
     """Named single-frame probe observations (base dim, not stacked)."""
     named = [
         ("level_still", None, 0.0),
@@ -64,9 +67,17 @@ def _probes(base_dim: int, seed: int = 0) -> dict[str, list[float]]:
         ("pitch_nose_down_0.1rad", 1, 0.1),
         ("roll_rate_p_1rps", 2, 1.0),
         ("yaw_rate_r_1rps", 4, 1.0),
-        ("sink_vz_-0.5mps", 5, -0.5),
-        ("climb_vz_+0.5mps", 5, 0.5),
     ]
+    if task == "hover_tof":  # channel 5 = height_err (m, + = climb), not vz
+        named += [
+            ("below_target_err_+0.3m", 5, 0.3),
+            ("above_target_err_-0.3m", 5, -0.3),
+        ]
+    else:
+        named += [
+            ("sink_vz_-0.5mps", 5, -0.5),
+            ("climb_vz_+0.5mps", 5, 0.5),
+        ]
     probes: dict[str, list[float]] = {}
     for name, idx, val in named:
         if idx is not None and idx >= base_dim:
@@ -123,7 +134,7 @@ def export_json(ckpt_path: str, out_dir: str | None = None) -> dict:
 
     # Reference outputs through the exact deploy semantics: tiled frame -> linears+activation
     # -> clipped-Gaussian effective mean (the trim-bias fix; training/ppo.py).
-    probes = _probes(base_dim)
+    probes = _probes(base_dim, task)
     ref: dict = {"inputs": {}, "outputs": {},
                  "meta": {"base_obs_dim": base_dim, "obs_stack": stack,
                           "note": "inputs are single base frames; tile x obs_stack (repeat) "
