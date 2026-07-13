@@ -39,6 +39,12 @@ MSP_MOTOR_TELEMETRY = 139
 MSP_SET_RAW_RC = 200
 MSP_SET_MOTOR = 214
 
+#: Bridge-local command (NOT a Betaflight id): the xiao_bridge answers it itself with the
+#: latest reading from its downward VL53L1X ToF and never forwards it to the FC. Mirrored in
+#: ``firmware/xiao_bridge/src/main.cpp`` (``kMspBridgeTof``) — change both together. Over USB
+#: (no bridge in the path) the FC replies with an MSP error frame; treat that as "no ToF".
+MSP_BRIDGE_TOF = 192
+
 #: Betaflight rcData index order (see module docstring — verify on bench).
 RC_CHANNEL_ORDER = ("roll", "pitch", "yaw", "throttle", "aux1", "aux2", "aux3", "aux4")
 
@@ -176,6 +182,24 @@ def decode_motor_telemetry(payload: bytes) -> list[dict]:
     return out
 
 
+def decode_bridge_tof(payload: bytes) -> dict:
+    """MSP_BRIDGE_TOF: u16 range_mm, u8 VL53L1X range_status (0 = valid), u16 age_ms
+    (65535 = never sampled), u8 sensor_ok.
+
+    ``range_m`` is ``None`` unless the sensor is present, the sample is valid (status 0) and
+    fresh (age < 200 ms) — one field the callers can trust without re-deriving the gating.
+    """
+    range_mm, status, age_ms, ok = struct.unpack("<HBHB", payload[:6])
+    valid = bool(ok) and status == 0 and age_ms < 200
+    return {
+        "range_m": range_mm / 1000.0 if valid else None,
+        "range_mm": range_mm,
+        "status": status,
+        "age_ms": age_ms,
+        "sensor_ok": bool(ok),
+    }
+
+
 def decode_fc_version(payload: bytes) -> str:
     major, minor, patch = struct.unpack("<BBB", payload[:3])
     return f"{major}.{minor}.{patch}"
@@ -295,6 +319,11 @@ class _MspEndpoint:
 
     def set_raw_rc(self, channels: list[int] | tuple[int, ...]) -> None:
         self.send(MSP_SET_RAW_RC, pack_rc_channels(channels))
+
+    def bridge_tof(self) -> dict:
+        """Latest bridge ToF reading (see :func:`decode_bridge_tof`). Bridge-answered — over
+        USB the FC errors this id, which surfaces as :class:`MspError`."""
+        return decode_bridge_tof(self.request(MSP_BRIDGE_TOF))
 
     def set_motor(self, values: list[int]) -> None:
         if len(values) != 8:

@@ -10,6 +10,8 @@ Subcommands (all read-only unless stated; writing ones require --ack-props-off):
               and echo back MSP_RC — the loopback proof that the MSP-override seam works and
               that the channel order is what we think. Needs `set msp_override_channels_mask`
               + the MSPRCOVERRIDE mode configured to see values land (see docs/SIM2REAL.md).
+  tof         Live range from the bridge's downward VL53L1X (CJMCU-531) — bridge-answered
+              (MSP_BRIDGE_TOF), so it needs --udp. The desk bring-up check after wiring.
   motor-test  [writes] Spin ONE motor briefly at a capped value. PROPS OFF. Value hard-capped.
 
 Safety: nothing here ever raises an arm channel; arming stays with the human on the Pocket.
@@ -155,6 +157,31 @@ def cmd_rc_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tof(args: argparse.Namespace) -> int:
+    """Live-print the bridge's VL53L1X range — the CJMCU-531 desk bring-up check."""
+    if not args.udp:
+        sys.exit("tof is bridge-answered (MSP_BRIDGE_TOF): run with --udp <bridge-ip>")
+    period = 1.0 / args.hz
+    print("bridge ToF (ctrl-C to stop) — wave a hand over the sensor, range should track it")
+    try:
+        with _client(args) as fc:
+            while True:
+                t0 = time.monotonic()
+                r = fc.bridge_tof()
+                if not r["sensor_ok"]:
+                    print("  sensor_ok=0 — bridge up but no VL53L1X found (check D4/SDA D5/SCL + 3V3)")
+                elif r["range_m"] is not None:
+                    bar = "#" * min(60, int(r["range_m"] * 40))
+                    print(f"  {r['range_m']*100:6.1f} cm  age {r['age_ms']:3d} ms  {bar}")
+                else:
+                    print(f"  -- invalid (status {r['status']}, age {r['age_ms']} ms) — "
+                          "out of range / no return")
+                time.sleep(max(0.0, period - (time.monotonic() - t0)))
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    return 0
+
+
 def cmd_motor_test(args: argparse.Namespace) -> int:
     _require_ack(args)
     value = min(int(args.value), MOTOR_VALUE_HARD_CAP)
@@ -202,6 +229,9 @@ def main() -> int:
     p.add_argument("--seconds", type=float, default=10.0)
     p.add_argument("--ack-props-off", action="store_true")
 
+    p = sub.add_parser("tof", help="live bridge VL53L1X range (needs --udp; desk bring-up)")
+    p.add_argument("--hz", type=float, default=10.0)
+
     p = sub.add_parser("motor-test", help="spin one motor, capped + props off")
     p.add_argument("--motor", type=int, required=True, help="motor index 0-3")
     p.add_argument("--value", type=int, default=1050, help=f"1000=stop, hard cap {MOTOR_VALUE_HARD_CAP}")
@@ -210,7 +240,7 @@ def main() -> int:
 
     args = ap.parse_args()
     return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
-            "rc-test": cmd_rc_test, "motor-test": cmd_motor_test}[args.cmd](args)
+            "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test}[args.cmd](args)
 
 
 if __name__ == "__main__":

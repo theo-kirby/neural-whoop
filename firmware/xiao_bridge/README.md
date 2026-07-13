@@ -3,7 +3,9 @@
 Turns a Seeed XIAO ESP32-S3 wired to the Air65 II's free UART into the drone's radio:
 the host sends raw MSP frames over UDP, the bridge forwards them verbatim to the flight
 controller and ships the FC's replies back. Protocol-transparent by design — the whole
-`scripts/bench.py` toolkit works through it unchanged via `--udp`.
+`scripts/bench.py` toolkit works through it unchanged via `--udp`. One deliberate
+exception: the bridge owns a downward **VL53L1X ToF** (below) and answers MSP cmd **192**
+(`MSP_BRIDGE_TOF`) itself; that id is consumed, never forwarded to the FC.
 
 ## Wiring (Matrix 1S 5IN1 II)
 
@@ -13,6 +15,29 @@ controller and ships the FC's replies back. Protocol-transparent by design — t
 | D9 / MISO (GPIO8) | UART1 TX pad (T1) |
 | GND | GND |
 | 5V | 5V pad (FC BEC) |
+
+## ToF wiring (CJMCU-531 / VL53L1X, optional)
+
+| XIAO | CJMCU-531 |
+|---|---|
+| D4 (GPIO5, SDA) | SDA |
+| D5 (GPIO6, SCL) | SCL |
+| 3V3 | VIN |
+| GND | GND |
+
+Mount the sensor **facing down** (it is the measured-height channel: `tof_m` in the pilot
+flight CSV, real z in the flight-report replay). Firmware runs it in short-distance mode at
+~40 Hz (ambient-robust to ~1.3 m — the whoop's hover band; switch to `Medium` in `initTof()`
+for higher ceilings at a slower rate). Leave XSHUT/GPIO1 unwired. The sensor is fully
+optional: with nothing on the I²C the bridge boots and proxies exactly as before, and
+`MSP_BRIDGE_TOF` replies carry `sensor_ok=0`.
+
+Desk bring-up after wiring (before mounting anything):
+
+```bash
+pio run -e xiao_bridge -t upload
+python3 scripts/bench.py --udp <bridge-ip> tof     # wave a hand over it; range should track
+```
 
 The natural RX choice would be D7/GPIO44, but on our unit that input is dead (line idles at a
 healthy 3.3 V, yet neither UART1-matrix nor native-UART0 reception ever sees a byte — presumed

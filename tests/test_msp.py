@@ -126,3 +126,18 @@ def test_decode_raw_imu_keeps_raw_units():
     out = decode_raw_imu(payload)
     assert out["acc_raw"] == (1, -2, 512)
     assert out["gyro_raw"] == (10, -20, 30)
+
+
+def test_decode_bridge_tof_gates_range_m():
+    from neural_whoop.bench.msp import decode_bridge_tof
+
+    # Fresh valid sample: range_m populated.
+    p = struct.pack("<HBHB", 743, 0, 24, 1)
+    out = decode_bridge_tof(p)
+    assert out == {"range_m": 0.743, "range_mm": 743, "status": 0, "age_ms": 24, "sensor_ok": True}
+
+    # Invalid status (VL53L1X wrap/no-return), stale sample, or absent sensor -> range_m None.
+    assert decode_bridge_tof(struct.pack("<HBHB", 743, 4, 24, 1))["range_m"] is None
+    assert decode_bridge_tof(struct.pack("<HBHB", 743, 0, 900, 1))["range_m"] is None
+    never = decode_bridge_tof(struct.pack("<HBHB", 0xFFFF, 0xFF, 0xFFFF, 0))
+    assert never["range_m"] is None and never["sensor_ok"] is False
