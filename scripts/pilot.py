@@ -369,7 +369,7 @@ def main() -> int:
                      help="hand-launch flow: after the override switch, idle countdown, throttle "
                           "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
-    fly.add_argument("--target-height", type=float, default=0.6, metavar="M",
+    fly.add_argument("--target-height", type=float, default=1.0, metavar="M",
                      help="hover_tof policies: height to hold (m); the obs channel is "
                           "target - measured (tilt-corrected bridge ToF, last-valid-held)")
     fly.add_argument("--vz-gain", type=float, default=0.15,

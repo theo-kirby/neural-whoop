@@ -109,7 +109,7 @@ class FlightParams:
     hover_us: int = 1410
     vbat_ref: float = 0.0
     trim_thrust: float = 0.0
-    target_height_m: float = 0.6  # hover_tof family: the height the policy is asked to hold
+    target_height_m: float = 1.0  # hover_tof family: the height the policy is asked to hold
     min_us: int = 1000
     max_us: int = 1600
     ramp_s: float = RAMP_DOWN_S   # end-of-flight thrust ramp-down window (s)
