@@ -1,7 +1,7 @@
 """Non-blocking MSP telemetry poller + the RC-stream helper — moved verbatim from ``pilot.py``.
 
 :class:`Telemetry` sits on top of an :class:`MspUdpClient` (or any ``_MspEndpoint``): each
-:meth:`Telemetry.poll` fires the attitude/IMU/(optional analog/rc/rpm) queries and drains every
+:meth:`Telemetry.poll` fires the attitude/IMU/(optional analog/rc/rpm/bridge-ToF) queries and drains every
 waiting datagram, so the control loop never blocks. :func:`stream_rc` packs one AETR RC frame.
 Pure stdlib — imports only the codec (``neural_whoop.bench.msp``) and this package's policy layer.
 """
@@ -13,6 +13,7 @@ import math
 from neural_whoop.bench.msp import (
     MSP_ANALOG,
     MSP_ATTITUDE,
+    MSP_BRIDGE_TOF,
     MSP_MOTOR_TELEMETRY,
     MSP_RAW_IMU,
     MSP_RC,
@@ -20,6 +21,7 @@ from neural_whoop.bench.msp import (
     MspUdpClient,
     decode_analog,
     decode_attitude,
+    decode_bridge_tof,
     decode_motor_telemetry,
     decode_raw_imu,
     decode_u16s,
@@ -42,13 +44,15 @@ class Telemetry:
         self.vbat: float | None = None
         self.rc: tuple[int, ...] | None = None
         self.mt: list[dict] | None = None
+        self.tof: dict | None = None
         self.t_att = 0.0
         self.t_imu = 0.0
         self.t_rc = 0.0
         self.t_mt = 0.0
+        self.t_tof = 0.0
 
     def poll(self, now: float, want_analog: bool = False, want_rc: bool = False,
-             want_rpm: bool = False) -> None:
+             want_rpm: bool = False, want_tof: bool = False) -> None:
         self.fc.send(MSP_ATTITUDE)
         self.fc.send(MSP_RAW_IMU)
         if want_rpm:
@@ -57,6 +61,8 @@ class Telemetry:
             self.fc.send(MSP_ANALOG)
         if want_rc:
             self.fc.send(MSP_RC)
+        if want_tof:  # bridge-answered (never reaches the FC); errors harmlessly over USB
+            self.fc.send(MSP_BRIDGE_TOF)
         frames = []
         for _ in range(32):  # drain the socket dry (non-blocking)
             got = self.fc._drain()
@@ -76,6 +82,14 @@ class Telemetry:
                 self.rc, self.t_rc = decode_u16s(frame.payload), now
             elif frame.cmd == MSP_MOTOR_TELEMETRY and len(frame.payload) >= 14:
                 self.mt, self.t_mt = decode_motor_telemetry(frame.payload), now
+            elif frame.cmd == MSP_BRIDGE_TOF and len(frame.payload) >= 6:
+                self.tof, self.t_tof = decode_bridge_tof(frame.payload), now
+
+    def height_m(self, now: float) -> float | None:
+        """Measured height (bridge VL53L1X, m); None if absent, invalid, or stale (>0.2 s)."""
+        if self.tof is None or now - self.t_tof > 0.2:
+            return None
+        return self.tof["range_m"]
 
     def rpm_rms(self, now: float) -> float | None:
         """RMS motor RPM (thrust ~ sum(rpm^2)); None if stale, missing, or bidir-DShot off."""

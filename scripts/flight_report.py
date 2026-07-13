@@ -74,10 +74,13 @@ def _flat_metrics(m: dict) -> list[tuple[str, object]]:
 def _headline(m: dict) -> dict:
     """The comparison-worthy scalars (hover quality / vertical / link / battery) for comparison.csv."""
     sh, vt, lk, bt = m["stable_hover"], m["vertical"], m["link"], m["battery"]
+    ht = m.get("height", {})
     return {
         "stable_hover_s": sh["duration_s"],
         "median_tilt_deg": sh["median_tilt_deg"],
         "p90_tilt_deg": sh["p90_tilt_deg"],
+        "hover_height_m": ht.get("hover_mean_m"),
+        "hover_height_sd_m": ht.get("hover_sd_m"),
         "vz_rail_frames": vt["vz_rail_frames"],
         "vz_first_rail_t": vt["vz_first_rail_t"],
         "thrust_diverged": vt["thrust_divergence"]["detected"],
@@ -188,6 +191,12 @@ def main() -> int:
           f"(us_thr +{div['us_thr_rise']:.0f} µs, a_thr IQR {div['a_thr_iqr']:.3f})")
     print(f"  link obs_age : p50 {lk['median_ms']:.0f} / p99 {lk['p99_ms']:.0f} ms, "
           f"{lk['frac_over_40ms'] * 100:.0f}% past the 40 ms cliff")
+    ht = metrics["height"]
+    if ht["present"]:
+        print(f"  height (ToF) : hover {ht['hover_mean_m']:.2f} ± {ht['hover_sd_m']:.2f} m, "
+              f"max {ht['max_m']:.2f} m, {ht['coverage_airborne'] * 100:.0f}% airborne coverage")
+    else:
+        print("  height (ToF) : no measured height in this log (pre-ToF flight or sensor dark)")
     print(f"\npack -> {out}")
     for name in sorted(artifacts):
         print(f"    {name}")

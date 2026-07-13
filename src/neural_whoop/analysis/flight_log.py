@@ -1,6 +1,7 @@
 """Pure flight-log load + metrics — the characterization core, unit-testable without the sim.
 
-A ``scripts/pilot.py`` flight writes a 24-column CSV (:data:`LOG_COLUMNS`) — one row per control
+A ``scripts/pilot.py`` flight writes a 25-column CSV (:data:`LOG_COLUMNS`; 24-column pre-ToF
+logs still load) — one row per control
 step of a real tiny-whoop flight. This module parses that CSV into a :class:`FlightLog` (per-column
 numpy arrays, empty cells -> NaN) and derives :func:`flight_metrics`: the phase segmentation, hover
 quality, the vertical-estimator smoking-gun metrics (``vz_est`` railing + thrust-vs-``a_thr``
@@ -33,13 +34,19 @@ import numpy as np
 
 #: The pilot CSV schema (``scripts/pilot.py`` writer header) — the single source of truth for the
 #: column order :func:`load_flight` expects. Angles (roll/pitch) are radians in sim convention;
-#: body rates (p/q/r) rad/s; ``us_*`` are AETR microseconds; ``vz_est`` m/s; ``acc_*`` raw LSB.
+#: body rates (p/q/r) rad/s; ``us_*`` are AETR microseconds; ``vz_est`` m/s; ``acc_*`` raw LSB;
+#: ``tof_m`` the bridge's downward VL53L1X range in metres (empty when absent/invalid/stale —
+#: the first *measured* height channel, everything before it is IMU-integrated estimate).
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr",
+    "rpm_rms", "us_corr", "tof_m",
 ]
+
+#: Pre-ToF flights (through 2026-07) wrote 24 columns — everything up to ``us_corr``.
+#: :func:`load_flight` still accepts them, padding ``tof_m`` with NaN.
+_LEGACY_LOG_COLUMNS = LOG_COLUMNS[:-1]
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose
 #: ``|vz_est|`` reaches this is "railed" — the estimator has saturated and is lying about descent.
@@ -120,6 +127,11 @@ class FlightLog:
         return self.data["rpm_rms"]
 
     @property
+    def tof_m(self) -> np.ndarray:
+        """Measured height (bridge VL53L1X, m); all-NaN on pre-ToF 24-column logs."""
+        return self.data["tof_m"]
+
+    @property
     def dt_median(self) -> float:
         """Median positive inter-step dt (s). Ignores the zero gaps of the pre-liftoff wait rows."""
         d = np.diff(self.t)
@@ -150,7 +162,7 @@ def load_flight(path: str | Path) -> FlightLog:
             header = next(reader)
         except StopIteration:
             raise ValueError(f"{path}: empty flight log (no header row)")
-        if header != LOG_COLUMNS:
+        if header not in (LOG_COLUMNS, _LEGACY_LOG_COLUMNS):
             raise ValueError(
                 f"{path}: unexpected flight-log schema.\n  expected {LOG_COLUMNS}\n  got      {header}"
             )
@@ -236,7 +248,7 @@ def flight_metrics(log: FlightLog, *, stable_tilt_deg: float = STABLE_TILT_DEG) 
     Returns:
         A JSON-native dict (all plain ``float``/``int``/``bool``/``list``). Keys: ``n_frames``,
         ``duration_s``, ``control_hz``, ``dt_median_s``, ``phases``, ``stable_hover``,
-        ``hover_quality``, ``vertical``, ``link``, ``battery``, ``sim2real``. Metrics degrade to
+        ``hover_quality``, ``vertical``, ``link``, ``battery``, ``sim2real``, ``height``. Metrics degrade to
         ``NaN``/empty rather than raising when a section has no data (e.g. a flight that never lifts).
     """
     n = log.n
@@ -365,6 +377,20 @@ def flight_metrics(log: FlightLog, *, stable_tilt_deg: float = STABLE_TILT_DEG) 
         "note": "props-on gyro sd/rho measured in the stable-hover window (motors loaded, level).",
     }
 
+    # --- measured height (bridge VL53L1X): the first non-integrated altitude channel.
+    # hover_* over the stable-hover window is the real height-hold number; coverage says how
+    # much of the airborne time the sensor actually returned valid range (dropout diagnostic).
+    tof = log.tof_m
+    tof_air = tof[airborne][np.isfinite(tof[airborne])]
+    tof_hov = tof[win][np.isfinite(tof[win])]
+    height = {
+        "present": bool(np.isfinite(tof).any()),
+        "coverage_airborne": float(np.isfinite(tof[airborne]).mean()) if airborne.any() else float("nan"),
+        "hover_mean_m": float(tof_hov.mean()) if tof_hov.size else float("nan"),
+        "hover_sd_m": float(tof_hov.std()) if tof_hov.size else float("nan"),
+        "max_m": float(tof_air.max()) if tof_air.size else float("nan"),
+    }
+
     return {
         "n_frames": n,
         "duration_s": float(t[-1] - t[0]) if n else float("nan"),
@@ -378,4 +404,5 @@ def flight_metrics(log: FlightLog, *, stable_tilt_deg: float = STABLE_TILT_DEG) 
         "link": link,
         "battery": battery,
         "sim2real": sim2real,
+        "height": height,
     }

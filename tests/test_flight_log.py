@@ -39,13 +39,17 @@ _VZ_STABLE = [0.0, -0.3, -0.6, -0.9, -1.2, -1.5, -1.8, -2.0, -2.0, -2.0]
 
 
 def _row(**over) -> list:
-    """One CSV row (24 cols) with hover-ish defaults; override any column by name."""
+    """One CSV row (25 cols) with hover-ish defaults; override any column by name.
+
+    ``tof_m`` defaults blank — the synthetic baseline flight predates the bridge ToF, so the
+    legacy code paths (∫vz_est replay z, height.present=False) stay exercised.
+    """
     base = {
         "t": 0.0, "obs_age_ms": 25, "roll": 0.0, "pitch": 0.0, "p": 0.0, "q": 0.0, "r": 0.0,
         "a_thr": -0.50, "a_wx": 0.0, "a_wy": 0.0, "a_wz": 0.0,
         "us_roll": 1500, "us_pitch": 1500, "us_thr": _IDLE_US, "us_yaw": 1500,
         "vbat": 4.10, "hover_eff": 1330, "vz_est": 0.0, "trim": 0.0,
-        "acc_x": 0, "acc_y": 0, "acc_z": 2048, "rpm_rms": 26000, "us_corr": 0,
+        "acc_x": 0, "acc_y": 0, "acc_z": 2048, "rpm_rms": 26000, "us_corr": 0, "tof_m": "",
     }
     base.update(over)
     return [base[c] for c in LOG_COLUMNS]
@@ -91,6 +95,21 @@ def test_load_flight_shape_and_empty_cell_coercion(flight_csv):
     assert log.vz_est[3] == 0.0                # first stable row is a real 0.0, not blank
     assert log.us_thr[0] == _IDLE_US
     assert log.control_hz == 50                # dt_median = 0.02
+
+
+def test_load_flight_accepts_legacy_24col(tmp_path):
+    # Pre-ToF flights wrote 24 columns (no tof_m): they must still load, with tof_m all-NaN.
+    p = tmp_path / "legacy.csv"
+    with open(p, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(LOG_COLUMNS[:-1])
+        for i in range(4):
+            w.writerow(_row(t=0.02 * i, us_thr=1300)[:-1])
+    log = load_flight(p)
+    assert log.n == 4
+    assert np.isnan(log.tof_m).all()
+    m = flight_metrics(log)
+    assert m["height"]["present"] is False
 
 
 def test_load_flight_rejects_bad_header(tmp_path):
@@ -171,6 +190,27 @@ def test_metrics_never_raise_on_never_lifted(tmp_path):
     assert m["vertical"]["vz_first_rail_t"] is None
 
 
+def test_height_metrics_from_tof(tmp_path):
+    # A ToF-equipped flight: measured height drives the metrics' height block.
+    p = tmp_path / "tof_flight.csv"
+    heights = [0.50, 0.55, 0.60, 0.55, 0.50, 0.52, 0.58, 0.54, 0.51, 0.55]
+    with open(p, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(LOG_COLUMNS)
+        for i in range(3):
+            w.writerow(_row(t=0.0, us_thr=_IDLE_US, tof_m=0.03))
+        for i, h in enumerate(heights):  # stable hover with a real height signal (one dropout)
+            w.writerow(_row(t=0.02 * (i + 1), roll=0.02, pitch=0.02, us_thr=1350,
+                            tof_m=h if i != 4 else ""))
+    m = flight_metrics(load_flight(p))
+    hm = m["height"]
+    assert hm["present"] is True
+    valid = [h for i, h in enumerate(heights) if i != 4]
+    assert hm["hover_mean_m"] == pytest.approx(np.mean(valid), rel=1e-6)
+    assert hm["max_m"] == pytest.approx(max(valid))
+    assert hm["coverage_airborne"] == pytest.approx(9 / 10)
+
+
 # --- flight_to_replay --------------------------------------------------------------------------
 def test_flight_to_replay_schema_and_extras(flight_csv):
     log = load_flight(flight_csv)
@@ -187,8 +227,25 @@ def test_flight_to_replay_schema_and_extras(flight_csv):
     # the real-flight extras land in the additive scene channel, as scalars.
     assert set(_FLIGHT_SCENE_EXTRAS).issubset(fr["scene"].keys())
     assert all(isinstance(fr["scene"][k], float) for k in _FLIGHT_SCENE_EXTRAS)
-    # pos is the vertical-only stub: x = y = 0, z is the vz integral.
+    # pos is the vertical-only stub: x = y = 0, z is the vz integral (no ToF in this flight).
     assert fr["pos"][0] == 0.0 and fr["pos"][1] == 0.0
+    assert meta["pos_z_measured"] is False
+
+
+def test_flight_to_replay_measured_z_from_tof(tmp_path):
+    # With tof_m samples in the log, replay z is the measured height (gaps interpolated).
+    p = tmp_path / "tof_flight.csv"
+    with open(p, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(LOG_COLUMNS)
+        w.writerow(_row(t=0.02, us_thr=1350, tof_m=0.40))
+        w.writerow(_row(t=0.04, us_thr=1350, tof_m=""))      # dropout: interpolated
+        w.writerow(_row(t=0.06, us_thr=1350, tof_m=0.60))
+    doc = flight_to_replay(load_flight(p))
+    assert doc["meta"]["pos_z_measured"] is True
+    zs = [f["pos"][2] for f in doc["episodes"][0]["frames"]]
+    assert zs == pytest.approx([0.40, 0.50, 0.60])
+    assert doc["episodes"][0]["frames"][0]["scene"]["tof_m"] == pytest.approx(0.40)
 
 
 def test_flight_to_replay_roundtrips_through_gzip(flight_csv, tmp_path):

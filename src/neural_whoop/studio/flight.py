@@ -31,6 +31,7 @@ from pathlib import Path
 from neural_whoop.bench.msp import (
     MSP_ANALOG,
     MSP_ATTITUDE,
+    MSP_BRIDGE_TOF,
     MSP_MODE_RANGES,
     MSP_MOTOR_TELEMETRY,
     MSP_RAW_IMU,
@@ -44,13 +45,13 @@ from neural_whoop.bench.msp import (
 from neural_whoop.pilot import FlightController, FlightParams, FlightSetupError, Policy
 from neural_whoop.pilot.config import BF_MAX_RATE_RP, GYRO_RAW_TO_DPS
 
-#: The 24-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
+#: The 25-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
 #: here so this module — like the pilot engine — imports without numpy).
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr",
+    "rpm_rms", "us_corr", "tof_m",
 ]
 
 #: Fields a browser ``params`` message may override on the WAITING controller.
@@ -361,6 +362,7 @@ class FakeFlightBridge(_MspEndpoint):
         self._gyro = (0, 0, 0)     # echoed from the commanded roll/pitch rate (crude flip model)
         self._roll = 0.0           # attitude integrated from the commanded rate (deg): a real flip
         self._pitch = 0.0
+        self._z = 0.0              # crude height integrated from throttle (the fake "ToF" source)
         self._i = 0
         self._vbat = 4.05
         self._armed = armed
@@ -405,6 +407,10 @@ class FakeFlightBridge(_MspEndpoint):
             aux1 = 2000 if self._armed else 1000    # ARM
             aux3 = 2000 if self._override else 1000  # MSP OVERRIDE
             self._resp(cmd, struct.pack("<8H", 1500, 1500, 1500, 1000, aux1, 1000, aux3, 1000))
+        elif cmd == MSP_BRIDGE_TOF:
+            # The bridge's downward VL53L1X: crude z from the throttle integral, floored at the
+            # ~3 cm the sensor sits above the ground when landed. Always valid + fresh.
+            self._resp(cmd, struct.pack("<HBHB", max(30, int(self._z * 1000)), 0, 12, 1))
         elif cmd == MSP_MOTOR_TELEMETRY:
             rpm = max(600, int((self._thr - 1000) * 45))
             p = bytes([4])
@@ -425,6 +431,10 @@ class FakeFlightBridge(_MspEndpoint):
                 self._gyro = (int(roll_dps / GYRO_RAW_TO_DPS), int(pitch_dps / GYRO_RAW_TO_DPS), 0)
                 self._roll = self._wrap180(self._roll + roll_dps * 0.02)   # fixed 50 Hz control tick
                 self._pitch = self._wrap180(self._pitch + pitch_dps * 0.02)
+            # Height: climb/sink proportional to throttle above/below a nominal hover point,
+            # integrated at the same fixed 50 Hz tick. Crude but monotone with the commands.
+            vz = max(-1.5, min(2.0, (self._thr - 1450) / 120.0))
+            self._z = max(0.0, min(3.0, self._z + vz * 0.02))
 
     def _read(self) -> bytes:
         d = bytes(self._out)

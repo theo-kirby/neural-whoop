@@ -101,7 +101,7 @@ LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr",
+    "rpm_rms", "us_corr", "tof_m",
 ]
 
 

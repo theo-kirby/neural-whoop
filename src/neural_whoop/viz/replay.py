@@ -459,7 +459,7 @@ _FLIGHT_ACTION_LIMITS = {
 #: Extra real-flight telemetry channels carried in the additive per-frame ``scene`` block (each is
 #: a scalar, so ``_build_frame`` keeps them as floats). These make the flight HUD-legible in Studio
 #: without touching the pose renderers (which are meaningless for a pos-stub IMU-only hover).
-_FLIGHT_SCENE_EXTRAS = ("vbat", "rpm_rms", "obs_age_ms", "vz_est", "us_corr", "hover_eff")
+_FLIGHT_SCENE_EXTRAS = ("vbat", "rpm_rms", "obs_age_ms", "vz_est", "us_corr", "hover_eff", "tof_m")
 
 
 def _euler_to_quat_xyzw(roll: float, pitch: float, yaw: float) -> list[float]:
@@ -489,10 +489,13 @@ def flight_to_replay(
     extras (``vbat``/``rpm_rms``/``obs_age_ms``/``vz_est``/``us_corr``/``hover_eff``) in the additive
     ``scene`` channel.
 
-    **Caveat — ``pos`` is a vertical-only stub:** ``pos=[0, 0, ∫vz_est]`` (the pilot never estimated
-    horizontal position), so the trajectory/FPV pose renderers stay meaningless for an IMU-only
-    hover. Use the telemetry/HUD views (``scene`` + attitude) only. ``vel=[0,0,vz_est]`` and
-    ``action_diffaero`` mirrors the normalized ``action`` (there is no DiffAero controller in the loop).
+    **Caveat — ``pos`` is vertical-only:** horizontal position was never estimated, so the
+    trajectory/FPV pose renderers stay meaningless. The z channel upgrades itself: when the log
+    carries measured ``tof_m`` samples (the bridge's downward VL53L1X), ``pos=[0, 0, tof]``
+    (gaps linearly interpolated, ``meta.pos_z_measured=True``); otherwise it falls back to the
+    old ``∫vz_est`` stub. Use the telemetry/HUD views (``scene`` + attitude) only.
+    ``vel=[0,0,vz_est]`` and ``action_diffaero`` mirrors the normalized ``action`` (there is no
+    DiffAero controller in the loop).
 
     Args:
         log: A :class:`FlightLog` (duck-typed: needs ``t``, ``col``, ``dt_median``, ``path``).
@@ -514,7 +517,19 @@ def flight_to_replay(
     step_dt = np.diff(t, prepend=t[0] if n else 0.0)
     step_dt = np.clip(step_dt, 0.0, 0.2)
     yaw = np.cumsum(np.nan_to_num(r, nan=0.0) * step_dt)  # integrated gyro-z -> heading
-    pos_z = np.cumsum(vz * step_dt)                        # vertical-only stub
+
+    # z: prefer the measured ToF height (bridge VL53L1X, NaN gaps interpolated, edges held);
+    # pre-ToF logs (or a dead sensor) fall back to the historical ∫vz_est stub.
+    try:
+        tof = np.asarray(log.col("tof_m"), dtype=np.float64)
+    except KeyError:
+        tof = np.full(n, np.nan)
+    finite = np.flatnonzero(np.isfinite(tof))
+    z_measured = bool(finite.size)
+    if z_measured:
+        pos_z = np.interp(np.arange(n, dtype=np.float64), finite.astype(np.float64), tof[finite])
+    else:
+        pos_z = np.cumsum(vz * step_dt)  # vertical-only stub
 
     meta = {
         "config": "pilot-flight",
@@ -527,21 +542,30 @@ def flight_to_replay(
         "sim_hz": control_hz,
         "dt": dt,
         "coordinate_frame": COORDINATE_FRAME,
-        "state_layout": STATE_LAYOUT + "  [REAL FLIGHT: pos is a vertical-only ∫vz_est stub]",
+        "state_layout": STATE_LAYOUT + (
+            "  [REAL FLIGHT: pos z is the measured ToF height; xy is zero]" if z_measured
+            else "  [REAL FLIGHT: pos is a vertical-only ∫vz_est stub]"),
         "action_layout": ACTION_LAYOUT,
         "action_limits": dict(_FLIGHT_ACTION_LIMITS),
         "unity_hint": UNITY_HINT,
         "source": "pilot-flight",
         "source_csv": str(getattr(log, "path", "")),
-        "pos_is_stub": True,  # trajectory/FPV renderers are meaningless — telemetry/HUD only
+        "pos_is_stub": True,  # xy never estimated: trajectory/FPV renderers stay meaningless
+        "pos_z_measured": z_measured,  # True: z is the bridge VL53L1X range, not an integral
         "scene_info": {"extras": list(_FLIGHT_SCENE_EXTRAS),
                        "note": "per-frame real-flight telemetry (vbat V, rpm rms, obs_age ms, "
-                               "vz_est m/s, us_corr µs, hover_eff µs)"},
+                               "vz_est m/s, us_corr µs, hover_eff µs, tof_m m)"},
     }
+    extras = {}
+    for k in _FLIGHT_SCENE_EXTRAS:
+        try:
+            extras[k] = log.col(k)
+        except KeyError:  # duck-typed pre-ToF logs
+            extras[k] = np.full(n, np.nan)
     recorder = RunRecorder(meta)
     recorder.begin_episode(1, gates=[], drone=0)
     for i in range(n):
-        scene = {k: (0.0 if not np.isfinite(log.col(k)[i]) else float(log.col(k)[i]))
+        scene = {k: (0.0 if not np.isfinite(extras[k][i]) else float(extras[k][i]))
                  for k in _FLIGHT_SCENE_EXTRAS}
         action = [float(log.col(c)[i]) for c in ("a_thr", "a_wx", "a_wy", "a_wz")]
         recorder.add_frame(

@@ -9,6 +9,12 @@ The organizing insight: **most of the near-term wins need no new hardware.** The
 and VL53L1X ToF are weeks out; almost everything below ships before they arrive, and the ones that
 don't are honest research bets, not blockers.
 
+> **Update 2026-07-13:** the VL53L1X arrived first (CJMCU-531 breakout) and is integrated as the
+> bridge's downward height sensor — `MSP_BRIDGE_TOF` on the xiao_bridge, `tof_m` in the flight CSV,
+> measured z in the flight-report replay (the ∫vz_est stub retired for ToF-equipped flights). See
+> `firmware/xiao_bridge/README.md` for wiring + bring-up. Telemetry-only for now (not in obs);
+> item 9's flow×height fusion still waits on the PMW3901.
+
 ## Where we are
 
 - **Blind hover (`hover_blind`, deploy `d50var_s8`)** — obs `[roll, pitch, p, q, r]×8`. Attitude is
@@ -78,7 +84,9 @@ don't are honest research bets, not blockers.
 8. **GRU / RMA recurrent tiny-policy.** RAPTOR shows ~2 k-param recurrent policies fly 32 g
    Betaflight quads and adapt in ms; frame-stacks are the weaker form of the same memory. Privileged
    critic + our existing DR seam as the latent (wind/rate-gain/thrust/latency).
-9. **When PMW3901 + VL53L1X arrive.** Plan A (matches all published Crazyflie practice): fuse
+9. **When PMW3901 + VL53L1X arrive.** *(VL53L1X arrived + integrated 2026-07-13 — bridge-answered
+   `MSP_BRIDGE_TOF`, `tof_m` telemetry, measured replay z; the fusion below still waits on the
+   PMW3901.)* Plan A (matches all published Crazyflie practice): fuse
    flow×height → v_body on the bridge, feed obs-v4's `vel_body` unchanged. Plan B (novel): raw flow +
    ToF + gyro in obs, DR over flow-scale/dropout — publishable if it works, our seam already supports it.
 10. **Measured end-to-end latency in DR.** Identify true latency incl. motor time constant (not just

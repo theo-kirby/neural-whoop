@@ -15,7 +15,7 @@ calls :meth:`abort`. The radio owns enable + kill; software only ever sets a clo
 RC stream is the only "stop" (Betaflight's ~300 ms MSP-freshness window hands control back).
 
 Pure stdlib (``math`` + ``time`` + ``enum``): imports zero torch/numpy. Human messages route through
-the injected ``log`` callback (the CLI passes ``print``; the web manager captures them); the 24-col
+the injected ``log`` callback (the CLI passes ``print``; the web manager captures them); the 25-col
 CSV row goes to ``on_log`` (``analysis/flight_log.py::LOG_COLUMNS`` order).
 """
 
@@ -140,7 +140,7 @@ class FlightController:
             override).
         clock: monotonic time source (injectable for tests).
         sleep: sleeper used only inside :meth:`setup`'s telemetry-acquire loop (injectable).
-        on_log: called with each 24-col CSV row (LOG_COLUMNS order); ``None`` disables logging.
+        on_log: called with each 25-col CSV row (LOG_COLUMNS order); ``None`` disables logging.
         log: called with each human-readable status line; ``None`` is silent (the CLI passes
             ``print`` to preserve its console output; the web manager captures the lines).
     """
@@ -393,7 +393,7 @@ class FlightController:
         now = self._clock() if now is None else now
         self.tick += 1
         self.tel.poll(now, want_analog=(self.tick % int(p.hz) == 0),
-                      want_rc=(self.tick % 5 == 0), want_rpm=True)
+                      want_rc=(self.tick % 5 == 0), want_rpm=True, want_tof=True)
         if self.tel.vbat:
             self.vfilt = self.tel.vbat if self.vfilt is None else 0.98 * self.vfilt + 0.02 * self.tel.vbat
 
@@ -643,11 +643,13 @@ class FlightController:
             self.n_sent += 1
         self.us = us
         self.hover_eff = hover_eff
+        tof_m = self.tel.height_m(now)
         self._on_log([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
                       *[f"{v:.4f}" for v in o], *[f"{v:.4f}" for v in act],
                       *us, self.tel.vbat or "", hover_eff,
                       f"{self.vz:.3f}", f"{self.thr_trim:+.4f}", *self.tel.imu["acc_raw"],
-                      f"{rpm_now:.0f}" if rpm_now else "", f"{self.us_corr:+.0f}"])
+                      f"{rpm_now:.0f}" if rpm_now else "", f"{self.us_corr:+.0f}",
+                      f"{tof_m:.3f}" if tof_m is not None else ""])
         return self._make_frame()
 
     # ------------------------------------------------------------------ frame / phase
@@ -687,6 +689,7 @@ class FlightController:
                 "p": self.p, "q": self.q, "r": self.r,
                 "vbat": self.tel.vbat, "rpm_rms": self._rpm_now,
                 "obs_age_ms": age_ms, "acc": acc,
+                "tof_m": self.tel.height_m(self._clock()),
             },
             "cmd": {"us_roll": self.us[0], "us_pitch": self.us[1],
                     "us_thr": self.us[2], "us_yaw": self.us[3]},

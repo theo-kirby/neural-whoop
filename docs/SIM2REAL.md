@@ -365,6 +365,28 @@ each trained GREEN — flip_success_rate 0.845 / 0.840, crash 0.000).
   through the inversion (vz freezes > 25° tilt); the flip is sub-second so drift is bounded, but a
   real flight must keep generous ceiling headroom.
 
+### Measured height — VL53L1X on the bridge (hardware, 2026-07-13)
+
+The CJMCU-531 (VL53L1X ToF) arrived ahead of the PMW3901 and is integrated as the bridge's
+**downward height sensor** — the first *measured* (non-IMU-integrated) state channel, and the
+direct answer to the vz_est-drift smoking gun above:
+
+- **Bridge (`firmware/xiao_bridge`):** sensor on the XIAO's stock I²C (D4/SDA, D5/SCL — free, the
+  UART lives on D9/D10), short-distance mode @ ~40 Hz. The bridge answers MSP cmd **192**
+  (`MSP_BRIDGE_TOF`, our bridge-local id) itself and never forwards it — transparency preserved for
+  everything else, no FC config touched, and the bridge still boots/proxies with no sensor wired.
+  Wiring + `bench.py --udp <ip> tof` bring-up in `firmware/xiao_bridge/README.md`.
+- **Pilot:** `Telemetry.poll(want_tof=True)` every tick; `tof_m` is CSV column 25 (validity-gated:
+  status 0 + age < 200 ms; pre-ToF 24-col logs still load). Telemetry-only — **not in obs, no
+  control coupling yet** (measure before you use).
+- **Flight report:** `flight_metrics()["height"]` (hover mean/sd, max, airborne coverage) and the
+  replay's `pos` z becomes the **measured** height (`meta.pos_z_measured=true`; the ∫vz_est
+  vertical-only stub remains the fallback). The ceiling-crash class of flight above would now show
+  its true altitude trace.
+- **Next uses (in order):** height ground-truth for vz_est error characterization → a height-hold
+  damper for the blind pilot → obs channel for a height-aware hover retrain → flow×height velocity
+  fusion when the PMW3901 lands (ROADMAP #9).
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 
