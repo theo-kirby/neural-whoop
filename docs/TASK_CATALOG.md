@@ -228,6 +228,21 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   [64,64], re-opening the d50var capacity contention; a width arm is the obvious next probe).
   **Not deploy-ready until the leveling regression is fixed** — a real flight would flyaway
   sideways ~1-in-4 at the honest noise floor. `runs/hover_tof_air65/probes.json` has the battery.
+- **Leveling-regression ladder (4 arms, 2026-07-13 — frontier mapped, compromise shipped):** four
+  one-factor arms swept a **clean-trim ↔ noise-robustness frontier** with no gate-dominant point
+  (deploy gates: no-DR z err ≤0.05 m; M1-live ≥98% @1.0×, ≥85% @0.8–1.2×; m2sensor ≥42%; zero
+  vertical exits — all four batteries in `runs/hover_tof_air65_*/probes.json`):
+  `w128` ([128,128]) recovers nominal (1.0× 75.2→**98.9%** — capacity contention CONFIRMED) but
+  halves m2sensor (42→20.5%); `w128u15` (+`upright_scale 1.5`) buys most of the tail back
+  (m2sensor 36.5%, best-of-line hover stillness 0.22° tilt) at 95.4% @1.0×; `w192u15` ([192,192])
+  is the first m2sensor pass (**50.1%**) but loses the setpoint (z err 0.120 m); the amp-curriculum
+  arm (`obs_noise_amp_curriculum`, RED) collapses nominal to 69.7% with no tail gain — easing into
+  the noise prevents the amplitude-invariant trim from forming. Zero floor/ceiling exits in every
+  probe of every arm: the ToF altitude win is robust to all of it. **Shipped (user decision):
+  `hover_tof_air65_w128u15`** as best compromise — deploy target 1.0 m (pilot default), weights +
+  selftest parity 6.4e-08 + fake-bridge full flight OK; the ≥1.2×-amplitude tail risk is covered by
+  bridge IMU oversampling (effective noise <1.0×) plus the `tof_lost` abort and radio kill. First
+  real ToF flight recalibrates the placeholder h-noise DR from CSV cols 25/26.
 
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,

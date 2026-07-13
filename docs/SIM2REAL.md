@@ -399,6 +399,20 @@ direct answer to the vz_est-drift smoking gun above:
   refuses to fly without a live ToF and >1 s in-flight silence aborts (`tof_lost`); the external
   climb damper turns OFF (the policy owns altitude; RPM governor stays). The exact fed channel is
   logged as CSV col 26 `h_err`, so `sim_vs_real.py` replays it byte-exactly.
+- **Leveling ladder + shipped deploy arm (2026-07-13):** four one-factor arms answered the
+  regression and mapped a clean-trim ↔ noise-robustness frontier (full record:
+  `docs/TASK_CATALOG.md`; batteries in `runs/hover_tof_air65_*/probes.json`). **Shipped (user
+  decision): `hover_tof_air65_w128u15`** ([128,128] + `upright_scale 1.5`) — cleanest hover of the
+  line (no-DR tilt 0.22°, z err 0.047 m, survival 100%), M1-live 100/100/95.4/64.9% at
+  0.5/0.8/1.0/1.2×, m2sensor 36.5%; the ≥1.2× tail risk is judged covered by bridge IMU
+  oversampling + the `tof_lost` abort + the radio kill. **Deploy target is now 1.0 m** (the
+  `FlightParams.target_height_m` / `--target-height` default; inside the trained 0.5–1.1 m band,
+  VL53L1X short-mode-valid). Deploy package verified: `policy_weights.json` (23.3k params, ~1 ms/
+  step pure-Python), selftest parity 6.4e-08 + corrective signs OK, fake-bridge full
+  WAITING→…→RELEASED flight at 1.0 m with `h_err = 1.0 − tof·cosr·cosp` byte-exact in CSV cols
+  25/26. Bench handoff (hardware-gated, user flies):
+  `python3 scripts/pilot.py --udp <bridge-ip> --weights runs/hover_tof_air65_w128u15/policy_weights.json fly --takeoff --target-height 1.0 --seconds 15 --ack-props-on`
+  — the first real ToF flight also calibrates the placeholder h-noise DR from cols 25/26.
 - **Next uses:** height ground-truth for vz_est error characterization → flow×height velocity
   fusion when the PMW3901 lands (ROADMAP #9).
 
