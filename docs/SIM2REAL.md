@@ -382,6 +382,12 @@ direct answer to the vz_est-drift smoking gun above:
   replay's `pos` z becomes the **measured** height (`meta.pos_z_measured=true`; the ∫vz_est
   vertical-only stub remains the fallback). The ceiling-crash class of flight above would now show
   its true altitude trace.
+- **Obs-channel retrain result (3.2B, same day): ALTITUDE SOLVED in sim** — no-DR `mean_z_error`
+  0.651→0.043 m vs d50var_s8, no-DR survival 100% (parent 0%), M2-sensor 29.8→42.1%, zero
+  floor/ceiling exits across the whole probe battery. Regression found + attributed: M1-live
+  leveling 99.9→75.2% at 1.0×, all fast horizontal exits; ToF channel/noise exonerated by
+  knockouts (gyro-noise response regressed — capacity contention suspected). **Do not fly this
+  checkpoint**; see `docs/TASK_CATALOG.md` + `runs/hover_tof_air65/probes.json`.
 - **Obs channel (2026-07-13, `hover_tof`):** the height-aware hover retrain is implemented — task
   `hover_tof` (obs-6 `[roll,pitch,p,q,r,height_err]` × stack 8; `configs/hover_tof_air65.yaml` =
   the flight-proven d50var_s8 + the channel, setpoint band lowered into the sensor's 0.5–1.1 m

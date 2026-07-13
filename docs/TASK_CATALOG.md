@@ -216,8 +216,18 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   deploy-relevant bar is M1-live-style survival with the altitude now *closed-loop* — the sim Δ
   to beat is `d50var_s8`'s open-loop z drift.
 - **Status:** implemented (`tasks/hover_tof.py`, `configs/hover_tof_air65.yaml` — d50var_s8 + ONE
-  factor: the height channel, setpoint band lowered into the sensor band 0.5–1.1 m). Training run
-  pending.
+  factor: the height channel, setpoint band lowered into the sensor band 0.5–1.1 m).
+- **Result (3.2B `hover_tof_air65`, 2026-07-13 — ALTITUDE SOLVED, leveling regressed):**
+  no-DR `mean_z_error` **0.651 → 0.043 m** (−93% vs the parent), no-DR pure-hold 30 s survival
+  **100%** (parent 0% — its noise-tuned trim fails a clean world), M2-sensor 29.8→**42.1%**, and
+  **zero floor/ceiling exits anywhere in the probe battery** (`scripts/exit_probe.py`) — the
+  vertical loop is closed. BUT M1-live leveling robustness regressed: 99.9→**75.2%** at 1.0×
+  (curve 99.9/82/75/69% at 0.5/0.8/1.0/1.2×), ALL failures fast horizontal departures (median
+  1.68 s); knockouts exonerate the ToF channel and its noise — the gyro/attitude-noise response
+  is what regressed (hypothesis: the 6th channel × stack 8 grew the input 40→48 on the same
+  [64,64], re-opening the d50var capacity contention; a width arm is the obvious next probe).
+  **Not deploy-ready until the leveling regression is fixed** — a real flight would flyaway
+  sideways ~1-in-4 at the honest noise floor. `runs/hover_tof_air65/probes.json` has the battery.
 
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,

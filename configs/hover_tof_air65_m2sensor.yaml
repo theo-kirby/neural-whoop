@@ -1,0 +1,60 @@
+# hover_tof_air65_m2sensor: M2-SENSOR eval twin for hover_tof_air65 — the deploy-honest sensor
+# gauntlet (same construction as hover_blind_air65_m2sensor_d50_s8): per-channel obs noise +
+# per-episode bias + rate_gain 0.15 + action latency 5, with the unwinnable-for-blind kinematics
+# still excluded (thrust 0, wind 0, impulses 0). The parent d50var_s8 scores 29.8% here (its
+# sole residual killer = latency); hover_tof adds the height channel + its noise/bias.
+# Use with survival_probe.py/eval.py --dr against runs/hover_tof_air65 checkpoints.
+
+run:
+  name: hover_tof_air65_m2sensor
+
+task:
+  name: hover_tof
+  episode_len: 1500
+  pos_sigma: 0.6
+  pos_scale: 1.0
+  dist_penalty: 0.2
+  upright_scale: 1.0
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.35
+  arena_radius: 3.5
+  z_min: 0.5
+  z_max: 1.1
+  hold_fraction: 0.5
+  spawn_offset: 1.0
+  spawn_vel: 1.0
+  spawn_tilt_deg: 30.0
+  spawn_rate: 2.0
+  tof_rate_hz: 40.0
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+
+env:
+  n_envs: 2048
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  wind_accel_mps2: 0.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.0       # trim calibrated: the honesty split
+  obs_noise_std: 0.0
+  #                        [roll,  pitch, p,     q,    r,    h_err]  (rad, rad/s, m)
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.02]
+  obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05, 0.03]
+  action_latency_steps: 5
+  impulse_prob: 0.0
+  impulse_vel_mps: 2.5
+  impulse_rate_rps: 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
