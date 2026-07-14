@@ -1,8 +1,10 @@
-// Bench tab: the always-on real-drone dashboard. Connects to /ws/flight (the FlightManager is
+// Real tab: the always-on real-drone dashboard. Connects to /ws/flight (the FlightManager is
 // always running on the bench controller), shows live telemetry + flight metrics, and drives the
-// software Start / Abort. Mirrors live.js's shape (createBench returns {onShow,tick,resize,
-// disconnect}); a single real-drone glyph is oriented by the telemetry attitude, and (Phase 4) a
-// `b_sim` toggle opens a parallel /ws/live sim of the same policy in a split of the view.
+// software Start / Abort. createBench returns {onShow,tick,resize,disconnect}; a single real-drone
+// glyph is oriented by the telemetry attitude, and a `b_sim` toggle opens a parallel /ws/live sim
+// of the same policy in a split of the view. A CALIBRATION mode (Betaflight-setup style) zooms the
+// camera onto the glyph so you can tilt the drone by hand and watch the on-screen rotation track,
+// with rolling attitude / gyro / battery+throttle / link-age charts in the sidebar.
 //
 // SAFETY: the Start button is a SOFTWARE clock only, and is enabled ONLY when telemetry shows the
 // drone ARMED + MSP-OVERRIDE engaged on the radio. The radio still owns enable + instant kill
@@ -12,11 +14,14 @@
 import * as THREE from "three";
 import { createScene } from "./scene.js";
 import { makeDrone } from "./drone-model.js";
+import { frameDrone } from "./cameras.js";
 
-const TREND = 180;                     // rolling trend length (frames) for the tilt/vz mini-chart
+const TREND = 180;                     // rolling trend length (frames) for every mini-chart
 const FLYING = new Set(["countdown", "seek", "rise", "hover", "flip", "land"]);
 const SIM_OFFSET = 2.0;                // the parallel-sim drone sits this far +x of the real one
 const SEED_HINTS = ["hover_blind_air65_d50var_s8", "hover_blind", "hover"];  // parallel-sim policy
+const RAD2DEG = 180 / Math.PI;
+const GREY = "#e0e0e0", CYAN = "#6ff0f0", AMBER = "#ffd23f";
 
 export function createBench({ mount, panel, toast, getPolicies }) {
   const view = createScene(mount);
@@ -25,8 +30,12 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   let ws = null;
   let connected = false;
   let lastPhase = "waiting";           // Flip doubles as a starter when pressed while WAITING
+  let cal = false;                     // calibration mode (close-up attitude check)?
   const tiltHist = [];
   const vzHist = [];
+  // Calibration ring buffers — one per plotted signal (filled only while cal mode is on).
+  const calHist = { roll: [], pitch: [], yaw: [], p: [], q: [], r: [], vbat: [], thr: [], age: [] };
+  const push = (buf, v) => { buf.push(v); if (buf.length > TREND) buf.shift(); };
 
   // The real drone: a single glyph hovering at origin, oriented live by the telemetry attitude.
   const drone = makeDrone(0xdcdcdc);
@@ -104,15 +113,73 @@ export function createBench({ mount, panel, toast, getPolicies }) {
       row("rpm", (t.rpm_rms != null) ? `${Math.round(t.rpm_rms)}` : "—"),
     ].join("");
 
-    // Live attitude: orient the glyph by sim-convention roll/pitch (radians).
-    if (t.roll != null) drone.quaternion.setFromEuler(new THREE.Euler(t.roll, t.pitch || 0, 0, "XYZ"));
+    // Live attitude: orient the glyph by sim-convention roll/pitch/yaw (radians). "ZYX" applies
+    // yaw about sim z first, then pitch, then roll — the aerospace composition, so a hand-yawed
+    // drone still rolls about its own (yawed) body axes on screen.
+    if (t.roll != null) {
+      drone.quaternion.setFromEuler(new THREE.Euler(t.roll, t.pitch || 0, t.yaw || 0, "ZYX"));
+    }
 
-    // Rolling tilt / vz trend.
-    if (m.tilt_deg != null) { tiltHist.push(m.tilt_deg); if (tiltHist.length > TREND) tiltHist.shift(); }
-    if (m.vz_est != null) { vzHist.push(m.vz_est); if (vzHist.length > TREND) vzHist.shift(); }
-    drawTrend();
+    // Rolling tilt / vz trend (dashboard).
+    if (m.tilt_deg != null) push(tiltHist, m.tilt_deg);
+    if (m.vz_est != null) push(vzHist, m.vz_est);
+
+    if (cal) onCalFrame(msg, t, m, st, link);
+    else drawTrend();
 
     if (msg.events && msg.events.length) $("b_msg").textContent = msg.events[msg.events.length - 1].trim();
+  }
+
+  // ---- calibration mode ----------------------------------------------------------------
+  // Close-up attitude check: zoom onto the glyph, tilt the drone by hand, watch the rotation +
+  // four rolling signal charts track live. Camera restores to the default wide view on exit.
+  function setCal(on) {
+    cal = on;
+    $("b_dash").classList.toggle("hidden", on);
+    $("b_calpanel").classList.toggle("hidden", !on);
+    if (on) {
+      frameDrone(view, [drone.position.x, drone.position.y, drone.position.z], 1.1);
+    } else {
+      view.camera.position.set(8, 7, 11);          // the scene factory's default wide view
+      view.controls.target.set(0, 0, 0);
+      view.controls.update();
+    }
+  }
+
+  function onCalFrame(msg, t, m, st, link) {
+    $("c_link").textContent = `link: ${link}`;
+    dot($("c_armed"), !!st.armed);
+    dot($("c_override"), !!st.override_on);
+    const deg = (v) => (v == null || Number.isNaN(v)) ? "—" : (v * RAD2DEG).toFixed(1);
+    $("c_roll").textContent = deg(t.roll);
+    $("c_pitch").textContent = deg(t.pitch);
+    $("c_yaw").textContent = deg(t.yaw);
+    if (t.roll != null) { push(calHist.roll, t.roll * RAD2DEG); push(calHist.pitch, (t.pitch || 0) * RAD2DEG); push(calHist.yaw, (t.yaw || 0) * RAD2DEG); }
+    if (t.p != null) { push(calHist.p, t.p); push(calHist.q, t.q || 0); push(calHist.r, t.r || 0); }
+    if (t.vbat != null) push(calHist.vbat, t.vbat);
+    if (msg.cmd && msg.cmd.us_thr != null) push(calHist.thr, msg.cmd.us_thr);
+    const age = m.link_age_ms ?? t.obs_age_ms;
+    if (age != null) push(calHist.age, age);
+    // Symmetric auto-scale for the signed signals so level reads as a centered line.
+    const attLim = Math.max(20, ...calHist.roll.map(Math.abs), ...calHist.pitch.map(Math.abs), ...calHist.yaw.map(Math.abs));
+    const gyroLim = Math.max(2, ...calHist.p.map(Math.abs), ...calHist.q.map(Math.abs), ...calHist.r.map(Math.abs));
+    drawSeries($("c_att"), [
+      { data: calHist.roll, color: GREY, lo: -attLim, hi: attLim },
+      { data: calHist.pitch, color: CYAN, lo: -attLim, hi: attLim },
+      { data: calHist.yaw, color: AMBER, lo: -attLim, hi: attLim },
+    ]);
+    drawSeries($("c_gyro"), [
+      { data: calHist.p, color: GREY, lo: -gyroLim, hi: gyroLim },
+      { data: calHist.q, color: CYAN, lo: -gyroLim, hi: gyroLim },
+      { data: calHist.r, color: AMBER, lo: -gyroLim, hi: gyroLim },
+    ]);
+    drawSeries($("c_batt"), [
+      { data: calHist.vbat, color: GREY, lo: 3.2, hi: 4.4 },
+      { data: calHist.thr, color: CYAN, lo: 1000, hi: 2000 },
+    ]);
+    drawSeries($("c_linkage"), [
+      { data: calHist.age, color: GREY, lo: 0, hi: Math.max(50, ...calHist.age) },
+    ]);
   }
 
   function onReport(msg) {
@@ -132,9 +199,10 @@ export function createBench({ mount, panel, toast, getPolicies }) {
 
   function row(k, v) { return `<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`; }
 
-  // ---- tilt/vz trend chart ----------------------------------------------------------
-  function drawTrend() {
-    const canvas = $("b_trend");
+  // ---- rolling mini-charts ------------------------------------------------------------
+  // N overlaid series on one canvas, each with its own [lo,hi] scale (so e.g. vbat and throttle
+  // share a chart at native units). Rolling x: TREND frames wide.
+  function drawSeries(canvas, series) {
     if (!canvas) return;
     const dpr = Math.min(devicePixelRatio || 1, 2);
     const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -143,8 +211,8 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const line = (data, color, lo, hi) => {
-      if (data.length < 2) return;
+    for (const { data, color, lo, hi } of series) {
+      if (data.length < 2) continue;
       ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.beginPath();
       data.forEach((v, i) => {
         const x = (i / (TREND - 1)) * w;
@@ -152,9 +220,14 @@ export function createBench({ mount, panel, toast, getPolicies }) {
         i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
       });
       ctx.stroke();
-    };
-    line(tiltHist, "#e0e0e0", 0, Math.max(10, ...tiltHist));           // tilt: 0..max° (grey)
-    line(vzHist, "#6ff0f0", -2, 2);                                     // vz: -2..2 m/s (cyan)
+    }
+  }
+
+  function drawTrend() {
+    drawSeries($("b_trend"), [
+      { data: tiltHist, color: GREY, lo: 0, hi: Math.max(10, ...tiltHist) },  // tilt: 0..max°
+      { data: vzHist, color: CYAN, lo: -2, hi: 2 },                            // vz: -2..2 m/s
+    ]);
   }
 
   // ---- controls ---------------------------------------------------------------------
@@ -177,6 +250,8 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   });
   $("b_abort").addEventListener("click", () => send({ type: "abort" }));
   if ($("b_sim")) $("b_sim").addEventListener("change", () => toggleSim($("b_sim").checked));
+  $("b_cal").addEventListener("click", () => setCal(true));
+  $("c_exit").addEventListener("click", () => setCal(false));
 
   // ---- Phase 4: parallel CPU-torch sim of the same policy --------------------------
   async function toggleSim(on) {

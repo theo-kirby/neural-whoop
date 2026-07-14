@@ -391,10 +391,12 @@ class FakeFlightBridge(_MspEndpoint):
         elif cmd == MSP_ATTITUDE:
             self._i += 1
             # Integrated attitude (a commanded flip really rolls the airframe over) + a gentle idle
-            # wobble so a plain hover still looks alive.
+            # wobble so a plain hover still looks alive. Yaw wobbles too (whole deg per MSP) so the
+            # Studio's calibration charts show all three attitude channels moving with no hardware.
             roll = self._wrap180(self._roll + 2.5 * math.sin(self._i * 0.05))
             pitch = self._wrap180(self._pitch + 2.0 * math.cos(self._i * 0.037))
-            self._resp(cmd, struct.pack("<hhh", int(roll * 10), int(pitch * 10), 0))
+            yaw = self._wrap180(8.0 * math.sin(self._i * 0.013))
+            self._resp(cmd, struct.pack("<hhh", int(roll * 10), int(pitch * 10), int(yaw)))
         elif cmd == MSP_RAW_IMU:
             az = 2048 + max(0, (self._thr - 1300)) * 3   # acc-z rises with throttle -> liftoff
             gx, gy, _gz = self._gyro                       # echoed commanded rate -> the flip spins

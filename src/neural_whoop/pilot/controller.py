@@ -720,6 +720,10 @@ class FlightController:
         age_ms = self.age * 1e3 if math.isfinite(self.age) else None
         acc = list(self.tel.imu["acc_raw"]) if self.tel.imu else [0, 0, 0]
         tilt_deg = math.degrees(math.hypot(self.roll, self.pitch))
+        # Yaw for the Studio's calibration view, sim-signed (MSP heading is compass-positive =
+        # nose-right; sim yaw about +z is nose-left, so negate). Not part of the policy obs; with
+        # no magnetometer it's the FC's gyro-integrated heading (tracks rotation, drifts slowly).
+        yaw = -math.radians(self.tel.att["yaw_deg"]) if self.tel.att else 0.0
         return {
             "type": "frame",
             "phase": phase.value,
@@ -727,7 +731,7 @@ class FlightController:
             "t": self._t_air,
             "t_flight": self._t_fl,
             "telemetry": {
-                "roll": self.roll, "pitch": self.pitch,
+                "roll": self.roll, "pitch": self.pitch, "yaw": yaw,
                 "p": self.p, "q": self.q, "r": self.r,
                 "vbat": self.tel.vbat, "rpm_rms": self._rpm_now,
                 "obs_age_ms": age_ms, "acc": acc,

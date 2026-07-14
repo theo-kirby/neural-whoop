@@ -1,13 +1,14 @@
-// Studio app shell: a Player tab (pick policy + course + drone count, fly a fixed-course rollout on
-// the GPU, watch the v2 replay in a hero-layout viewport that matches the exported MP4) and an
-// Editor tab (author a gate course). The viewport composites a wide main shot with three fixed left
-// cells — FPV (top), top-down (middle), stats HUD (bottom) — via scissor passes, then exports the
-// byte-identical hero MP4 server-side through the sibling nw-viz capture.
+// Studio app shell: two tabs. SIMULATION (pick policy + course + drone count, fly a fixed-course
+// rollout on the GPU, watch the v2 replay in a hero-layout viewport that matches the exported MP4;
+// an ✎ Edit-course toggle overlays the gate editor on the same scene) and REAL (the always-on
+// bench dashboard flying the actual drone, with a calibration mode). The sim viewport composites a
+// wide main shot with three fixed left cells — FPV (top), top-down (middle), stats HUD (bottom) —
+// via scissor passes, then exports the byte-identical hero MP4 server-side through nw-viz capture.
+// A draggable divider between the scene and the sidebar resizes both (persisted).
 
 import { createScene } from "./scene.js";
 import { Playback } from "./playback.js";
 import { createEditor } from "./editor.js";
-import { createLive } from "./live.js";
 import { createBench } from "./bench.js";
 import { layoutInsets, layoutInsetsCss } from "./layout.js";
 import { getPolicies, getCourses, getScalars, postRollout, exportVideo, runFileUrl } from "./api.js";
@@ -29,6 +30,8 @@ function toast(msg, isErr = false) {
 // ---- scene + playback ---------------------------------------------------------------
 const view = createScene(document.querySelector(".view3d"));
 const playback = new Playback(view);
+let activeTab = "sim";              // "sim" | "real"
+let simMode = "play";               // Simulation sub-mode: "play" (default) | "edit" (course editor)
 let fpvOn = true, topOn = true;     // FPV + top-down hero cells shown by default
 let sceneInfo = {};                 // meta.scene_info of the loaded run (command labels, standoff…)
 let currentRunPath = null;          // run_path of the loaded replay (the export target)
@@ -86,9 +89,9 @@ function compositeHero() {
   if (topOn && playback.actors.length) view.renderInset(playback.topCamera, insets.top);
 }
 
-// Show/hide the hero boxes per the FPV/top toggles + active tab.
+// Show/hide the hero boxes per the FPV/top toggles + active tab/mode (play mode only).
 function syncHeroBoxes() {
-  const player = activeTab === "player";
+  const player = activeTab === "sim" && simMode === "play";
   heroStatsEl.classList.toggle("hidden", !player);
   heroFpvEl.classList.toggle("hidden", !player || !fpvOn);
   heroTopEl.classList.toggle("hidden", !player || !topOn);
@@ -404,6 +407,7 @@ $("run").addEventListener("click", async () => {
 });
 
 function showRun(doc, summary) {
+  setSimMode("play");                    // a fresh replay always lands in the player view
   const meta = doc.meta || {};
   sceneInfo = meta.scene_info || {};
   $("title").textContent = `${summary.course} · ${meta.policy ?? ""}`;
@@ -423,28 +427,21 @@ function showRun(doc, summary) {
   syncPlayBtn();
 }
 
-// ---- editor tab ---------------------------------------------------------------------
+// ---- course editor (edit mode of the Simulation tab) ---------------------------------
+// Shares the player's `view` — its gizmo/gates/ring live in one group that setSimMode toggles.
 const editor = createEditor({
-  mount: document.querySelector(".view3d-editor"),
-  panel: document.getElementById("editor-controls"),
+  view,
+  panel: document.getElementById("sim-controls"),
   toast,
-  onSaved: refreshCourses,               // refresh the Player's course picker after a save
+  onSaved: refreshCourses,               // refresh the course picker after a save
   onFly: (stem) => {
-    switchTab("player");
+    setSimMode("play");
     $("course").value = stem;            // option value == saved stem; refreshCourses ran first
     $("run").click();
   },
 });
 
-// ---- live tab -----------------------------------------------------------------------
-const live = createLive({
-  mount: document.querySelector(".view3d-live"),
-  panel: document.getElementById("live-controls"),
-  toast,
-  getPolicies,
-});
-
-// ---- bench tab (always-on real drone) -----------------------------------------------
+// ---- real tab (always-on bench drone) -------------------------------------------------
 const bench = createBench({
   mount: document.querySelector(".view3d-bench"),
   panel: document.getElementById("bench-controls"),
@@ -452,52 +449,89 @@ const bench = createBench({
   getPolicies,
 });
 
-// ---- tab routing --------------------------------------------------------------------
-let activeTab = "player";
+// ---- Simulation play/edit mode --------------------------------------------------------
+function setSimMode(mode) {
+  simMode = mode;
+  const edit = mode === "edit";
+  for (const el of document.querySelectorAll("#sim-controls .edit-only")) el.classList.toggle("hidden", !edit);
+  for (const el of document.querySelectorAll("#sim-controls .play-only")) el.classList.toggle("hidden", edit);
+  $("editmode").textContent = edit ? "✓ Done editing" : "✎ Edit course";
+  editor.setActive(edit);
+  syncHeroBoxes();
+  // Back to play with a replay loaded: restore the hero framing the edit orbiting disturbed.
+  if (!edit && playback.episode) playback.frameToCamera();
+}
+$("editmode").addEventListener("click", () => setSimMode(simMode === "edit" ? "play" : "edit"));
+
+// ---- tab routing ----------------------------------------------------------------------
+const bench_mount = () => document.querySelector(".view3d-bench");
 function switchTab(name) {
   activeTab = name;
   for (const b of document.querySelectorAll(".tabbar .tab")) b.classList.toggle("active", b.dataset.tab === name);
-  document.getElementById("player-controls").classList.toggle("hidden", name !== "player");
-  document.getElementById("bench-controls").classList.toggle("hidden", name !== "bench");
-  document.getElementById("live-controls").classList.toggle("hidden", name !== "live");
-  document.getElementById("editor-controls").classList.toggle("hidden", name !== "editor");
-  view.mount.classList.toggle("hidden", name !== "player");
-  bench_mount().classList.toggle("hidden", name !== "bench");
-  live_mount().classList.toggle("hidden", name !== "live");
-  editor_mount().classList.toggle("hidden", name !== "editor");
+  document.getElementById("sim-controls").classList.toggle("hidden", name !== "sim");
+  document.getElementById("bench-controls").classList.toggle("hidden", name !== "real");
+  view.mount.classList.toggle("hidden", name !== "sim");
+  bench_mount().classList.toggle("hidden", name !== "real");
   syncHeroBoxes();
-  if (name === "player") view.resize();
-  else if (name === "bench") bench.onShow();
-  else if (name === "live") live.onShow();
-  else editor.onShow();
+  if (name === "sim") view.resize();
+  else bench.onShow();
 }
-const editor_mount = () => document.querySelector(".view3d-editor");
-const live_mount = () => document.querySelector(".view3d-live");
-const bench_mount = () => document.querySelector(".view3d-bench");
 for (const b of document.querySelectorAll(".tabbar .tab")) {
   b.addEventListener("click", () => switchTab(b.dataset.tab));
 }
 
-// ---- single animation loop ----------------------------------------------------------
+// ---- draggable sidebar divider --------------------------------------------------------
+// The sidebar width is a CSS var; dragging the divider resizes both panels and persists the width.
+const SIDEBAR_MIN = 280, SIDEBAR_MAX = 640;
+const dividerEl = document.getElementById("divider");
+function setSidebarWidth(px) {
+  document.documentElement.style.setProperty("--sidebar-w", `${px}px`);
+}
+{
+  const saved = Number(localStorage.getItem("nw_sidebar_w"));
+  if (saved >= SIDEBAR_MIN && saved <= SIDEBAR_MAX) setSidebarWidth(saved);
+}
+function onLayoutChange() {
+  if (activeTab === "sim") view.resize();
+  else bench.resize();
+  syncHeroBoxes();
+  if ($("chartfold").open) renderCharts();
+}
+let dividerW = null;                     // px while dragging, else null
+dividerEl.addEventListener("pointerdown", (e) => {
+  dividerEl.setPointerCapture(e.pointerId);
+  dividerEl.classList.add("dragging");
+  dividerW = Number(getComputedStyle(document.getElementById("sidebar")).width.replace("px", ""));
+});
+dividerEl.addEventListener("pointermove", (e) => {
+  if (dividerW === null) return;
+  dividerW = Math.max(SIDEBAR_MIN, Math.min(SIDEBAR_MAX, Math.round(innerWidth - e.clientX)));
+  setSidebarWidth(dividerW);
+  onLayoutChange();
+});
+const endDrag = () => {
+  if (dividerW === null) return;
+  localStorage.setItem("nw_sidebar_w", String(dividerW));
+  dividerW = null;
+  dividerEl.classList.remove("dragging");
+  onLayoutChange();
+};
+dividerEl.addEventListener("pointerup", endDrag);
+dividerEl.addEventListener("pointercancel", endDrag);
+
+// ---- single animation loop ------------------------------------------------------------
 let last = performance.now();
 function loop(now) {
   requestAnimationFrame(loop);
   const delta = Math.min(0.1, (now - last) / 1000);
   last = now;
-  if (activeTab === "editor") { editor.tick(delta); return; }
-  if (activeTab === "live") { live.tick(delta); return; }
-  if (activeTab === "bench") { bench.tick(delta); return; }
+  if (activeTab === "real") { bench.tick(delta); return; }
+  if (simMode === "edit") { view.render(); return; }   // edit mode: plain wide render, no insets
   playback.tick(delta);
   compositeHero();
 }
 requestAnimationFrame(loop);
-addEventListener("resize", () => {
-  if (activeTab === "player") view.resize();
-  else if (activeTab === "live") live.resize();
-  else if (activeTab === "bench") bench.resize();
-  else editor.resize();
-  if ($("chartfold").open) renderCharts();
-});
+addEventListener("resize", onLayoutChange);
 
 view.resize();
 syncHeroBoxes();

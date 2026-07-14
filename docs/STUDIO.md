@@ -1,31 +1,31 @@
 # neural-whoop Studio
 
-An interactive browser viewer with four tabs:
+An interactive browser viewer with **two tabs** — a sim-to-real pair:
 
-- **Bench** — the **always-on real-drone dashboard**. Open the page and the bench controller is
+- **Simulation** — pick a saved policy, a course, and a drone count, hit **Run**, and watch the
+  policy fly in a **hero-layout viewport that matches the exported MP4**: a wide 3/4 main shot fills
+  the view, with three fixed 4:3 cells stacked down the left edge — **FPV** (top), **top-down**
+  (middle), **stats HUD** (bottom). If you like what you see, **Export hero MP4** renders the
+  byte-identical clip server-side. An **✎ Edit course** toggle overlays the gate-course editor on
+  the *same* scene (click the ground to drop a gate, drag a translate gizmo to move it incl. height,
+  edit a numeric gate list), with **live flyability validation**, **Save** to
+  `assets/courses/_web/`, and **Save & fly** to test it immediately.
+- **Real** — the **always-on real-drone dashboard**. Open the page and the bench controller is
   already connected to the Air65 II over the WiFi MSP bridge; click **Start** to run the
   3·2·1 → liftoff → hover → land sequence on the *real* drone, watch live telemetry + flight metrics
   + a real-drone attitude glyph, and optionally toggle a **parallel CPU-torch sim** of the same
-  policy flying beside it. See below.
-- **Player** — pick a saved policy, a course, and a drone count, hit **Run**, and watch the policy
-  fly in a **hero-layout viewport that matches the exported MP4**: a wide 3/4 main shot fills the
-  view, with three fixed 4:3 cells stacked down the left edge — **FPV** (top), **top-down** (middle),
-  **stats HUD** (bottom). If you like what you see, **Export hero MP4** renders the byte-identical
-  clip server-side.
-- **Live** — connect to a policy and **interact with it in real time** over a websocket: blow **wind**
-  at it (a top-down direction pad + a vertical slider), **Push** it (a one-shot shove), **Drop block**
-  on it (a modeled impulse + body-rate tumble), and — for a `hover` policy — **click the floor to
-  relocate its hover point** and watch it fly there and re-settle. Plus pause/reset/speed. See below.
-- **Editor** — author a gate course directly in a 3D scene (click the ground to drop a gate, drag a
-  translate gizmo to move it incl. height, edit a numeric gate list), with **live flyability
-  validation**, **Save** to `assets/courses/_web/`, and **Save & fly** to test it immediately.
+  policy flying beside it. A **⌖ Calibrate** toggle enters a Betaflight-setup-style close-up
+  attitude check. See below.
+
+The scene and the sidebar are split by a **draggable divider** — grab it to resize both (the width
+persists across reloads).
 
 The successor to `neural-whoop-lab`'s studio, ported onto this repo's DiffAero env and the v2
 group-replay contract. The UI is a flat 2D greyscale style (custom-styled selects, rounded panels).
 
-The Player sidebar surfaces a **policy** panel (task, creation date, training steps, obs/act dims,
-eval metrics) and a collapsible **training charts** panel (2D line plots parsed straight from the
-run's TensorBoard event file).
+The Simulation sidebar surfaces a **policy** panel (task, creation date, training steps, obs/act
+dims, eval metrics) and a collapsible **training charts** panel (2D line plots parsed straight from
+the run's TensorBoard event file).
 
 ## Hero-layout viewport
 
@@ -49,9 +49,9 @@ uv run python scripts/serve.py         # -> http://127.0.0.1:8000
 ```
 
 Flags: `--host`, `--port`, `--device` (`cuda` default; `cpu` works for small rollouts), `--reload`,
-`--bridge HOST[:PORT]` (the XIAO bridge for the **Bench** tab; default `$NW_BRIDGE`; pass `fake` or set
+`--bridge HOST[:PORT]` (the XIAO bridge for the **Real** tab; default `$NW_BRIDGE`; pass `fake` or set
 `NW_FLIGHT_FAKE=1` to run the self-driving fake bridge with **no hardware**), `--flight-weights` (the
-deploy `policy_weights.json` the Bench dashboard flies), `--flight-acro-weights` (the obs-7 acro
+deploy `policy_weights.json` the Real dashboard flies), `--flight-acro-weights` (the obs-7 acro
 policy the **Flip** button drives; default `runs/acro_flip`; a missing file leaves Flip inert).
 
 Open the URL, choose:
@@ -65,9 +65,9 @@ Open the URL, choose:
 Hit **Run**: the server runs the rollout on the GPU and streams back a replay the viewer plays in the
 hero layout. Transport: play/pause, scrub, speed, follow-cam, FPV box, top-down box, trail toggle.
 
-## Bench — the real-drone dashboard (Bench tab)
+## Real — the real-drone dashboard (Real tab)
 
-The **Bench** tab unifies the Studio with the offboard pilot (`scripts/pilot.py`): one always-on page,
+The **Real** tab unifies the Studio with the offboard pilot (`scripts/pilot.py`): one always-on page,
 served from the Mac bench controller, that flies the *real* Air65 II. Serve with a bridge:
 
 ```bash
@@ -83,7 +83,7 @@ thread: it connects to the bridge (retrying if it's down), runs the extracted fl
 **zero torch/numpy** and is **not** wrapped in the GPU sim's `ROLLOUT_LOCK` (the MSP link is a
 different resource; several viewers may watch one flight).
 
-Open the Bench tab and:
+Open the Real tab and:
 - The **link** line + **ARMED** / **OVERRIDE** dots show the radio state live.
 - **Start** is a **software clock only**, and is **enabled only when telemetry shows the drone ARMED
   + MSP-OVERRIDE engaged** on the Pocket radio. The radio still owns **enable + instant kill**:
@@ -108,6 +108,15 @@ Open the Bench tab and:
   deployed policy** in sim (a cyan twin beside the real drone), so you can watch the real and
   simulated hover side-by-side. Off by default so the real-flight path stays pure-stdlib; it needs a
   CPU torch wheel on the Mac (`pip install torch`).
+- **⌖ Calibrate** — a Betaflight-setup-style **attitude check**: the camera zooms onto the drone
+  glyph; tilt the real drone by hand and the on-screen drone tracks its rotation live
+  (roll/pitch/**yaw** — yaw is the FC's gyro-integrated heading, since the Air65 has no
+  magnetometer: it tracks hand rotation but drifts and re-zeros at gyro reset). The sidebar swaps to
+  a big roll/pitch/yaw degree readout plus four rolling charts — **attitude** (roll/pitch/yaw),
+  **gyro rates** (p/q/r), **battery + throttle** (vbat / commanded µs), **link age** (ms). ARMED /
+  OVERRIDE chips stay visible; the radio still owns arm + override + kill. **Exit calibration**
+  restores the dashboard and the wide camera. Works headless via the fake bridge (it synthesizes an
+  attitude wobble on all three axes).
 - On a **completed** flight (RELEASED, not a mid-air abort) the manager auto-runs
   `scripts/flight_report.py` on the flight's CSV in a detached process and surfaces a **flight report
   ready** panel (hover-tilt median, vz-rail flags, link p99, battery sag) with a link to the CSV.
@@ -116,38 +125,26 @@ The whole backend is exercised headlessly by the fake bridge (`tests/test_flight
 `tests/test_flight_controller.py`): Start-gating interlock, phase walk, abort, link-down, and the
 auto-report — all with no drone.
 
-## Live interaction (Live tab)
+## The live-session backend (`/ws/live`)
 
-Where the Player records a whole rollout and plays it back, the **Live** tab steps a policy in real
-time and lets you disturb it. Pick a **policy** (the picker floats `hover` policies first — the
-family this is built for) and a **drone** count, then **Connect**. The browser opens a websocket to
-`/ws/live`; the server builds a `LiveSession` (the same `build_session` substrate as a rollout) and
-streams a frame per control step at ~50 Hz. The frame wire-format is the **same per-frame replay
-schema** (`pos`/`quat`/`vel`/`scene`, see `docs/VISUAL_CONTRACT.md`) — the live and recorded paths
-share one extractor (`eval/rollout.py::hero_pose_snapshot`) so they can't drift.
+The dedicated Live *tab* is gone (its interactive disturbances — wind pad, push, drop-block,
+click-to-move — were folded away in the 2-tab consolidation), but the **`/ws/live` websocket and
+`studio/live.py` remain**: the Real tab's **parallel sim** twin rides them. The server builds a
+`LiveSession` (the same `build_session` substrate as a rollout) and streams a frame per control step
+at ~50 Hz. The frame wire-format is the **same per-frame replay schema**
+(`pos`/`quat`/`vel`/`scene`, see `docs/VISUAL_CONTRACT.md`) — the live and recorded paths share one
+extractor (`eval/rollout.py::hero_pose_snapshot`) so they can't drift. The session-level disturbance
+commands (wind/push/drop/setpoint, impulses through `WhoopDynamics.add_velocity`/`add_body_rate` —
+the very seam `randomization.py` drives during training) are still accepted over the socket. The GPU
+sim isn't re-entrant, so a live session and `/api/rollout` are mutually exclusive via a shared
+single-flight lock (either rejects the other with 409 / a socket error); disconnecting frees the
+session.
 
-Controls:
-- **Wind** — a top-down direction pad (drag to set the horizontal wind vector, center = calm) plus a
-  **vertical** slider. Continuous; the policy leans in and holds.
-- **Push** — a one-shot velocity shove on the selected drone (watch it arrest the velocity).
-- **Drop block** — a modeled dropped block: a downward + lateral velocity kick **and** a body-rate
-  tumble (impulse-only, no real collision). Watch it recover from the spin.
-- **Click the floor** (hover policies) — raycasts onto the hover-altitude plane and relocates the
-  **setpoint**; the drone flies there and re-settles. The setpoint rides the same `target` scene
-  marker the follow tasks use.
-- **Target drone** selector (which drone push/drop/click apply to; or *all*), **Pause/Reset**, **speed**.
+## Course editor (Simulation tab, ✎ Edit course)
 
-All disturbances ride the **same physics seam the policy trained against** — wind, push, and the
-dropped-block tumble are impulses through `WhoopDynamics.add_velocity`/`add_body_rate`, the very seam
-`randomization.py` drives during training (`impulse_dv`/`impulse_dw`). So what the editor throws is
-exactly what the `hover` policy was hardened to reject. The GPU sim isn't re-entrant, so a live
-session and `/api/rollout` are mutually exclusive via a shared single-flight lock (either rejects the
-other with 409 / a socket error); disconnecting frees the session.
-
-## Course editor (Editor tab)
-
-Author a gate course in the same shared 3D scene the player uses (so placement matches the replay
-exactly). Workflow:
+Toggle **✎ Edit course** in the Simulation sidebar to overlay the gate editor on the same 3D scene
+the player uses (so placement matches the replay exactly); toggle **✓ Done editing** to return to
+the player (the camera re-frames the loaded replay). Workflow:
 
 - **Add** — click the ground plane to drop a gate at that XY (height = the previous gate's z).
 - **Select + move** — click a gate to select it, then drag the **translate gizmo** arrows (including
@@ -158,13 +155,13 @@ exactly). Workflow:
   out of band / non-positive radius) and warnings (spacing), color-tinting each gate by its worst
   issue. Pure geometry, no sim (`src/neural_whoop/studio/course_validate.py`).
 - **Save** — writes `assets/courses/_web/<slug>.yaml` (validated; a 422 rejects an unflyable course)
-  and refreshes the Player's course picker, where it appears under **your courses (editor)**.
-- **Save & fly** — saves, switches to the Player tab, selects the saved course, and runs it with the
-  current policy/drone count.
+  and refreshes the course picker, where it appears under **your courses (editor)**.
+- **Save & fly** — saves, flips back to play mode, selects the saved course, and runs it with the
+  current policy/drone count — no tab switch.
 
 ## Export hero MP4
 
-With a run loaded, **⤓ Export hero MP4** (Player sidebar) POSTs to `/api/export`, which shells out to
+With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which shells out to
 the sibling `../nw-viz/capture.mjs` (the proven, committed capture pipeline — byte-identical to
 `scripts/viz.py --video`) to render `runs/studio/<stem>.mp4`, then the browser downloads it. It needs
 `node` on PATH and `../nw-viz` installed (`cd ../nw-viz && npm install`); if either is absent the
@@ -218,19 +215,21 @@ reaches the sim stack (lazily), and `/api/export` only shells out to node. The s
 
 Static ES modules; three.js + OrbitControls + TransformControls load from a jsDelivr **importmap**
 (no Node toolchain in this repo). `scene.js`/`geometry.js`/`drone-model.js` are ported near-verbatim
-from the lab; `layout.js`/`cameras.js` port the hero composition from `../nw-viz/`; `playback.js` is
-adapted to the v2 `drones[]` group (one tinted actor per drone, **each with its own onboard FPV
-camera**; a hero actor drives the HUD + top-down cam — the same approach as `../nw-viz/src/viewer.js`);
-`editor.js` is the unified-3D course editor; `main.js` wires the tab router, the selectors, the Run
-button, the transport, the policy metadata panel, the canvas line charts, the **hero compositor**
-render loop, and the **export** button.
+from the lab; `layout.js`/`cameras.js` port the hero composition from `../nw-viz/` (`cameras.js` also
+carries `frameDrone`, the calibration close-up); `playback.js` is adapted to the v2 `drones[]` group
+(one tinted actor per drone, **each with its own onboard FPV camera**; a hero actor drives the HUD +
+top-down cam — the same approach as `../nw-viz/src/viewer.js`); `editor.js` is the course editor
+riding the shared player scene (all its objects in one group, toggled by the edit mode); `bench.js`
+is the Real tab (dashboard + calibration mode); `main.js` wires the 2-tab router, the draggable
+divider, the play/edit mode, the selectors, the Run button, the transport, the policy metadata
+panel, the canvas line charts, the **hero compositor** render loop, and the **export** button.
 
 ## Courses on disk
 
 Seeded courses (`assets/courses/*.yaml`) use the schema `{name, gates: [{pos:[x,y,z], radius}]}` —
 the same shape `env.fixed_course` consumes. `scripts/seed_courses.py` (re)generates a curated set
 from `neural_whoop.course.ARENA_PRESETS` with fixed seeds, so the repo ships shareable,
-bigger-than-default base courses. **Browser-authored** courses (from the Editor tab) live under
+bigger-than-default base courses. **Browser-authored** courses (from the course editor) live under
 `assets/courses/_web/<slug>.yaml` — listed in the picker as `kind: "web"`, flyable by stem without a
 restart (`resolve_course` checks both dirs), and validated before write so an unflyable course is
 never persisted.

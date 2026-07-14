@@ -53,9 +53,14 @@
        #view onto the sidebar (retina DPR>1 would otherwise render it at 2× width). */
     #view > div > canvas { width: 100% !important; height: 100% !important; display: block; }
 
-    /* Right control sidebar. */
-    #sidebar { width: 348px; flex: none; height: 100%; overflow-y: auto;
-      background: var(--panel); border-left: var(--bw) solid var(--line);
+    /* Drag handle between the scene and the sidebar — resizes the sidebar (persisted). */
+    #divider { flex: none; width: 6px; height: 100%; cursor: col-resize;
+      background: var(--line); transition: background .12s; touch-action: none; }
+    #divider:hover, #divider.dragging { background: var(--line-strong); }
+
+    /* Right control sidebar (width driven by the divider drag). */
+    #sidebar { width: var(--sidebar-w, 348px); flex: none; height: 100%; overflow-y: auto;
+      background: var(--panel);
       display: flex; flex-direction: column; }
     #sidebar .brand { padding: 15px 16px; font-weight: 700; letter-spacing: .2px;
       color: var(--fg); border-bottom: var(--bw) solid var(--line); }
@@ -117,11 +122,9 @@
       border: var(--bw) solid var(--line); border-radius: var(--radius-sm); }
     .charts-empty { color: var(--muted); font-size: 12px; }
 
-    .view3d-editor { position: absolute; inset: 0; }
-    .view3d-live { position: absolute; inset: 0; }
     .view3d-bench { position: absolute; inset: 0; }
 
-    /* Bench (real-drone) status dots + big Start/Abort. */
+    /* Real-drone (bench) status dots + big Start/Abort. */
     .dotrow { display: flex; gap: 9px; }
     .dotrow .chip { flex: 1; text-align: center; padding: 6px 0; border-radius: var(--radius-sm);
       background: var(--panel-3); color: var(--muted); font-size: 12px; font-weight: 600;
@@ -139,19 +142,16 @@
     .report .title { color: var(--fg); font-weight: 600; }
     .report a { color: var(--accent); }
 
-    /* Live wind pad: a square top-down map; drag to set the horizontal wind vector. */
-    .windpad { position: relative; width: 100%; aspect-ratio: 1; max-width: 168px; margin: 2px auto 0;
-      background: var(--panel-2); border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
-      cursor: crosshair; touch-action: none;
-      background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
-      background-size: 25% 25%; }
-    .windpad .winddot { position: absolute; width: 12px; height: 12px; border-radius: 50%;
-      background: var(--on); border: 1.5px solid #000; transform: translate(-50%, -50%); left: 50%; top: 50%;
-      pointer-events: none; box-shadow: 0 0 8px #000a; }
-    .windpad .axis { position: absolute; color: var(--muted); font-size: 9px; pointer-events: none; }
-    .windread { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: center; }
-    .live-hud { color: var(--fg); font-size: 12px; font-variant-numeric: tabular-nums; min-height: 16px; }
     .btn-row { display: flex; gap: 9px; } .btn-row .btn { flex: 1; }
+
+    /* Calibration mode (Real tab): Betaflight-style attitude readout + rolling signal charts. */
+    .cal-rpy { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .cal-rpy .cell { background: var(--panel-2); border: var(--bw) solid var(--line);
+      border-radius: var(--radius-sm); padding: 8px 6px; text-align: center; }
+    .cal-rpy .k { color: var(--muted); font-size: 10px; text-transform: uppercase;
+      letter-spacing: 1.2px; }
+    .cal-rpy .v { color: var(--fg); font-size: 19px; font-weight: 600;
+      font-variant-numeric: tabular-nums; }
 
     /* Hero overlay boxes (FPV / top-down / stats) — the fixed left column matching the exported MP4
        composition. The camera images are scissor-rendered onto the main canvas behind the box, so
@@ -177,7 +177,7 @@
     .hero-hud .v.cmd-1 { background: #163d3d; color: #6ff0f0; }
     .hero-hud .v.cmd-2 { background: #463a18; color: #ffe08a; }
 
-    /* Tabs (Player / Editor) at the top of the sidebar. */
+    /* Tabs (Simulation / Real) at the top of the sidebar. */
     .tabbar { display: flex; border-bottom: var(--bw) solid var(--line); }
     .tabbar .tab { flex: 1; background: var(--panel); color: var(--muted); border: none;
       border-bottom: 2px solid transparent; padding: 11px 0; cursor: pointer; font-weight: 600;
@@ -213,10 +213,8 @@
 <body>
   <div id="shell">
     <div id="view">
-      <!-- Player scene canvas mounts here; editor scene canvas into .view3d-editor (one tab shown). -->
+      <!-- Simulation scene canvas (player + course editor share it); Real tab into .view3d-bench. -->
       <div class="view3d"></div>
-      <div class="view3d-editor hidden"></div>
-      <div class="view3d-live hidden"></div>
       <div class="view3d-bench hidden"></div>
       <!-- Hero overlay boxes: fixed left column (FPV top, top-down middle, stats bottom), matching
            the exported MP4. Positioned each frame from the layout rects (main.js). -->
@@ -237,17 +235,17 @@
       </div>
     </div>
 
+    <div id="divider"></div>
+
     <div id="sidebar">
       <div class="brand">neural-whoop <small>· studio</small></div>
       <div class="tabbar">
-        <button class="tab active" data-tab="player">Player</button>
-        <button class="tab" data-tab="bench">Bench</button>
-        <button class="tab" data-tab="live">Live</button>
-        <button class="tab" data-tab="editor">Editor</button>
+        <button class="tab active" data-tab="sim">Simulation</button>
+        <button class="tab" data-tab="real">Real</button>
       </div>
 
-      <!-- ============================ PLAYER ============================ -->
-      <div id="player-controls">
+      <!-- ============================ SIMULATION (player + course editor) ============================ -->
+      <div id="sim-controls">
 
       <div class="section">
         <h4>setup</h4>
@@ -259,11 +257,12 @@
         </div>
         <label class="chk"><input data-h="dr" type="checkbox" /> domain randomization</label>
         <button class="btn primary block" data-h="run">▶ Run</button>
+        <button class="btn block" data-h="editmode">✎ Edit course</button>
         <div class="status" data-h="status"></div>
       </div>
 
       <!-- Policy metadata: what this policy is, when it was made, how it evals. -->
-      <div class="section">
+      <div class="section play-only">
         <details class="fold" data-h="metafold" open>
           <summary><h4 style="margin:0">policy</h4><span class="chev">▶</span></summary>
           <div class="fold-body" data-h="meta">
@@ -272,7 +271,7 @@
         </details>
       </div>
 
-      <div class="section">
+      <div class="section play-only">
         <h4>playback</h4>
         <input class="scrub" data-h="scrub" type="range" min="0" max="0" value="0" step="1" />
         <div class="transport">
@@ -297,7 +296,7 @@
       </div>
 
       <!-- Training curves parsed from the run's TensorBoard event file. -->
-      <div class="section">
+      <div class="section play-only">
         <details class="fold" data-h="chartfold">
           <summary><h4 style="margin:0">training charts</h4><span class="chev">▶</span></summary>
           <div class="fold-body">
@@ -308,65 +307,53 @@
         </details>
       </div>
 
-      </div><!-- /#player-controls -->
+      <!-- Course-editor sections (edit mode only — the ✎ Edit course toggle reveals them). -->
+      <div class="section edit-only hidden">
+        <h4>course editor</h4>
+        <label class="field"><span>name</span><input data-h="e_name" type="text" value="my-course" /></label>
+        <label class="field"><span>arena preset (validation bounds)</span><select data-h="e_preset"></select></label>
+        <div class="hint">Click the ground to drop a gate. Click a gate to select it, then drag the
+          gizmo arrows (including up/down for height). Edit numbers below for precision.</div>
+      </div>
 
-      <!-- ============================ LIVE ============================ -->
-      <div id="live-controls" class="hidden">
-        <div class="section">
-          <h4>live session</h4>
-          <label class="field"><span>policy</span><select data-h="l_policy"></select></label>
-          <label class="field"><span>drones</span><input data-h="l_drones" type="number" min="1" max="8" value="1" /></label>
-          <button class="btn primary block" data-h="l_connect">Connect</button>
-          <div class="status" data-h="l_status"></div>
-          <div class="live-hud" data-h="l_hud"></div>
-          <div class="hint hidden" data-h="l_hint">This policy isn't a hover policy — wind / push / drop
-            still work, but click-to-move (setpoint) only applies to the hover task.</div>
+      <div class="section edit-only hidden">
+        <h4>selected gate</h4>
+        <div class="row2">
+          <label class="field"><span>x</span><input data-h="e_gx" type="number" step="0.1" /></label>
+          <label class="field"><span>y</span><input data-h="e_gy" type="number" step="0.1" /></label>
         </div>
-
-        <div class="section">
-          <h4>disturb</h4>
-          <label class="field"><span>target drone</span><select data-h="l_drone" disabled></select></label>
-          <div class="btn-row">
-            <button class="btn" data-h="l_push" disabled>Push ⇢</button>
-            <button class="btn" data-h="l_drop" disabled>Drop block ⬇</button>
-          </div>
-          <div class="hint">Click the floor in the scene to relocate the hover point (hover policy).</div>
+        <div class="row2">
+          <label class="field"><span>z (height)</span><input data-h="e_gz" type="number" step="0.1" /></label>
+          <label class="field"><span>radius</span><input data-h="e_grad" type="number" step="0.05" min="0.1" /></label>
         </div>
-
-        <div class="section">
-          <h4>wind</h4>
-          <div class="windpad" data-h="l_windpad">
-            <div class="winddot" data-h="l_winddot"></div>
-            <span class="axis" style="top:2px;left:50%;transform:translateX(-50%)">+y</span>
-            <span class="axis" style="bottom:2px;left:50%;transform:translateX(-50%)">−y</span>
-            <span class="axis" style="right:3px;top:50%;transform:translateY(-50%)">+x</span>
-            <span class="axis" style="left:3px;top:50%;transform:translateY(-50%)">−x</span>
-          </div>
-          <div class="windread" data-h="l_windread">wind (0.0, 0.0, 0.0) m/s²</div>
-          <label class="field"><span>vertical wind (m/s²)</span>
-            <input data-h="l_windz" type="range" min="-5" max="5" step="0.5" value="0" /></label>
-          <button class="btn block" data-h="l_windcalm">calm (zero wind)</button>
+        <div class="ed-btns">
+          <button class="btn" data-h="e_add">+ gate</button>
+          <button class="btn" data-h="e_up">↑</button>
+          <button class="btn" data-h="e_down">↓</button>
+          <button class="btn" data-h="e_del">delete</button>
         </div>
+        <div class="gate-list" data-h="e_gatelist"></div>
+      </div>
 
-        <div class="section">
-          <h4>transport</h4>
-          <div class="btn-row">
-            <button class="btn" data-h="l_pause" disabled>⏸ Pause</button>
-            <button class="btn" data-h="l_reset" disabled>⟲ Reset</button>
-          </div>
-          <label class="field"><span>speed</span>
-            <select data-h="l_speed" disabled>
-              <option value="0.25">0.25×</option><option value="0.5">0.5×</option>
-              <option value="1" selected>1×</option><option value="2">2×</option>
-            </select>
-          </label>
-        </div>
-      </div><!-- /#live-controls -->
+      <div class="section edit-only hidden">
+        <h4>flyability</h4>
+        <div class="issues" data-h="e_issues"><div class="hint">add gates to validate.</div></div>
+      </div>
 
-      <!-- ============================ BENCH (real drone) ============================ -->
+      <div class="section edit-only hidden">
+        <button class="btn primary block" data-h="e_save">Save course</button>
+        <button class="btn block" data-h="e_fly">Save &amp; fly this course ▶</button>
+      </div>
+
+      </div><!-- /#sim-controls -->
+
+      <!-- ============================ REAL (bench drone) ============================ -->
       <div id="bench-controls" class="hidden">
+
+      <!-- Flight dashboard (default Real view). -->
+      <div data-h="b_dash">
         <div class="section">
-          <h4>bench · real drone</h4>
+          <h4>real drone</h4>
           <div class="status" data-h="b_link">connecting…</div>
           <div class="dotrow">
             <span class="chip cmd-0" data-h="b_armed">ARMED</span>
@@ -376,6 +363,7 @@
           <button class="btn primary block big" data-h="b_start" disabled>▶ Start (3·2·1 → hover)</button>
           <button class="btn block" data-h="b_flip" disabled>⟳ Flip (learned acro, blind)</button>
           <button class="btn danger block" data-h="b_abort" disabled>◼ Abort (release to radio)</button>
+          <button class="btn block" data-h="b_cal">⌖ Calibrate (attitude check)</button>
           <div class="bench-msg" data-h="b_msg"></div>
           <div class="hint">Start is a software clock — enabled only when the radio shows ARMED +
             OVERRIDE. The radio still owns enable + instant kill (drop override / disarm = abort).
@@ -414,47 +402,52 @@
         <div class="section">
           <div class="report hidden" data-h="b_report"></div>
         </div>
+      </div><!-- /b_dash -->
+
+      <!-- Calibration mode: close-up attitude check (Betaflight-setup style). Tilt the drone by
+           hand and watch the on-screen glyph + graphs track live. -->
+      <div data-h="b_calpanel" class="hidden">
+        <div class="section">
+          <h4>calibration · attitude check</h4>
+          <div class="status" data-h="c_link">connecting…</div>
+          <div class="dotrow">
+            <span class="chip cmd-0" data-h="c_armed">ARMED</span>
+            <span class="chip cmd-0" data-h="c_override">OVERRIDE</span>
+          </div>
+          <div class="cal-rpy">
+            <div class="cell"><div class="k">roll</div><div class="v"><span data-h="c_roll">—</span>°</div></div>
+            <div class="cell"><div class="k">pitch</div><div class="v"><span data-h="c_pitch">—</span>°</div></div>
+            <div class="cell"><div class="k">yaw</div><div class="v"><span data-h="c_yaw">—</span>°</div></div>
+          </div>
+          <div class="hint">Tilt the drone by hand — the on-screen drone should track it 1:1.
+            Roll/pitch are absolute; yaw is gyro-integrated (the Air65 has no magnetometer), so it
+            tracks hand rotation but drifts and re-zeros at gyro reset.</div>
+          <button class="btn primary block" data-h="c_exit">✕ Exit calibration</button>
+        </div>
+
+        <div class="section">
+          <h4>attitude (°)</h4>
+          <canvas class="bench-trend" data-h="c_att"></canvas>
+          <div class="hint">grey = roll · cyan = pitch · amber = yaw</div>
+        </div>
+        <div class="section">
+          <h4>gyro rates (rad/s)</h4>
+          <canvas class="bench-trend" data-h="c_gyro"></canvas>
+          <div class="hint">grey = p · cyan = q · amber = r</div>
+        </div>
+        <div class="section">
+          <h4>battery + throttle</h4>
+          <canvas class="bench-trend" data-h="c_batt"></canvas>
+          <div class="hint">grey = vbat (3.2–4.4 V) · cyan = throttle (1000–2000 µs)</div>
+        </div>
+        <div class="section">
+          <h4>link age (ms)</h4>
+          <canvas class="bench-trend" data-h="c_linkage"></canvas>
+          <div class="hint">grey = obs age; spikes = stale telemetry</div>
+        </div>
+      </div><!-- /b_calpanel -->
+
       </div><!-- /#bench-controls -->
-
-      <!-- ============================ EDITOR ============================ -->
-      <div id="editor-controls" class="hidden">
-        <div class="section">
-          <h4>course editor</h4>
-          <label class="field"><span>name</span><input data-h="e_name" type="text" value="my-course" /></label>
-          <label class="field"><span>arena preset (validation bounds)</span><select data-h="e_preset"></select></label>
-          <div class="hint">Click the ground to drop a gate. Click a gate to select it, then drag the
-            gizmo arrows (including up/down for height). Edit numbers below for precision.</div>
-        </div>
-
-        <div class="section">
-          <h4>selected gate</h4>
-          <div class="row2">
-            <label class="field"><span>x</span><input data-h="e_gx" type="number" step="0.1" /></label>
-            <label class="field"><span>y</span><input data-h="e_gy" type="number" step="0.1" /></label>
-          </div>
-          <div class="row2">
-            <label class="field"><span>z (height)</span><input data-h="e_gz" type="number" step="0.1" /></label>
-            <label class="field"><span>radius</span><input data-h="e_grad" type="number" step="0.05" min="0.1" /></label>
-          </div>
-          <div class="ed-btns">
-            <button class="btn" data-h="e_add">+ gate</button>
-            <button class="btn" data-h="e_up">↑</button>
-            <button class="btn" data-h="e_down">↓</button>
-            <button class="btn" data-h="e_del">delete</button>
-          </div>
-          <div class="gate-list" data-h="e_gatelist"></div>
-        </div>
-
-        <div class="section">
-          <h4>flyability</h4>
-          <div class="issues" data-h="e_issues"><div class="hint">add gates to validate.</div></div>
-        </div>
-
-        <div class="section">
-          <button class="btn primary block" data-h="e_save">Save course</button>
-          <button class="btn block" data-h="e_fly">Save &amp; fly this course ▶</button>
-        </div>
-      </div>
 
     </div>
   </div>

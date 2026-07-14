@@ -129,18 +129,21 @@ ffmpeg). It consumes the locked replay contract unchanged; `scripts/viz.py --vid
 shells out to it (non-fatal if absent). `render_depth` is a documented stub for the future DiffAero
 Taichi renderer (deferred — Blackwell camera path).
 
-**Studio (`web/studio/` + `src/neural_whoop/studio/`).** An interactive browser viewer:
+**Studio (`web/studio/` + `src/neural_whoop/studio/`).** An interactive browser viewer with **two
+tabs** (a sim-to-real pair) and a **draggable scene/sidebar divider** (width persisted):
 `scripts/serve.py` (the `studio` extra: FastAPI + uvicorn) lists saved policies and courses, runs a
 **fixed-course** rollout on demand (`studio/rollout.py` → `evaluate_and_record(group=True)`, the
-same v2 group-episode path), and serves the replay to a static Three.js frontend that plays it back
-(3D wide + **per-drone** FPV/top-down insets in movable/resizable PiP frames, play/pause/scrub, plus
-a policy-metadata panel and TensorBoard training charts parsed via the dependency-free
-`studio/tbscalars.py`). A **Live** tab (`studio/live.py` + `/ws/live` websocket + `web/studio/live.js`)
-steps a policy in real time and lets you disturb it from the browser — blow wind, push, drop a
-(modeled) block, and click to relocate a `hover` policy's setpoint — all riding the **same impulse
-seam** (`add_velocity`/`add_body_rate`) the policy trained against; single-flight with `/api/rollout`
-via the shared lock. The env+agent construction is shared via `studio/rollout.py::build_session`; the
-live frame schema is the recorder's via `eval/rollout.py::hero_pose_snapshot`. You pick a **policy**, a **course** (a seeded
+same v2 group-episode path), and serves the replay to a static Three.js frontend. The
+**Simulation** tab plays it back (3D wide + **per-drone** FPV/top-down insets in PiP frames,
+play/pause/scrub, plus a policy-metadata panel and TensorBoard training charts parsed via the
+dependency-free `studio/tbscalars.py`), and an **✎ Edit course** toggle overlays the gate editor
+(author/validate/save a course; `editor.js`) on the *same* scene — Save & fly runs the saved course
+without a tab switch. The **Live tab is gone**, but its backend (`studio/live.py` + the `/ws/live`
+websocket) is retained: it steps a policy in real time riding the **same impulse seam**
+(`add_velocity`/`add_body_rate`) the policy trained against, single-flight with `/api/rollout` via
+the shared lock, and now serves the Real tab's **parallel-sim twin**. The env+agent construction is
+shared via `studio/rollout.py::build_session`; the live frame schema is the recorder's via
+`eval/rollout.py::hero_pose_snapshot`. You pick a **policy**, a **course** (a seeded
 `assets/courses/*.yaml` or an arena **preset**), and a **drone count**. Drone-count maps to the
 substrate per the policy's **task family**: gated single-drone (`gate_race`) → `n_envs = drone_count,
 n_agents = 1` (independent racers on one fixed track); gated swarm (`swarm_race`) → `n_envs = 1,
@@ -150,8 +153,7 @@ each its own moving target); gateless **formation** (`swarm_formation`) → `n_e
 drone_count` (ring around one moving anchor). The gateless families have **no course** (the
 `/api/policies` `family`/`needs_course` flag hides the course selector); what they track rides in the
 replay's `scene` channel, drawn as a target/anchor/slot marker (+ command chip). The frontend loads three.js from a CDN importmap (no Node toolchain in this
-repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The gate Editor tab
-(author/validate/save a course) and the Live interaction tab are both implemented. A **Bench** tab
+repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The **Real** tab
 (`studio/flight.py` + `/ws/flight` + `web/studio/bench.js`) is the always-on **real-drone** dashboard:
 it flies the actual Air65 II over the MSP bridge via the pure-stdlib flight engine extracted from
 `scripts/pilot.py` into `neural_whoop.pilot` (`FlightController`/`config`/`policy`/`telemetry`;
@@ -160,8 +162,12 @@ torch/numpy**, **not** under `ROLLOUT_LOCK`) runs the `pilot.py fly` 3·2·1→h
 streams telemetry; the software **Start** only sets the flight clock and is enabled **only when
 telemetry shows ARMED + MSP-OVERRIDE** on the radio (which still owns enable + instant kill). An opt-in
 **parallel CPU-torch sim** (`/ws/live`) flies the same policy beside the real drone, and a completed
-flight auto-runs `flight_report.py`. A **fake bridge** (`--bridge fake` / `NW_FLIGHT_FAKE=1`) runs it
-all with no hardware. See `docs/STUDIO.md` and `docs/SIM2REAL.md`.
+flight auto-runs `flight_report.py`. A **⌖ Calibrate** toggle is a Betaflight-setup-style close-up
+attitude check: camera zoomed onto the glyph (`cameras.js::frameDrone`), full roll/pitch/yaw
+orientation (yaw forwarded from `MSP_ATTITUDE`; gyro-integrated, no magnetometer), a degree readout,
+and four rolling sidebar charts (attitude / gyro rates / battery+throttle / link age). A **fake
+bridge** (`--bridge fake` / `NW_FLIGHT_FAKE=1`) runs it all with no hardware. See `docs/STUDIO.md`
+and `docs/SIM2REAL.md`.
 
 **Key design choice — agent flattening.** Multi-agent envs flatten `(n_envs, n_agents)` into a
 single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agents=1` internally).

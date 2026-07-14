@@ -39,3 +39,16 @@ export function frameHeroCamera(view, framesList, gates) {
   camera.position.copy(bounds.center).add(dir.multiplyScalar(dist));
   controls.update();
 }
+
+// Close-up on a single drone (calibration mode): target the orbit camera on the drone's SIM-frame
+// position and park it a short fixed distance away along the same 3/4 hero direction. Stays fully
+// orbitable — this only re-frames.
+export function frameDrone(view, simPos, dist = 1.2) {
+  const { camera, controls, world } = view;
+  world.updateMatrixWorld();
+  const center = new THREE.Vector3(simPos[0], simPos[1], simPos[2]).applyMatrix4(world.matrixWorld);
+  const dir = new THREE.Vector3(0.9, 0.65, 1.0).normalize();
+  controls.target.copy(center);
+  camera.position.copy(center).add(dir.multiplyScalar(dist));
+  controls.update();
+}

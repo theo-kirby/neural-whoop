@@ -1,11 +1,11 @@
-// Course editor — author a gate course in a unified 3D scene (click the ground to drop a gate, drag
-// a translate gizmo to move it incl. height, edit a numeric list), with live flyability validation
-// against the backend. Reuses the shared createScene + gate geometry so placement matches the
-// player/replay exactly. Adapted from neural-whoop-lab's editor-tab.js to one 3D view (no 2D map).
+// Course editor — author a gate course in the SAME 3D scene the player uses (click the ground to
+// drop a gate, drag a translate gizmo to move it incl. height, edit a numeric list), with live
+// flyability validation against the backend. It no longer owns a scene: main.js hands it the shared
+// `view`, and every editor object lives in one toggleable group so `setActive(on)` flips the whole
+// edit layer (gizmo, wireframes, arena ring, reference drone) over/under the playback content.
 
 import * as THREE from "three";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { createScene } from "./scene.js";
 import { makeDrone } from "./drone-model.js";
 import { buildGates, disposeGroup, GATE_COLORS } from "./geometry.js";
 import * as api from "./api.js";
@@ -21,12 +21,17 @@ const DEFAULT_GATES = [
 // sim (x,y,z) -> three (x, z, -y). So a three-world ground hit (X, 0, Z) is sim (X, -Z, ·).
 const simXYFromGround = (p) => [p.x, -p.z];
 
-export function createEditor({ mount, panel, toast, onSaved, onFly }) {
+export function createEditor({ view, panel, toast, onSaved, onFly }) {
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
-  const view = createScene(mount);
+  // Every editor object lives in this group (identity transform, so its LOCAL frame IS the sim
+  // frame) — setActive() toggles the whole edit layer without touching the playback content.
+  const group = new THREE.Group();
+  group.visible = false;            // play mode is the default; main.js activates edit mode
+  view.world.add(group);
   const drone = makeDrone();
-  view.world.add(drone);            // a static drone glyph at origin as a scale/start reference
+  group.add(drone);                 // a static drone glyph at origin as a scale/start reference
 
+  let active = false;               // edit mode on? gates pointer picking + the gizmo
   let gates = DEFAULT_GATES.map((g) => ({ pos: [...g.pos], radius: g.radius }));
   let selected = 0;
   let preset = "tight";
@@ -38,10 +43,10 @@ export function createEditor({ mount, panel, toast, onSaved, onFly }) {
   let arenaRing = null;             // dashed ground circle at the arena radius (hint)
 
   // ---- gizmo: drag the selected gate in space (incl. height) -------------------------
-  // Attached to a proxy parented under `world`, so the proxy's LOCAL position is the gate's sim
-  // (x,y,z). setSpace("local") aligns the handles to the sim axes despite the world group's tilt.
+  // Attached to a proxy parented under the sim-frame group, so the proxy's LOCAL position is the
+  // gate's sim (x,y,z). setSpace("local") aligns the handles to the sim axes despite the world tilt.
   const gizmoProxy = new THREE.Object3D();
-  view.world.add(gizmoProxy);
+  group.add(gizmoProxy);
   const gizmo = new TransformControls(view.camera, view.renderer.domElement);
   gizmo.setMode("translate");
   gizmo.setSpace("local");
@@ -56,26 +61,26 @@ export function createEditor({ mount, panel, toast, onSaved, onFly }) {
 
   // ---- arena hint ring ---------------------------------------------------------------
   function rebuildArenaRing() {
-    if (arenaRing) disposeGroup([arenaRing], view.world);
+    if (arenaRing) disposeGroup([arenaRing], group);
     const geo = new THREE.RingGeometry(arenaRadius - 0.03, arenaRadius, 96);
     arenaRing = new THREE.Mesh(geo, new THREE.MeshBasicMaterial(
       { color: 0x4a4a4a, transparent: true, opacity: 0.5, side: THREE.DoubleSide }));
     arenaRing.position.z = 0.01;     // lie flat on the sim ground (world group tilts it to three XZ)
-    view.world.add(arenaRing);
+    group.add(arenaRing);
   }
 
   // ---- gate meshes -------------------------------------------------------------------
   function rebuildGates() {
-    disposeGroup(gateLines, view.world);
-    disposeGroup(pickMeshes, view.world);
-    gateLines = buildGates(view.world, gates);
+    disposeGroup(gateLines, group);
+    disposeGroup(pickMeshes, group);
+    gateLines = buildGates(group, gates);
     pickMeshes = gates.map((g, i) => {
       const mesh = new THREE.Mesh(
         new THREE.SphereGeometry(Math.max(0.4, g.radius), 12, 8),
         new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
       mesh.position.set(g.pos[0], g.pos[1], g.pos[2]);
       mesh.userData.gateIndex = i;
-      view.world.add(mesh);
+      group.add(mesh);
       return mesh;
     });
     recolorGates();
@@ -107,7 +112,7 @@ export function createEditor({ mount, panel, toast, onSaved, onFly }) {
   }
   function syncGizmo() {
     const g = gates[selected];
-    gizmo.visible = gizmo.enabled = !!g;
+    gizmo.visible = gizmo.enabled = active && !!g;
     if (g) gizmoProxy.position.set(g.pos[0], g.pos[1], g.pos[2]);
   }
   function renderGateList() {
@@ -139,9 +144,10 @@ export function createEditor({ mount, panel, toast, onSaved, onFly }) {
     scheduleValidate();
   }
 
-  // Click a gate sphere to select; click empty ground to ADD a gate there.
+  // Click a gate sphere to select; click empty ground to ADD a gate there. Inert in play mode
+  // (the listener stays attached; the `active` guard is the detach).
   view.renderer.domElement.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || gizmo.dragging || gizmo.axis) return;
+    if (!active || e.button !== 0 || gizmo.dragging || gizmo.axis) return;
     const r = view.renderer.domElement.getBoundingClientRect();
     const ndc = new THREE.Vector2(
       ((e.clientX - r.left) / r.width) * 2 - 1,
@@ -270,8 +276,12 @@ export function createEditor({ mount, panel, toast, onSaved, onFly }) {
   onGatesChanged(); selectGate(0);
 
   return {
-    onShow() { view.resize(); syncGizmo(); },
-    resize() { view.resize(); },
-    tick() { view.render(); },
+    // Edit-mode toggle: show/hide the whole edit layer + enable the gizmo and pointer picking.
+    setActive(on) {
+      active = !!on;
+      group.visible = active;
+      syncGizmo();
+      if (active) scheduleValidate();
+    },
   };
 }
