@@ -26,8 +26,8 @@ export function createScene(mount, { grid = true } = {}) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x30302e, 1.35));
-  const sun = new THREE.DirectionalLight(0xffffff, 2.1);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x383838, 1.75));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.7);
   sun.position.set(10, 18, 7);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -37,7 +37,7 @@ export function createScene(mount, { grid = true } = {}) {
   scene.add(sun);
   // Soft fill from the opposite side so the CAD chassis's near-black plastics don't crush to
   // silhouette; no shadow (the sun owns shadows).
-  const fill = new THREE.DirectionalLight(0xdfe6ff, 0.7);
+  const fill = new THREE.DirectionalLight(0xdfe6ff, 1.0);
   fill.position.set(-12, 6, -9);
   scene.add(fill);
 

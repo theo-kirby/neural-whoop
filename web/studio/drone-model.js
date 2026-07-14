@@ -1,7 +1,8 @@
 // The drone mesh, built in sim body frame (+X forward, +Z up) and parented under the scene's
 // `world` group so a run's pose quaternion applies directly. `centerColor` tints the hub sphere
-// so multi-drone (swarm / N-racer) episodes are tellable apart; nav lights still encode heading
-// (blue front / red rear). Ported from neural-whoop-lab + the nw-viz multi-drone tint.
+// so multi-drone (swarm / N-racer) episodes are tellable apart; an RGB axis triad on each drone
+// shows its body frame / heading (red +X forward, green +Y left, blue +Z up). Ported from
+// neural-whoop-lab + the nw-viz multi-drone tint.
 //
 // When the real chassis CAD is present (assets/whoop_chassis.glb — the whoop-assembly.fbx converted
 // by scripts/chassis_fbx_to_glb.py, with its authored per-part materials baked in), it replaces the
@@ -72,12 +73,11 @@ export function makeDrone(centerColor = 0xf2f2f2) {
   const armMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
   const rotorMat = new THREE.MeshStandardMaterial({ color: 0x303030, transparent: true, opacity: 0.85 });
   const rotorGeo = new THREE.CylinderGeometry(0.11, 0.11, 0.02, 20);
-  const navGeo = new THREE.SphereGeometry(0.022, 10, 8);
   const offsets = [
-    [0.16, 0.16, true], [0.16, -0.16, true],     // front (+X): white nav light
-    [-0.16, 0.16, false], [-0.16, -0.16, false],  // rear (-X): red nav light
+    [0.16, 0.16], [0.16, -0.16],     // front (+X)
+    [-0.16, 0.16], [-0.16, -0.16],    // rear (-X)
   ];
-  for (const [x, y, front] of offsets) {
+  for (const [x, y] of offsets) {
     const arm = new THREE.Mesh(new THREE.BoxGeometry(Math.hypot(x, y) * 1.0, 0.025, 0.025), armMat);
     arm.position.set(x / 2, y / 2, 0);
     arm.rotation.z = Math.atan2(y, x);
@@ -87,11 +87,16 @@ export function makeDrone(centerColor = 0xf2f2f2) {
     rotor.position.set(x, y, 0.03);
     rotor.castShadow = true;
     placeholder.add(rotor);
-    // Heading nav light: a small unlit (glowing) dot above each rotor — white front, red rear.
-    const nav = new THREE.Mesh(navGeo, new THREE.MeshBasicMaterial({ color: front ? 0xffffff : 0xff2a2a }));
-    nav.position.set(x, y, 0.055);
-    g.add(nav);
   }
+
+  // Body-frame axis triad (red +X forward, green +Y left, blue +Z up) — the direction gizmo that
+  // replaced the nav-light dots. Drawn always-on-top so it stays readable through the chassis, and
+  // added to `g` (not the placeholder) so it survives the CAD swap.
+  const axes = new THREE.AxesHelper(0.34);
+  axes.material.depthTest = false;
+  axes.material.transparent = true;
+  axes.renderOrder = 10;
+  g.add(axes);
 
   chassisPrototype().then((proto) => {
     if (!proto) return;
