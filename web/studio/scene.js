@@ -26,8 +26,8 @@ export function createScene(mount, { grid = true } = {}) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x2a2a2a, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x30302e, 1.35));
+  const sun = new THREE.DirectionalLight(0xffffff, 2.1);
   sun.position.set(10, 18, 7);
   sun.castShadow = true;
   sun.shadow.mapSize.set(1024, 1024);
@@ -35,6 +35,11 @@ export function createScene(mount, { grid = true } = {}) {
   sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
   sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
   scene.add(sun);
+  // Soft fill from the opposite side so the CAD chassis's near-black plastics don't crush to
+  // silhouette; no shadow (the sun owns shadows).
+  const fill = new THREE.DirectionalLight(0xdfe6ff, 0.7);
+  fill.position.set(-12, 6, -9);
+  scene.add(fill);
 
   // Ground (three-frame XZ plane = sim XY ground) + grid, sized for the giant arena.
   const ground = new THREE.Mesh(

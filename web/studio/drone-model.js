@@ -3,29 +3,20 @@
 // so multi-drone (swarm / N-racer) episodes are tellable apart; nav lights still encode heading
 // (blue front / red rear). Ported from neural-whoop-lab + the nw-viz multi-drone tint.
 //
-// When the real chassis CAD is present (assets/whoop_chassis.glb, tessellated from the build123d
-// STEP by scripts/chassis_to_glb.py), it replaces the procedural body/arms/rotors once loaded;
-// the procedural glyph stays as the instant placeholder and the no-asset fallback. The center
-// marker and nav lights survive the swap — they carry identity and heading either way.
+// When the real chassis CAD is present (assets/whoop_chassis.glb — the whoop-assembly.fbx converted
+// by scripts/chassis_fbx_to_glb.py, with its authored per-part materials baked in), it replaces the
+// procedural body/arms/rotors once loaded; the procedural glyph stays as the instant placeholder
+// and the no-asset fallback. The center marker and nav lights survive the swap — they carry
+// identity and heading either way.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
 const CHASSIS_URL = "assets/whoop_chassis.glb";
 // The studio's drone glyph has always been drawn ~7x life size so it reads in the wide hero shot;
-// the CAD (a true-scale 8 cm whoop) is blown up to the same XY footprint the procedural glyph has.
+// the CAD (a true-scale ~82 mm whoop) is blown up to the same XY footprint the procedural glyph
+// has. Scale is derived from the model's own bbox, so the source units (mm here) don't matter.
 const GLYPH_FOOTPRINT = 0.54;
-
-// Part palette keyed on the CAD's product names (chassis / motor_* / prop_* / grommet_* / fc /
-// esp_rx / tof_rangefinder). Props reuse the old rotor look (translucent discs).
-const CHASSIS_MATS = [
-  [/^prop_/, new THREE.MeshStandardMaterial({ color: 0x303030, transparent: true, opacity: 0.85 })],
-  [/^motor_/, new THREE.MeshStandardMaterial({ color: 0x1a1a1a, metalness: 0.5, roughness: 0.5 })],
-  [/^grommet_/, new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.9 })],
-  [/^(fc|esp_rx)$/, new THREE.MeshStandardMaterial({ color: 0x173a26, metalness: 0.3, roughness: 0.55 })],
-  [/^tof_/, new THREE.MeshStandardMaterial({ color: 0x223244, metalness: 0.4, roughness: 0.5 })],
-  [/./, new THREE.MeshStandardMaterial({ color: 0x2b2b2b, metalness: 0.3, roughness: 0.6 })],
-];
 
 let chassisPromise = null; // Promise<THREE.Group|null>, one fetch shared by every drone instance
 
@@ -35,10 +26,11 @@ function chassisPrototype() {
       .loadAsync(CHASSIS_URL)
       .then((gltf) => {
         const cad = gltf.scene;
-        // CAD frame (build123d export, already in meters): -Y forward, +Z up — the motor_front_*
-        // products sit at y=-23 mm. Yaw +90° so the nose faces sim body +X, recenter on the
-        // bounding box, then scale to the glyph footprint.
-        cad.rotation.z = Math.PI / 2;
+        // CAD frame (Blender FBX export, Z-up, mm): +Y forward — the front props sit at y=+23 mm.
+        // Yaw -90 deg so the nose faces sim body +X, recenter on the bounding box, then scale the
+        // XY footprint to the glyph size. Authored materials are kept verbatim (that's the whole
+        // point of the FBX); we only flag meshes to cast shadows.
+        cad.rotation.z = -Math.PI / 2;
         const proto = new THREE.Group();
         proto.add(cad);
         const box = new THREE.Box3().setFromObject(proto);
@@ -46,9 +38,7 @@ function chassisPrototype() {
         const size = box.getSize(new THREE.Vector3());
         proto.scale.setScalar(GLYPH_FOOTPRINT / Math.max(size.x, size.y));
         proto.traverse((o) => {
-          if (!o.isMesh) return;
-          o.castShadow = true;
-          o.material = CHASSIS_MATS.find(([re]) => re.test(o.name))[1];
+          if (o.isMesh) o.castShadow = true;
         });
         return proto;
       })
