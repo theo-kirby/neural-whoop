@@ -20,7 +20,9 @@ const BODY_TO_CAM = new THREE.Quaternion().setFromRotationMatrix(
     new THREE.Vector3(-1, 0, 0),  // cam +Z = body -X (so -Z = forward)
   )
 );
-const FPV_OFFSET = new THREE.Vector3(0.1, 0, 0.03);  // nose-cam: slightly forward + up of center
+// Nose-cam, just past the CAD chassis nose (the GLB scaled to the glyph footprint reaches
+// x ≈ 0.27) so the canopy doesn't fill the onboard view; harmless with the procedural fallback.
+const FPV_OFFSET = new THREE.Vector3(0.28, 0, 0.04);
 const UP_Y = new THREE.Vector3(0, 1, 0);             // gravity-up in three-world (sim +Z)
 
 // v2 group tracks, or a single synthetic track wrapping a v1 single-drone episode.
