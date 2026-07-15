@@ -104,7 +104,8 @@ function greyboxTexture() {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d");
-  const DARK = "#6b7488", LIGHT = "#828b9e", LINE = "#e9ecf3", DOT = "#f2f4f8";
+  // Neutral greys, low contrast: a faint checker with soft grey (not white) gridlines.
+  const DARK = "#5c5c5c", LIGHT = "#646464", LINE = "#7d7d7d", DOT = "#8a8a8a";
 
   // Checkerboard: dark on the (0,0)/(M,M) diagonal, light on the off-diagonal.
   ctx.fillStyle = DARK; ctx.fillRect(0, 0, S, S);
@@ -123,8 +124,8 @@ function greyboxTexture() {
   const dot = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); };
   for (const a of marks) for (const b of halves) { dot(a, b); dot(b, a); }
 
-  // Labels along the lines (semi-transparent white), repeated every 2 m like the reference.
-  ctx.fillStyle = "rgba(233,236,243,0.5)";
+  // Labels along the lines (faint grey), repeated every 2 m like the reference.
+  ctx.fillStyle = "rgba(200,200,200,0.28)";
   ctx.font = "bold 34px system-ui, -apple-system, sans-serif";
   ctx.textBaseline = "alphabetic";
   ctx.save(); ctx.translate(24, M - 16); ctx.fillText("1 METER", 0, 0); ctx.restore();

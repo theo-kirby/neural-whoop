@@ -29,6 +29,9 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   // course grid, so the hand-flown / hover drone has a fixed metric backdrop.
   const view = createScene(mount, { grid: false });
   buildRoom(view.world, { size: 10, cell: 1, floorZ: 0 });
+  // Extra fill so the greybox room reads bright and even (the shared scene lighting is tuned dark
+  // for the course view).
+  view.scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9a9a, 1.9));
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
 
   let ws = null;
