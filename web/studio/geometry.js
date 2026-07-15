@@ -95,73 +95,63 @@ export function buildSlot(world, radius = 0.18) {
   return mesh;
 }
 
-// A bounded reference room (sim frame, added under `world`): a `size` m cube resting on z=floorZ,
-// tiled into `cell` m squares. Dark-grey surfaces with lighter-grey gridlines on all six faces, a
-// brighter edge outline, and a floating "1 m³" label calling out the cell scale — a fixed metric
-// backdrop for the real-drone view (the drone hovers ~1.2 m up inside it). Returns the THREE.Group.
-export function buildRoom(world, { size = 10, cell = 1, floorZ = 0 } = {}) {
-  const half = size / 2;
-  const cz = floorZ + half;                 // room centre height (sim z)
-  const room = new THREE.Group();
-  const DARK = 0x2a2a2a, LINE = 0x565656, EDGE = 0x7a7a7a;
-
-  // One square face's gridlines in the local XY plane, centred at origin (spans ±half each axis).
-  function faceGrid() {
-    const pts = [];
-    for (let i = -half; i <= half + 1e-6; i += cell) {
-      pts.push(-half, i, 0, half, i, 0);    // lines parallel to local x
-      pts.push(i, -half, 0, i, half, 0);    // lines parallel to local y
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-    return new THREE.LineSegments(
-      geo, new THREE.LineBasicMaterial({ color: LINE, transparent: true, opacity: 0.55 }));
-  }
-  // Place a face grid at `pos` with Euler `rot` (radians, XYZ) so its plane normal aims outward.
-  function addFace(pos, rot = [0, 0, 0]) {
-    const g = faceGrid();
-    g.position.set(pos[0], pos[1], pos[2]);
-    g.rotation.set(rot[0], rot[1], rot[2]);
-    room.add(g);
-  }
-  addFace([0, 0, floorZ]);                   // floor
-  addFace([0, 0, floorZ + size]);            // ceiling
-  addFace([half, 0, cz], [0, Math.PI / 2, 0]);   // +x wall (YZ plane)
-  addFace([-half, 0, cz], [0, Math.PI / 2, 0]);  // -x wall
-  addFace([0, half, cz], [Math.PI / 2, 0, 0]);   // +y wall (XZ plane)
-  addFace([0, -half, cz], [Math.PI / 2, 0, 0]);  // -y wall
-
-  // Solid dark floor panel so the room reads as grey (walls/ceiling stay wireframe to see through).
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(size, size),
-    new THREE.MeshStandardMaterial({ color: DARK, roughness: 1, side: THREE.DoubleSide }));
-  floor.position.set(0, 0, floorZ - 0.002);  // just under the grid so lines sit on top
-  floor.receiveShadow = true;
-  room.add(floor);
-
-  // Brighter cube outline so the 10 m bounds read crisply from any angle.
-  const box = new THREE.BoxGeometry(size, size, size);
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(box), new THREE.LineBasicMaterial({ color: EDGE }));
-  box.dispose();
-  edges.position.set(0, 0, cz);
-  room.add(edges);
-
-  // Floating "1 m³" label (a camera-facing sprite) tucked into a floor corner to call out one cell.
+// A "prototype map" greybox tile texture: a 2 m x 2 m block (checkerboard of light/dark grey
+// squares) with bright white 1 m gridlines, half-meter intersection dots, and "1 METER" /
+// "[PROTOTYPE MAP]" labels baked along the lines. Repeats across the room's faces so each square is
+// exactly one metre. Returns a THREE.Texture (RepeatWrapping, sRGB).
+function greyboxTexture() {
+  const S = 512, M = S / 2;                  // 512 px = 2 m  ->  256 px per metre
   const canvas = document.createElement("canvas");
-  canvas.width = 256; canvas.height = 128;
+  canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d");
-  ctx.font = "bold 76px system-ui, -apple-system, sans-serif";
-  ctx.fillStyle = "#9a9a9a";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillText("1 m³", 128, 68);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.anisotropy = 4;
-  const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
-  label.scale.set(1.5, 0.75, 1);             // ~1.5 m wide
-  label.position.set(half - 0.9, -half + 0.9, floorZ + 0.9);
-  room.add(label);
+  const DARK = "#6b7488", LIGHT = "#828b9e", LINE = "#e9ecf3", DOT = "#f2f4f8";
 
+  // Checkerboard: dark on the (0,0)/(M,M) diagonal, light on the off-diagonal.
+  ctx.fillStyle = DARK; ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = LIGHT; ctx.fillRect(M, 0, M, M); ctx.fillRect(0, M, M, M);
+
+  // White gridlines at every metre (0/M/S; edge lines straddle the seam and complete on the tile
+  // next door, so the repeat is continuous).
+  ctx.strokeStyle = LINE; ctx.lineWidth = 5;
+  for (const p of [0, M, S]) {
+    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+  }
+  // Half-metre dots on the lines (mark x half, half x mark).
+  ctx.fillStyle = DOT;
+  const marks = [0, M, S], halves = [M / 2, (3 * M) / 2];
+  const dot = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); };
+  for (const a of marks) for (const b of halves) { dot(a, b); dot(b, a); }
+
+  // Labels along the lines (semi-transparent white), repeated every 2 m like the reference.
+  ctx.fillStyle = "rgba(233,236,243,0.5)";
+  ctx.font = "bold 34px system-ui, -apple-system, sans-serif";
+  ctx.textBaseline = "alphabetic";
+  ctx.save(); ctx.translate(24, M - 16); ctx.fillText("1 METER", 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(M - 16, S - 24); ctx.rotate(-Math.PI / 2); ctx.fillText("[PROTOTYPE MAP]", 0, 0); ctx.restore();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// A bounded reference room (sim frame, added under `world`): a solid `size` m greybox cube resting
+// on z=floorZ, tiled into `cell` m "prototype map" squares (see greyboxTexture). Built with
+// THREE.BackSide so the near walls are culled and you always look INTO the room — the drone
+// (hovering ~1.2 m up inside) is never occluded as you orbit. Returns the THREE.Mesh.
+export function buildRoom(world, { size = 10, cell = 1, floorZ = 0 } = {}) {
+  const cz = floorZ + size / 2;              // room centre height (sim z)
+  const tex = greyboxTexture();
+  const reps = size / 2;                      // texture block is 2 m; repeat to cover the face
+  tex.repeat.set(reps, reps);
+
+  const room = new THREE.Mesh(
+    new THREE.BoxGeometry(size, size, size),
+    new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, side: THREE.BackSide }));
+  room.position.set(0, 0, cz);
+  room.receiveShadow = true;
   world.add(room);
   return room;
 }
