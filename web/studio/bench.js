@@ -14,7 +14,7 @@
 import * as THREE from "three";
 import { createScene } from "./scene.js";
 import { makeDrone } from "./drone-model.js";
-import { buildRoom } from "./geometry.js";
+import { createEnvironment } from "./environment.js";
 import { frameDrone } from "./cameras.js";
 
 const TREND = 180;                     // rolling trend length (frames) for every mini-chart
@@ -22,16 +22,19 @@ const FLYING = new Set(["countdown", "seek", "rise", "hover", "flip", "land"]);
 const SIM_OFFSET = 2.0;                // the parallel-sim drone sits this far +x of the real one
 const SEED_HINTS = ["hover_blind_air65_d50var_s8", "hover_blind", "hover"];  // parallel-sim policy
 const RAD2DEG = 180 / Math.PI;
-const GREY = "#e0e0e0", CYAN = "#6ff0f0", AMBER = "#ffd23f";
+// The neutral trend stroke follows the theme (read from the CSS --fg var); the signal hues stay
+// fixed so cyan/amber keep their meaning in both themes.
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const GREY = () => cssVar("--fg") || "#e0e0e0";
+const CYAN = "#6ff0f0", AMBER = "#ffd23f";
 
 export function createBench({ mount, panel, toast, getPolicies }) {
-  // grid:false — the real-drone view uses a bounded 10 m³ reference room instead of the infinite
-  // course grid, so the hand-flown / hover drone has a fixed metric backdrop.
+  // grid:false — the real-drone view uses a bounded 10 m reference room instead of the infinite
+  // course grid, so the hand-flown / hover drone has a fixed metric backdrop. The themed greybox
+  // environment owns the room + scene chrome + the extra room fill light.
   const view = createScene(mount, { grid: false });
-  buildRoom(view.world, { size: 10, cell: 1, floorZ: 0 });
-  // Extra fill so the greybox room reads bright and even (the shared scene lighting is tuned dark
-  // for the course view).
-  view.scene.add(new THREE.HemisphereLight(0xffffff, 0x9a9a9a, 1.9));
+  const env = createEnvironment(view);
+  env.setSize({ footprint: 10, height: 10, floorZ: 0 });
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
 
   let ws = null;
@@ -170,22 +173,23 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     // Symmetric auto-scale for the signed signals so level reads as a centered line.
     const attLim = Math.max(20, ...calHist.roll.map(Math.abs), ...calHist.pitch.map(Math.abs), ...calHist.yaw.map(Math.abs));
     const gyroLim = Math.max(2, ...calHist.p.map(Math.abs), ...calHist.q.map(Math.abs), ...calHist.r.map(Math.abs));
+    const grey = GREY();
     drawSeries($("c_att"), [
-      { data: calHist.roll, color: GREY, lo: -attLim, hi: attLim },
+      { data: calHist.roll, color: grey, lo: -attLim, hi: attLim },
       { data: calHist.pitch, color: CYAN, lo: -attLim, hi: attLim },
       { data: calHist.yaw, color: AMBER, lo: -attLim, hi: attLim },
     ]);
     drawSeries($("c_gyro"), [
-      { data: calHist.p, color: GREY, lo: -gyroLim, hi: gyroLim },
+      { data: calHist.p, color: grey, lo: -gyroLim, hi: gyroLim },
       { data: calHist.q, color: CYAN, lo: -gyroLim, hi: gyroLim },
       { data: calHist.r, color: AMBER, lo: -gyroLim, hi: gyroLim },
     ]);
     drawSeries($("c_batt"), [
-      { data: calHist.vbat, color: GREY, lo: 3.2, hi: 4.4 },
+      { data: calHist.vbat, color: grey, lo: 3.2, hi: 4.4 },
       { data: calHist.thr, color: CYAN, lo: 1000, hi: 2000 },
     ]);
     drawSeries($("c_linkage"), [
-      { data: calHist.age, color: GREY, lo: 0, hi: Math.max(50, ...calHist.age) },
+      { data: calHist.age, color: grey, lo: 0, hi: Math.max(50, ...calHist.age) },
     ]);
   }
 
@@ -232,8 +236,8 @@ export function createBench({ mount, panel, toast, getPolicies }) {
 
   function drawTrend() {
     drawSeries($("b_trend"), [
-      { data: tiltHist, color: GREY, lo: 0, hi: Math.max(10, ...tiltHist) },  // tilt: 0..max°
-      { data: vzHist, color: CYAN, lo: -2, hi: 2 },                            // vz: -2..2 m/s
+      { data: tiltHist, color: GREY(), lo: 0, hi: Math.max(10, ...tiltHist) },  // tilt: 0..max°
+      { data: vzHist, color: CYAN, lo: -2, hi: 2 },                             // vz: -2..2 m/s
     ]);
   }
 
@@ -300,6 +304,9 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     onShow() { view.resize(); if (!ws) connect(); },
     tick() { view.render(); },
     resize() { view.resize(); },
+    // Retheme the bench scene (room + chrome) with the shared toggle; the rolling charts pick up the
+    // new --fg stroke on their next per-frame repaint. If cal mode is up, repaint its charts now too.
+    setTheme(theme) { env.setTheme(theme); if (cal) { /* next onCalFrame repaints */ } else drawTrend(); },
     disconnect,
   };
 }

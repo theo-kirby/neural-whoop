@@ -8,6 +8,9 @@ import * as THREE from "three";
 
 // Sim-frame Box3 over the episode's gates + every flown path, plus its three-world center (mapped
 // through the `world` transform, a pure rotation so lengths are preserved). Returns null if empty.
+// Also returns the raw sim-frame extent needed to size an origin-centred greybox room around the
+// course: `footprint` = 2× the farthest horizontal reach from the origin (so a room centred at
+// (0,0) encloses every point), and `zMax` = the highest sim-z touched.
 export function courseBounds(world, framesList, gates) {
   const simBox = new THREE.Box3();
   const p = new THREE.Vector3();
@@ -18,7 +21,10 @@ export function courseBounds(world, framesList, gates) {
   const centerSim = simBox.getCenter(new THREE.Vector3());
   const radius = Math.max(simBox.getSize(new THREE.Vector3()).length() * 0.5, 2.0);
   const center = centerSim.clone().applyMatrix4(world.matrixWorld);
-  return { center, radius };
+  const reach = Math.max(
+    Math.abs(simBox.min.x), Math.abs(simBox.max.x),
+    Math.abs(simBox.min.y), Math.abs(simBox.max.y), 2.0);
+  return { center, radius, footprint: 2 * reach, zMax: Math.max(simBox.max.z, 1.5) };
 }
 
 // Point the view's orbit camera at the course from nw-viz's fixed 3/4 hero angle, pulled back far

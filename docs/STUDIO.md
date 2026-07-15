@@ -20,6 +20,24 @@ An interactive browser viewer with **two tabs** — a sim-to-real pair:
 The scene and the sidebar are split by a **draggable divider** — grab it to resize both (the width
 persists across reloads).
 
+### Theme + greybox environment
+
+Both tabs render inside the same **greybox reference room** — a bounded "prototype map" box (1 m
+checkerboard tiles, metre gridlines, half-metre dots, baked **"PROTOTYPE"** / **"1 METER"** labels)
+that gives the drone a fixed metric backdrop instead of an infinite void. It is **sized per course**:
+the Simulation room grows/shrinks to the footprint of the loaded course (gates + flown paths), and to
+the arena preset while editing; the Real tab uses a fixed 10 m room. The room's floor is a
+front-facing plane so its labels read correctly (the walls/ceiling are a `BackSide` box so near walls
+cull and never occlude the drone as you orbit).
+
+A **☾/☀ toggle** in the sidebar's top corner switches **light ⇄ dark** — theming the DOM sidebar
+**and** both 3D scenes together (room tiles, scene background/fog, light intensities, and the canvas
+charts). **Light is the default**: a white/grey sidebar over a soft-grey 3D backdrop (matching the
+prototype-map reference); dark is the original near-black greyscale. The choice persists in
+`localStorage["nw_theme"]` and is applied before the first render (no flash). Implemented as one
+`environment.js` manager (`createEnvironment(view)` → `setTheme` / `setSize` / `dispose`) shared by
+both tabs, driven from `main.js`'s `applyTheme`.
+
 The successor to `neural-whoop-lab`'s studio, ported onto this repo's DiffAero env and the v2
 group-replay contract. The UI is a flat 2D greyscale style (custom-styled selects, rounded panels).
 
@@ -215,8 +233,10 @@ reaches the sim stack (lazily), and `/api/export` only shells out to node. The s
 
 Static ES modules; three.js + OrbitControls + TransformControls load from a jsDelivr **importmap**
 (no Node toolchain in this repo). `scene.js`/`geometry.js`/`drone-model.js` are ported near-verbatim
-from the lab; `layout.js`/`cameras.js` port the hero composition from `../nw-viz/` (`cameras.js` also
-carries `frameDrone`, the calibration close-up); `playback.js` is adapted to the v2 `drones[]` group
+from the lab; `environment.js` is the themed greybox-room + scene-chrome manager both tabs share (per
+theme + per course size); `layout.js`/`cameras.js` port the hero composition from `../nw-viz/`
+(`cameras.js` also carries `frameDrone`, the calibration close-up, and `courseBounds` now also
+reports the room footprint); `playback.js` is adapted to the v2 `drones[]` group
 (one tinted actor per drone, **each with its own onboard FPV camera**; a hero actor drives the HUD +
 top-down cam — the same approach as `../nw-viz/src/viewer.js`); `editor.js` is the course editor
 riding the shared player scene (all its objects in one group, toggled by the edit mode); `bench.js`

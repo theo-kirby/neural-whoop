@@ -5,15 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>neural-whoop · studio</title>
   <style>
+    /* :root holds the DARK theme (the original greyscale palette) as the fallback set; data-theme is
+       set early by main.js. The :root[data-theme="light"] block below overrides it for light mode.
+       State/status colours that used to be hardcoded per-rule are promoted to vars here so both
+       themes can set them. */
     :root {
-      /* Greyscale only — blacks / whites / tones of grey, no colour tint. */
+      /* Greyscale base — blacks / whites / tones of grey, no colour tint. */
       --bg: #141414; --panel: #1b1b1b; --panel-2: #242424; --panel-3: #2c2c2c;
       --line: #3a3a3a; --line-strong: #4a4a4a;
       --fg: #ededed; --muted: #9a9a9a; --accent: #dcdcdc; --accent-dim: #8c8c8c;
       --on: #f4f4f4;
+      /* Promoted state colours (dark values). STOP/GO/FAR = command chips; chip-on/off = ARMED etc. */
+      --stop-bg: #4a2424; --stop-fg: #ff9d9d;
+      --go-bg: #163d3d; --go-fg: #6ff0f0;
+      --far-bg: #463a18; --far-fg: #ffe08a;
+      --chip-on-bg: #163d3d; --chip-on-fg: #6ff0f0; --chip-on-border: #2a5a5a;
+      --chip-off-bg: #3a2020; --chip-off-fg: #ff9d9d; --chip-off-border: #5a2a2a;
+      --danger-bg: #3a1c1c; --danger-border: #6a3030; --danger-fg: #ffd6d6; --danger-hover: #a04040;
+      --issue-err-bg: #3a1c1c; --issue-err-fg: #ffd6d6;
+      --issue-warn-bg: #38320f; --issue-warn-fg: #fff0c2;
+      --issue-ok: #8be0b0;
+      --overlay-bg: rgba(18, 18, 18, .7);      /* hero FPV/top label chrome */
+      --overlay-hud-bg: rgba(20, 20, 20, .82); /* hero stats HUD panel */
       --radius: 11px; --radius-sm: 8px;
       --bw: 1.5px;                 /* base border weight — deliberately not hairline */
       --font: Calibri, "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
+    }
+    /* Light theme (default) — white/grey sidebar; the 3D backdrop goes soft-grey via environment.js. */
+    :root[data-theme="light"] {
+      --bg: #e9eaed; --panel: #f4f5f7; --panel-2: #e7e9ec; --panel-3: #dcdee2;
+      --line: #c9ccd2; --line-strong: #aeb2ba;
+      --fg: #1c1e22; --muted: #5c616b; --accent: #3a3d44; --accent-dim: #6b6f78;
+      --on: #101216;
+      --stop-bg: #f6d5d5; --stop-fg: #8a2020;
+      --go-bg: #cdecec; --go-fg: #0f5a5a;
+      --far-bg: #f0e4c2; --far-fg: #6b5410;
+      --chip-on-bg: #cdecec; --chip-on-fg: #0f5a5a; --chip-on-border: #8fbfbf;
+      --chip-off-bg: #f6d5d5; --chip-off-fg: #8a2020; --chip-off-border: #d89a9a;
+      --danger-bg: #f6dede; --danger-border: #d98a8a; --danger-fg: #8a2020; --danger-hover: #c04040;
+      --issue-err-bg: #f6dede; --issue-err-fg: #8a2020;
+      --issue-warn-bg: #f3ecc8; --issue-warn-fg: #6b5410;
+      --issue-ok: #1f7a4d;
+      --overlay-bg: rgba(244, 245, 247, .82);
+      --overlay-hud-bg: rgba(240, 241, 243, .9);
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; overflow: hidden;
@@ -39,6 +73,9 @@
       padding: 8px 30px 8px 10px; width: 100%; cursor: pointer;
       background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%239a9a9a' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
       background-repeat: no-repeat; background-position: right 10px center; }
+    /* Light theme needs a darker chevron (the data-URI stroke can't read a CSS var). */
+    :root[data-theme="light"] select {
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M2 4l4 4 4-4' fill='none' stroke='%235c616b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>"); }
     select:hover { border-color: var(--line-strong); }
     select:focus { outline: none; border-color: var(--accent-dim); }
     select option, select optgroup { background: var(--panel-2); color: var(--fg); }
@@ -63,8 +100,11 @@
       background: var(--panel);
       display: flex; flex-direction: column; }
     #sidebar .brand { padding: 15px 16px; font-weight: 700; letter-spacing: .2px;
-      color: var(--fg); border-bottom: var(--bw) solid var(--line); }
+      color: var(--fg); border-bottom: var(--bw) solid var(--line);
+      display: flex; justify-content: space-between; align-items: center; gap: 8px; }
     #sidebar .brand small { color: var(--muted); font-weight: 400; }
+    /* Compact icon-only light/dark toggle in the brand corner. */
+    .theme-toggle { padding: 4px 9px; font-size: 15px; line-height: 1; flex: none; }
     .section { padding: 15px 16px; border-bottom: var(--bw) solid var(--line);
       display: flex; flex-direction: column; gap: 11px; }
     .section h4 { margin: 0 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
@@ -108,9 +148,9 @@
        the world-space target-marker tints (0=STOP red, 1=GO/NEAR cyan, 2=FAR amber). */
     .hud .v.cmd { font-weight: 700; letter-spacing: .5px; padding: 1px 9px; border-radius: 999px;
       background: var(--panel-3); color: var(--fg); }
-    .hud .v.cmd-0 { background: #4a2424; color: #ff9d9d; }
-    .hud .v.cmd-1 { background: #163d3d; color: #6ff0f0; }
-    .hud .v.cmd-2 { background: #463a18; color: #ffe08a; }
+    .hud .v.cmd-0 { background: var(--stop-bg); color: var(--stop-fg); }
+    .hud .v.cmd-1 { background: var(--go-bg); color: var(--go-fg); }
+    .hud .v.cmd-2 { background: var(--far-bg); color: var(--far-fg); }
 
     /* Training charts — small 2D line plots. */
     .charts { display: flex; flex-direction: column; gap: 12px; }
@@ -129,10 +169,10 @@
     .dotrow .chip { flex: 1; text-align: center; padding: 6px 0; border-radius: var(--radius-sm);
       background: var(--panel-3); color: var(--muted); font-size: 12px; font-weight: 600;
       border: var(--bw) solid var(--line); }
-    .chip.cmd-1 { background: #163d3d; color: #6ff0f0; border-color: #2a5a5a; }  /* on/armed */
-    .chip.cmd-0 { background: #3a2020; color: #ff9d9d; border-color: #5a2a2a; }  /* off */
-    .btn.danger { background: #3a1c1c; border-color: #6a3030; color: #ffd6d6; font-weight: 600; }
-    .btn.danger:hover { border-color: #a04040; }
+    .chip.cmd-1 { background: var(--chip-on-bg); color: var(--chip-on-fg); border-color: var(--chip-on-border); }  /* on/armed */
+    .chip.cmd-0 { background: var(--chip-off-bg); color: var(--chip-off-fg); border-color: var(--chip-off-border); }  /* off */
+    .btn.danger { background: var(--danger-bg); border-color: var(--danger-border); color: var(--danger-fg); font-weight: 600; }
+    .btn.danger:hover { border-color: var(--danger-hover); }
     .btn.big { padding: 13px; font-size: 15px; }
     .bench-trend { width: 100%; height: 70px; background: var(--panel-2);
       border: var(--bw) solid var(--line); border-radius: var(--radius-sm); }
@@ -160,11 +200,11 @@
     .hero-box { position: absolute; border: var(--bw) solid var(--line-strong); border-radius: var(--radius);
       overflow: hidden; pointer-events: none; box-shadow: 0 4px 16px #0006; }
     .hero-box .hlabel { position: absolute; top: 6px; left: 8px; font-size: 10px; letter-spacing: 1.4px;
-      color: var(--accent); background: rgba(18,18,18,.7); padding: 2px 7px; border-radius: 999px; }
+      color: var(--accent); background: var(--overlay-bg); padding: 2px 7px; border-radius: 999px; }
     .hero-box .hsub { position: absolute; bottom: 6px; right: 8px; font-size: 10px; color: var(--muted);
-      background: rgba(18,18,18,.7); padding: 2px 7px; border-radius: 999px; }
+      background: var(--overlay-bg); padding: 2px 7px; border-radius: 999px; }
     /* The stats box is a DOM-only HUD (no WebGL pass behind it) — give it a readable panel bg. */
-    .hero-box.hero-hud { background: rgba(20,20,20,.82); }
+    .hero-box.hero-hud { background: var(--overlay-hud-bg); }
     .hero-hud .hud-body { position: absolute; inset: 26px 12px 12px; display: flex; flex-direction: column;
       gap: 3px; pointer-events: none; }
     .hero-hud .title { color: var(--fg); font-weight: 600; margin-bottom: 4px;
@@ -173,9 +213,9 @@
     .hero-hud .k { color: var(--muted); } .hero-hud .v { color: var(--fg); font-variant-numeric: tabular-nums; }
     .hero-hud .v.cmd { font-weight: 700; letter-spacing: .5px; padding: 1px 9px; border-radius: 999px;
       background: var(--panel-3); color: var(--fg); }
-    .hero-hud .v.cmd-0 { background: #4a2424; color: #ff9d9d; }
-    .hero-hud .v.cmd-1 { background: #163d3d; color: #6ff0f0; }
-    .hero-hud .v.cmd-2 { background: #463a18; color: #ffe08a; }
+    .hero-hud .v.cmd-0 { background: var(--stop-bg); color: var(--stop-fg); }
+    .hero-hud .v.cmd-1 { background: var(--go-bg); color: var(--go-fg); }
+    .hero-hud .v.cmd-2 { background: var(--far-bg); color: var(--far-fg); }
 
     /* Tabs (Simulation / Real) at the top of the sidebar. */
     .tabbar { display: flex; border-bottom: var(--bw) solid var(--line); }
@@ -197,9 +237,9 @@
     .gate-row .idx { color: var(--accent); width: 16px; font-variant-numeric: tabular-nums; }
     .gate-row .pos { color: var(--muted); flex: 1; font-size: 11px; font-variant-numeric: tabular-nums; }
     .issue { padding: 4px 8px; border-radius: var(--radius-sm); margin-bottom: 4px; font-size: 12px; }
-    .issue.error { color: #ffd6d6; background: #3a1c1c; }
-    .issue.warning { color: #fff0c2; background: #38320f; }
-    .issue.ok { color: #8be0b0; }
+    .issue.error { color: var(--issue-err-fg); background: var(--issue-err-bg); }
+    .issue.warning { color: var(--issue-warn-fg); background: var(--issue-warn-bg); }
+    .issue.ok { color: var(--issue-ok); }
 
     .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
       background: var(--panel-2); border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
@@ -238,7 +278,8 @@
     <div id="divider"></div>
 
     <div id="sidebar">
-      <div class="brand">neural-whoop <small>· studio</small></div>
+      <div class="brand"><span>neural-whoop <small>· studio</small></span>
+        <button class="btn theme-toggle" data-h="theme" title="Toggle light / dark">☾</button></div>
       <div class="tabbar">
         <button class="tab active" data-tab="sim">Simulation</button>
         <button class="tab" data-tab="real">Real</button>

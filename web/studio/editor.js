@@ -21,7 +21,7 @@ const DEFAULT_GATES = [
 // sim (x,y,z) -> three (x, z, -y). So a three-world ground hit (X, 0, Z) is sim (X, -Z, ·).
 const simXYFromGround = (p) => [p.x, -p.z];
 
-export function createEditor({ view, panel, toast, onSaved, onFly }) {
+export function createEditor({ view, panel, toast, onSaved, onFly, onArena }) {
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
   // Every editor object lives in this group (identity transform, so its LOCAL frame IS the sim
   // frame) — setActive() toggles the whole edit layer without touching the playback content.
@@ -254,6 +254,7 @@ export function createEditor({ view, panel, toast, onSaved, onFly }) {
     preset = key || "tight";
     arenaRadius = radius || 4.5;
     rebuildArenaRing();
+    onArena?.(arenaRadius);          // size the greybox room to the arena (main.js -> simEnv.setSize)
     scheduleValidate();
   }
 
@@ -281,7 +282,7 @@ export function createEditor({ view, panel, toast, onSaved, onFly }) {
       active = !!on;
       group.visible = active;
       syncGizmo();
-      if (active) scheduleValidate();
+      if (active) { onArena?.(arenaRadius); scheduleValidate(); }
     },
   };
 }

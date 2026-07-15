@@ -95,66 +95,94 @@ export function buildSlot(world, radius = 0.18) {
   return mesh;
 }
 
-// A "prototype map" greybox tile texture: a 2 m x 2 m block (checkerboard of light/dark grey
-// squares) with bright white 1 m gridlines, half-meter intersection dots, and "1 METER" /
-// "[PROTOTYPE MAP]" labels baked along the lines. Repeats across the room's faces so each square is
-// exactly one metre. Returns a THREE.Texture (RepeatWrapping, sRGB).
-function greyboxTexture() {
+// Fallback tile palette if a caller doesn't pass one (near-black "dark" greybox). Callers
+// (environment.js) pass a theme-specific palette so light/dark share this one primitive.
+const FALLBACK_TILE = {
+  tileA: "#1c1c1c", tileB: "#232323", line: "#3a3a3a", dot: "#444444",
+  label: "rgba(150,150,150,0.22)",
+};
+
+// A "prototype map" greybox tile texture: a 2 m x 2 m block (checkerboard of two grey squares) with
+// 1 m gridlines, half-meter intersection dots, and "1 METER" / "PROTOTYPE" labels baked along the
+// lines. `palette` (tileA/tileB/line/dot/label) themes it; `repeatX`/`repeatY` tile it to cover a
+// face at 1 m/square (per-axis so walls stay square when height != footprint). Returns a
+// THREE.CanvasTexture (RepeatWrapping, sRGB).
+function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1) {
   const S = 512, M = S / 2;                  // 512 px = 2 m  ->  256 px per metre
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d");
-  // Neutral greys, low contrast: a faint checker with soft grey (not white) gridlines.
-  const DARK = "#5c5c5c", LIGHT = "#646464", LINE = "#7d7d7d", DOT = "#8a8a8a";
+  const { tileA, tileB, line, dot, label } = palette;
 
-  // Checkerboard: dark on the (0,0)/(M,M) diagonal, light on the off-diagonal.
-  ctx.fillStyle = DARK; ctx.fillRect(0, 0, S, S);
-  ctx.fillStyle = LIGHT; ctx.fillRect(M, 0, M, M); ctx.fillRect(0, M, M, M);
+  // Checkerboard: tileA on the (0,0)/(M,M) diagonal, tileB on the off-diagonal.
+  ctx.fillStyle = tileA; ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = tileB; ctx.fillRect(M, 0, M, M); ctx.fillRect(0, M, M, M);
 
-  // White gridlines at every metre (0/M/S; edge lines straddle the seam and complete on the tile
-  // next door, so the repeat is continuous).
-  ctx.strokeStyle = LINE; ctx.lineWidth = 5;
+  // Gridlines at every metre (0/M/S; edge lines straddle the seam and complete on the tile next
+  // door, so the repeat is continuous).
+  ctx.strokeStyle = line; ctx.lineWidth = 5;
   for (const p of [0, M, S]) {
     ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
   }
   // Half-metre dots on the lines (mark x half, half x mark).
-  ctx.fillStyle = DOT;
+  ctx.fillStyle = dot;
   const marks = [0, M, S], halves = [M / 2, (3 * M) / 2];
-  const dot = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); };
-  for (const a of marks) for (const b of halves) { dot(a, b); dot(b, a); }
+  const dotAt = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); };
+  for (const a of marks) for (const b of halves) { dotAt(a, b); dotAt(b, a); }
 
-  // Labels along the lines (faint grey), repeated every 2 m like the reference.
-  ctx.fillStyle = "rgba(200,200,200,0.28)";
+  // Labels along the lines (faint), repeated every 2 m like the reference. Read correctly (not
+  // mirrored) on the floor, which is built as a front-facing plane below.
+  ctx.fillStyle = label;
   ctx.font = "bold 34px system-ui, -apple-system, sans-serif";
   ctx.textBaseline = "alphabetic";
   ctx.save(); ctx.translate(24, M - 16); ctx.fillText("1 METER", 0, 0); ctx.restore();
-  ctx.save(); ctx.translate(M - 16, S - 24); ctx.rotate(-Math.PI / 2); ctx.fillText("[PROTOTYPE MAP]", 0, 0); ctx.restore();
+  ctx.save(); ctx.translate(M - 16, S - 24); ctx.rotate(-Math.PI / 2); ctx.fillText("PROTOTYPE", 0, 0); ctx.restore();
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 8;
+  tex.repeat.set(repeatX, repeatY);
   return tex;
 }
 
-// A bounded reference room (sim frame, added under `world`): a solid `size` m greybox cube resting
-// on z=floorZ, tiled into `cell` m "prototype map" squares (see greyboxTexture). Built with
-// THREE.BackSide so the near walls are culled and you always look INTO the room — the drone
-// (hovering ~1.2 m up inside) is never occluded as you orbit. Returns the THREE.Mesh.
-export function buildRoom(world, { size = 10, cell = 1, floorZ = 0 } = {}) {
-  const cz = floorZ + size / 2;              // room centre height (sim z)
-  const tex = greyboxTexture();
-  const reps = size / 2;                      // texture block is 2 m; repeat to cover the face
-  tex.repeat.set(reps, reps);
+// A bounded reference room (sim frame): a `size`×`size` footprint × `height` tall greybox resting on
+// z=floorZ, tiled into 1 m "prototype map" squares (see greyboxTexture). Returns a THREE.Group
+// (added under `world`) holding:
+//   - a FRONT-facing (DoubleSide) floor plane just above z=floorZ — the surface people read, so its
+//     baked "PROTOTYPE" / "1 METER" text reads correctly (not mirrored);
+//   - the four walls + ceiling as a BackSide box, so near walls cull and never occlude the drone
+//     (hovering inside) as you orbit. Per-face texture repeats keep every square 1 m even when the
+//     height differs from the footprint. Dispose the whole group (geometry + per-face textures) to
+//     tear it down.
+export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette = FALLBACK_TILE } = {}) {
+  const group = new THREE.Group();
+  const rH = size / 2, rV = height / 2;      // texture block is 2 m -> repeat = metres / 2
 
-  const room = new THREE.Mesh(
-    new THREE.BoxGeometry(size, size, size),
-    new THREE.MeshStandardMaterial({ map: tex, roughness: 1, metalness: 0, side: THREE.BackSide }));
-  room.position.set(0, 0, cz);
-  room.receiveShadow = true;
-  world.add(room);
-  return room;
+  // Floor: its own DoubleSide plane (sim XY, normal +Z), sitting a hair above the box bottom face
+  // so there's no z-fight and the readable text isn't on a mirrored BackSide.
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(size, size),
+    new THREE.MeshStandardMaterial(
+      { map: greyboxTexture(palette, rH, rH), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+  floor.position.set(0, 0, floorZ + 0.003);
+  floor.receiveShadow = true;
+  group.add(floor);
+
+  // Walls + ceiling: a BackSide box. BoxGeometry(size,size,height) face order is
+  // [+X,-X,+Y,-Y,+Z,-Z]; ±X/±Y are walls (repeat height×footprint / footprint×height), ±Z the
+  // ceiling/floor faces (footprint×footprint). The -Z face is hidden under the floor plane above.
+  const wall = (rx, ry) => new THREE.MeshStandardMaterial(
+    { map: greyboxTexture(palette, rx, ry), roughness: 1, metalness: 0, side: THREE.BackSide });
+  const mats = [wall(rV, rH), wall(rV, rH), wall(rH, rV), wall(rH, rV), wall(rH, rH), wall(rH, rH)];
+  const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, height), mats);
+  box.position.set(0, 0, floorZ + height / 2);
+  box.receiveShadow = true;
+  group.add(box);
+
+  world.add(group);
+  return group;
 }
 
 // Dim grey full path + a heat-coloured "traveled" overlay revealed via drawRange. The traveled

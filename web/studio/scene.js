@@ -16,6 +16,8 @@ export function createScene(mount, { grid = true } = {}) {
   mount.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
+  // Background + fog are theme-neutral defaults here; environment.js (createEnvironment) owns the
+  // per-theme background/fog/light intensities and overrides these before the first render.
   scene.background = new THREE.Color(0x141414);
   scene.fog = new THREE.Fog(0x141414, 40, 130);
 
@@ -26,7 +28,10 @@ export function createScene(mount, { grid = true } = {}) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x383838, 1.75));
+  // Light rig — intensities/ground colour are retuned per theme by environment.js (via the returned
+  // `lights` handles), so hold references.
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x383838, 1.75);
+  scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffffff, 2.7);
   sun.position.set(10, 18, 7);
   sun.castShadow = true;
@@ -41,7 +46,9 @@ export function createScene(mount, { grid = true } = {}) {
   fill.position.set(-12, 6, -9);
   scene.add(fill);
 
-  // Ground (three-frame XZ plane = sim XY ground) + grid, sized for the giant arena.
+  // Ground (three-frame XZ plane = sim XY ground), sized for the giant arena — retinted to the scene
+  // background per theme by environment.js so beyond the greybox room it fades into the fog. The
+  // greybox room's own floor plane covers it within the course footprint.
   const ground = new THREE.Mesh(
     new THREE.PlaneGeometry(160, 160),
     new THREE.MeshStandardMaterial({ color: 0x191919, roughness: 1 })
@@ -92,5 +99,8 @@ export function createScene(mount, { grid = true } = {}) {
   }
 
   resize();
-  return { scene, camera, renderer, controls, world, resize, render, renderInset, mount, THREE };
+  return {
+    scene, camera, renderer, controls, world, resize, render, renderInset, mount, THREE,
+    ground, lights: { hemi, sun, fill },
+  };
 }

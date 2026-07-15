@@ -7,15 +7,27 @@
 // A draggable divider between the scene and the sidebar resizes both (persisted).
 
 import { createScene } from "./scene.js";
+import { createEnvironment } from "./environment.js";
 import { Playback } from "./playback.js";
 import { createEditor } from "./editor.js";
 import { createBench } from "./bench.js";
+import { courseBounds } from "./cameras.js";
 import { layoutInsets, layoutInsetsCss } from "./layout.js";
 import { getPolicies, getCourses, getScalars, postRollout, exportVideo, runFileUrl } from "./api.js";
 import { loadRunByPath } from "./run-loader.js";
 
 const $ = (h) => document.querySelector(`[data-h="${h}"]`);
 const MAX_FPV = 6;                  // cap on FPV sub-cells in the grid (busy swarms get a "+N more")
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---- theme (light / dark) -----------------------------------------------------------
+// Single source of truth: documentElement.dataset.theme, persisted in localStorage["nw_theme"].
+// Applied to the DOM early (before the first render) so there's no flash; the 3D scenes are synced
+// once their environments exist (applyTheme, below). Default = light.
+const THEME_KEY = "nw_theme";
+let theme = localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+document.documentElement.dataset.theme = theme;
 
 // ---- toast --------------------------------------------------------------------------
 const toastEl = document.getElementById("toast");
@@ -28,7 +40,9 @@ function toast(msg, isErr = false) {
 }
 
 // ---- scene + playback ---------------------------------------------------------------
-const view = createScene(document.querySelector(".view3d"));
+// grid:false — the greybox room (sized per course on run/edit) replaces the flat 160 m grid+ground.
+const view = createScene(document.querySelector(".view3d"), { grid: false });
+const simEnv = createEnvironment(view);
 const playback = new Playback(view);
 let activeTab = "sim";              // "sim" | "real"
 let simMode = "play";               // Simulation sub-mode: "play" (default) | "edit" (course editor)
@@ -222,15 +236,15 @@ function drawChart(canvas, steps, values) {
   const x0 = steps[0], x1 = steps[steps.length - 1] || 1;
   const px = (s) => pad + ((s - x0) / (x1 - x0 || 1)) * (w - 2 * pad);
   const py = (v) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
-  // Baseline + line.
-  ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 1;
+  // Baseline + line — strokes read from the CSS theme vars so charts repaint per theme.
+  ctx.strokeStyle = cssVar("--line") || "#3a3a3a"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(pad, h - pad); ctx.lineTo(w - pad, h - pad); ctx.stroke();
-  ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 1.5; ctx.lineJoin = "round";
+  ctx.strokeStyle = cssVar("--fg") || "#e0e0e0"; ctx.lineWidth = 1.5; ctx.lineJoin = "round";
   ctx.beginPath();
   steps.forEach((s, i) => { const X = px(s), Y = py(values[i]); i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
   ctx.stroke();
   // Endpoint dot.
-  ctx.fillStyle = "#f4f4f4";
+  ctx.fillStyle = cssVar("--on") || "#f4f4f4";
   ctx.beginPath(); ctx.arc(px(x1), py(values[values.length - 1]), 2.2, 0, Math.PI * 2); ctx.fill();
 }
 
@@ -415,6 +429,13 @@ function showRun(doc, summary) {
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
   const ep = doc.episodes[0];
   playback.setEpisode(ep, dt);
+  // Size the greybox room to the course (footprint from all gates + flown paths, capped height so
+  // big spread courses don't get an absurd ceiling); centred at the origin like the arena.
+  const b = courseBounds(view.world, playback.actors.map((a) => a.frames), ep.gates || []);
+  if (b) {
+    const footprint = b.footprint + 4;   // ~2 m breathing room each side
+    simEnv.setSize({ footprint, height: clamp(b.zMax + 1.5, 4, footprint), floorZ: 0 });
+  }
   const n = playback.maxFrames;
   $("scrub").max = String(Math.max(0, n - 1));
   $("scrub").value = "0";
@@ -439,6 +460,14 @@ const editor = createEditor({
     $("course").value = stem;            // option value == saved stem; refreshCourses ran first
     $("run").click();
   },
+  // Size the greybox room to the arena preset while editing (the flat arena ring stays as an
+  // in-room floor marker). Guarded to edit mode so the editor's async preset-init can't shrink a
+  // course-sized room in play mode.
+  onArena: (radius) => {
+    if (simMode !== "edit") return;
+    const footprint = 2 * radius + 2;
+    simEnv.setSize({ footprint, height: clamp(2 * radius, 4, footprint), floorZ: 0 });
+  },
 });
 
 // ---- real tab (always-on bench drone) -------------------------------------------------
@@ -448,6 +477,22 @@ const bench = createBench({
   toast,
   getPolicies,
 });
+
+// ---- theme toggle ---------------------------------------------------------------------
+// Themes both 3D scenes (simEnv + benchEnv) and the DOM sidebar (via data-theme) together, and
+// repaints the themed canvases (training charts follow the CSS stroke vars; the Real trends repaint
+// on their next frame). The button glyph shows the theme you'd switch TO.
+function applyTheme(t) {
+  theme = t === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem(THEME_KEY, theme);
+  simEnv.setTheme(theme);
+  bench.setTheme(theme);
+  const btn = $("theme");
+  if (btn) btn.textContent = theme === "light" ? "☾" : "☀";
+  renderCharts();
+}
+$("theme").addEventListener("click", () => applyTheme(theme === "light" ? "dark" : "light"));
 
 // ---- Simulation play/edit mode --------------------------------------------------------
 function setSimMode(mode) {
@@ -535,4 +580,5 @@ addEventListener("resize", onLayoutChange);
 
 view.resize();
 syncHeroBoxes();
+applyTheme(theme);          // sync both 3D scenes + the toggle glyph to the persisted theme
 loadSelectors();
