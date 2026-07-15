@@ -14,6 +14,7 @@
 import * as THREE from "three";
 import { createScene } from "./scene.js";
 import { makeDrone } from "./drone-model.js";
+import { buildRoom } from "./geometry.js";
 import { frameDrone } from "./cameras.js";
 
 const TREND = 180;                     // rolling trend length (frames) for every mini-chart
@@ -24,7 +25,10 @@ const RAD2DEG = 180 / Math.PI;
 const GREY = "#e0e0e0", CYAN = "#6ff0f0", AMBER = "#ffd23f";
 
 export function createBench({ mount, panel, toast, getPolicies }) {
-  const view = createScene(mount);
+  // grid:false — the real-drone view uses a bounded 10 m³ reference room instead of the infinite
+  // course grid, so the hand-flown / hover drone has a fixed metric backdrop.
+  const view = createScene(mount, { grid: false });
+  buildRoom(view.world, { size: 10, cell: 1, floorZ: 0 });
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
 
   let ws = null;
