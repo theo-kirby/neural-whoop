@@ -20,10 +20,15 @@ exception: the bridge owns a downward **VL53L1X ToF** (below) and answers MSP cm
 
 | XIAO | CJMCU-531 |
 |---|---|
-| D4 (GPIO5, SDA) | SDA |
-| D5 (GPIO6, SCL) | SCL |
+| D5 (GPIO6) | SDA |
+| D6 (GPIO43) | SCL |
 | 3V3 | VIN |
 | GND | GND |
+
+(The XIAO's stock I²C pins are D4/SDA + D5/SCL; our unit is wired one pin over — D5/SDA +
+D6/SCL — and `initTof()` passes those to `Wire.begin(D5, D6)` explicitly. Note D6/GPIO43 is
+also U0TXD: the ROM bootloader chirps boot logs on it for a moment at power-up, which the
+sensor ignores, but keep it in mind if SCL ever looks noisy at boot.)
 
 Mount the sensor **facing down** (it is the measured-height channel: `tof_m` in the pilot
 flight CSV, real z in the flight-report replay). Firmware runs it in short-distance mode at

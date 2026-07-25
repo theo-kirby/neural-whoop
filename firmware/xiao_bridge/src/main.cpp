@@ -10,7 +10,7 @@
 // fabricates an FC frame.
 //
 // The one deliberate exception to transparency: the bridge owns a downward VL53L1X ToF
-// rangefinder (CJMCU-531 breakout on the XIAO's stock I2C pins, D4/SDA + D5/SCL) and answers
+// rangefinder (CJMCU-531 breakout on I2C, D5/SDA + D6/SCL as wired on our unit) and answers
 // MSP v1 cmd 192 (MSP_BRIDGE_TOF, our id — Betaflight never sees it) locally with the latest
 // range. Requests for that id are consumed, never forwarded; every other '$' packet passes
 // through untouched. With no sensor wired the bridge still boots and proxies; the reply just
@@ -94,11 +94,11 @@ void connectWifi() {
 // whoop hover heights), 20 ms timing budget, free-running at 25 ms (~40 Hz). Absent sensor is
 // fine: init() fails, tof_ok stays false, the bridge proxies as before.
 void initTof() {
-  Wire.begin();  // XIAO ESP32-S3 stock I2C: D4/GPIO5 = SDA, D5/GPIO6 = SCL
+  Wire.begin(D5, D6);  // as wired on our unit: D5/GPIO6 = SDA, D6/GPIO43 = SCL
   Wire.setClock(400000);
   tof.setTimeout(100);
   if (!tof.init()) {
-    Serial.println("tof: no VL53L1X on I2C (D4=SDA D5=SCL) — ranging disabled");
+    Serial.println("tof: no VL53L1X on I2C (D5=SDA D6=SCL) — ranging disabled");
     return;
   }
   tof.setDistanceMode(VL53L1X::Short);
