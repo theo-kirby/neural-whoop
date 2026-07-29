@@ -205,6 +205,108 @@ def cmd_rc_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_checkup(args: argparse.Namespace) -> int:
+    """Walk the whole host -> bridge -> FC chain once and say which layer is broken.
+
+    Built because the drone's battery comes out between tests (it overheats sitting on the
+    bench), so every powered window is scarce -- and half the failures in a bring-up session
+    are really "that test was invalid because something wasn't powered". This runs the entire
+    ladder in one window, in dependency order, and never reports a lower layer's failure as an
+    upper layer's fault.
+    """
+    print("bench checkup -- battery IN, props OFF\n")
+    rows: list[tuple[str, bool, str]] = []
+
+    # Layer 1: the bridge answers its own MSP id. Proves board + WiFi + our UDP path, and needs
+    # no FC power at all.
+    bridge_ok, tof_note = False, ""
+    if args.udp:
+        try:
+            with _client(args) as fc:
+                r = fc.bridge_tof()
+            bridge_ok = True
+            if not r["sensor_ok"]:
+                tof_note = "bridge up, but no VL53L1X on the I2C bus"
+            elif r["range_m"] is not None:
+                tof_note = f"range {r['range_m']*100:.1f} cm, age {r['age_ms']} ms"
+            else:
+                tof_note = f"sensor up, sample invalid (status {r['status']}) -- aim it at a surface"
+        # MspTimeout subclasses TimeoutError, hence OSError -- so it must be caught FIRST or the
+        # socket-layer branch below swallows it and mislabels a timeout as "no route".
+        except (MspTimeout, MspError) as e:
+            tof_note = f"no reply ({e}) -- unpowered, firmware not running, or wrong address/port"
+        except OSError as e:
+            tof_note = f"no route to the bridge ({e}) -- absent, or wrong address"
+        rows.append(("bridge (WiFi + MSP_BRIDGE_TOF)", bridge_ok, tof_note))
+    else:
+        rows.append(("bridge", False, "skipped: serial mode, no bridge in the path"))
+        bridge_ok = True  # not in the chain; don't let it mask the FC result
+
+    # Layer 2: the FC answers. Needs FC power AND both UART directions.
+    fc_ok, fc_note = False, ""
+    if bridge_ok:
+        try:
+            with _client(args) as fc:
+                info = fc.fc_info()
+            fc_ok = True
+            fc_note = f"{info.get('fc_variant', '?')} api {info.get('api_version', '?')}"
+            vbat = info.get("vbat_v")
+            if vbat is not None:
+                fc_note += f", vbat {vbat:.2f} V"
+        except (MspTimeout, MspError) as e:
+            fc_note = f"no reply ({e})"
+        except OSError as e:
+            fc_note = f"socket error ({e})"
+    else:
+        fc_note = "not tested: the bridge itself did not answer, so this says nothing"
+    rows.append(("FC over the UART (MSP_API_VERSION)", fc_ok, fc_note))
+
+    # Layer 3: the number that actually matters for offboard control.
+    link_ok, link_note = False, "not tested: needs a talking FC"
+    if fc_ok:
+        try:
+            times_ms = []
+            cmds = (MSP_ATTITUDE, MSP_RAW_IMU)
+            with _client(args) as fc:
+                fc.request(MSP_ATTITUDE)
+                for i in range(args.n):
+                    t0 = time.perf_counter()
+                    fc.request(cmds[i % 2])
+                    times_ms.append((time.perf_counter() - t0) * 1e3)
+            times_ms.sort()
+            p99 = times_ms[min(len(times_ms) - 1, int(0.99 * len(times_ms)))]
+            med = statistics.median(times_ms)
+            link_ok = p99 < 300.0  # Betaflight's MSP-RC freshness window
+            link_note = f"median {med:.2f} ms, p99 {p99:.2f} ms over {args.n} requests"
+            if not link_ok:
+                link_note += "  -- p99 is past Betaflight's 300 ms MSP-RC window!"
+        except (MspTimeout, MspError, OSError) as e:
+            link_note = f"failed mid-measurement ({e}) -- intermittent link"
+    rows.append(("link budget", link_ok, link_note))
+
+    width = max(len(name) for name, _, _ in rows)
+    print("  layer" + " " * (width - 3) + "status  detail")
+    for name, ok, note in rows:
+        print(f"  {name.ljust(width)}  {'PASS' if ok else 'FAIL'}    {note}")
+
+    # One next action, chosen from the lowest layer that failed.
+    print()
+    if not bridge_ok:
+        print("next: the bridge is the broken layer. Power it (USB, or the battery via the FC "
+              "BEC),\n      check the antenna is seated, and confirm the address -- a stale ARP/mDNS "
+              "cache\n      keeps a dead address resolving. 'pio device monitor' prints the real IP.")
+    elif not fc_ok:
+        print("next: bridge fine, FC silent. Is the battery IN? If it is, this is the UART:\n"
+              "      check Betaflight 'serial' shows the MSP UART at 115200, then run\n"
+              "      'pio run -e uart_scan -t upload' (battery in) to find which pins it is on.")
+    elif not link_ok:
+        print("next: the chain works but the link is too slow for offboard control. Check WiFi\n"
+              "      RSSI at the bridge and contention on the LAN.")
+    else:
+        print("all layers pass -- clear for the Studio Real tab.")
+    return 0 if (bridge_ok and fc_ok and link_ok) else 1
+
+
 def cmd_tof(args: argparse.Namespace) -> int:
     """Live-print the bridge's VL53L1X range — the CJMCU-531 desk bring-up check."""
     if not args.udp:
@@ -265,6 +367,9 @@ def main() -> int:
 
     sub.add_parser("info", help="FC identity + battery")
 
+    p = sub.add_parser("checkup", help="one-shot host->bridge->FC ladder + verdict (battery in)")
+    p.add_argument("--n", type=int, default=100, help="latency samples (default 100)")
+
     p = sub.add_parser("monitor", help="stream telemetry")
     p.add_argument("--hz", type=float, default=20.0)
     p.add_argument("--csv", default=None, help="also append rows to this CSV")
@@ -289,7 +394,8 @@ def main() -> int:
     args = ap.parse_args()
     try:
         return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
-                "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test}[args.cmd](args)
+                "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test,
+                "checkup": cmd_checkup}[args.cmd](args)
     except MspTimeout as e:
         sys.exit(_link_hint(args, e))
     except MspError as e:
