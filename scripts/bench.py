@@ -34,7 +34,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from neural_whoop.bench import MSP_ATTITUDE, MSP_RAW_IMU, MspClient, MspUdpClient  # noqa: E402
+from neural_whoop.bench import (  # noqa: E402
+    MSP_ATTITUDE,
+    MSP_RAW_IMU,
+    MspClient,
+    MspError,
+    MspTimeout,
+    MspUdpClient,
+)
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
 # MSP_SET_RAW_RC frames are in WIRE order and the FC applies its channel map (AETR on our
@@ -48,6 +55,47 @@ def _client(args: argparse.Namespace):
         host, _, port = args.udp.partition(":")
         return MspUdpClient(host, port=int(port) if port else 14550)
     return MspClient(args.port, baud=args.baud)
+
+
+def _link_hint(args: argparse.Namespace, exc: Exception) -> str:
+    if args.udp:
+        return (
+            f"{exc}\n\n"
+            "UDP link check:\n"
+            f"  1. Run: python3 scripts/bench.py --udp {args.udp} tof\n"
+            "     - if this also times out: wrong bridge IP/port, bridge firmware not running, "
+            "or laptop and bridge are not on the same WiFi.\n"
+            "     - if this works: WiFi is alive, but the bridge is not getting FC MSP replies.\n"
+            "  2. Is the flight battery plugged in? The bridge runs off USB or the FC BEC, so it "
+            "answers 'tof' with the FC dark -- but no FC power means no MSP replies, ever.\n"
+            "  3. For FC replies, check Betaflight Ports: UART1 Configuration/MSP at 115200, "
+            "then verify XIAO TX/RX wiring is crossed to the FC RX/TX and shares ground.\n"
+            "  4. The bridge USB monitor should show 'commands flowing' when this command runs."
+        )
+    return (
+        f"{exc}\n\n"
+        "Serial link check: verify the FC port path, that Betaflight is not already held open "
+        "by Configurator, and that the selected port speaks MSP at the requested baud."
+    )
+
+
+def _route_hint(args: argparse.Namespace, exc: OSError) -> str:
+    """A socket-layer failure: the frame never left this machine, so no MSP advice applies."""
+    if args.udp:
+        return (
+            f"{exc}\n\n"
+            f"No route to the bridge at {args.udp} -- this is a socket/ARP failure, not an MSP\n"
+            "timeout, so the bridge is absent rather than unresponsive. Running 'tof' will fail\n"
+            "the same way; don't read anything into it.\n"
+            "  1. Power the bridge: USB, or the flight battery via the FC BEC. With no power the\n"
+            "     XIAO is simply not on the network.\n"
+            "  2. Confirm the address. A stale ARP/mDNS cache keeps a dead address 'resolving'\n"
+            "     for minutes after the board goes away, and DHCP may hand out a new lease on\n"
+            "     the next boot -- 'pio device monitor' prints the real IP at boot, or use the\n"
+            "     mDNS name: --udp whoop-bridge.local\n"
+            "  3. Confirm this machine is on the same WiFi/subnet as the bridge."
+        )
+    return f"{exc}\n\nCould not open the serial port; check the device path and that nothing else holds it."
 
 
 def cmd_info(args: argparse.Namespace) -> int:
@@ -239,8 +287,19 @@ def main() -> int:
     p.add_argument("--ack-props-off", action="store_true")
 
     args = ap.parse_args()
-    return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
-            "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test}[args.cmd](args)
+    try:
+        return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
+                "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test}[args.cmd](args)
+    except MspTimeout as e:
+        sys.exit(_link_hint(args, e))
+    except MspError as e:
+        sys.exit(f"{e}\n\nThe FC answered with an MSP error frame; the link is up, but that command "
+                 "is unsupported or disabled in the current FC/bridge configuration.")
+    except OSError as e:
+        # EHOSTDOWN/EHOSTUNREACH/ENETUNREACH: ARP or routing failed and the datagram never went
+        # out. Distinct from MspTimeout (frames sent, nothing came back) and worth saying so --
+        # the timeout advice above would send you chasing the FC when the bridge is just off.
+        sys.exit(_route_hint(args, e))
 
 
 if __name__ == "__main__":
