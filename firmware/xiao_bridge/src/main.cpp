@@ -95,7 +95,13 @@ void connectWifi() {
 // fine: init() fails, tof_ok stays false, the bridge proxies as before.
 void initTof() {
   Wire.begin(D5, D6);  // as wired on our unit: D5/GPIO6 = SDA, D6/GPIO43 = SCL
-  Wire.setClock(400000);
+  // 100 kHz, not 400: after the 2026-07-29 rewire the sensor stopped ACKing at 400 kHz
+  // (Wire error 263 = ESP_ERR_TIMEOUT) while i2c_scan reached it fine at 100 kHz on these
+  // same pins — the longer harness' bus capacitance pushes rise time through the breakout's
+  // ~10k pull-ups past the 400 kHz budget. Costs ~2 ms per poll instead of ~0.6 ms; that is
+  // inside the 25 ms poll period, but it is blocking, so watch `bench.py latency` if the MSP
+  // RTT budget ever gets tight.
+  Wire.setClock(100000);
   tof.setTimeout(100);
   if (!tof.init()) {
     Serial.println("tof: no VL53L1X on I2C (D5=SDA D6=SCL) — ranging disabled");

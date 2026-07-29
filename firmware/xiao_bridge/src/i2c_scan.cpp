@@ -73,6 +73,11 @@ int scanPair(uint8_t sda, uint8_t scl, const char *sda_name, const char *scl_nam
   }
   if (found) Serial.println();
   Wire.end();
+  // Wire.end() leaves the pins routed to the I2C peripheral in the GPIO matrix, so a pin used
+  // as SCL in one pair keeps clocking in later pairs and every pair with the right SDA appears
+  // to ACK. Forcing both pins back to plain inputs detaches them.
+  pinMode(sda, INPUT);
+  pinMode(scl, INPUT);
   return found;
 }
 
