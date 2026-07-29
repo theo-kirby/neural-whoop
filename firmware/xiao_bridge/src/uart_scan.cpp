@@ -7,19 +7,25 @@
 //
 // Two passes:
 //
-//   1. Idle-level pass. Every candidate pin is read as a plain INPUT, pull-ups OFF. An idle
-//      UART line held by a *powered* FC sits HIGH, so pins reading HIGH are the ones something
-//      is actively driving — i.e. candidates for the FC's TX pad landing on our RX. If NOTHING
-//      reads HIGH, the FC's TX is not reaching the XIAO at all (broken wire, or the wires are
-//      on pads belonging to a different UART) and no pin permutation will fix it.
-//   2. Probe pass. For each (tx, rx) candidate, send MSP_API_VERSION and hex-dump whatever
-//      comes back. A reply beginning '$M>' means that pair is the wiring — put it in
-//      wifi_config.h as FC_TX_PIN / FC_RX_PIN.
+//   1. Idle-level pass, read two ways. A plain INPUT reading is NOT enough: some pins carry a
+//      ROM pull-up (GPIO44/D7 is the native UART0 RX and reads HIGH on a bare board, with no FC
+//      attached at all — it fooled the first version of this tool). So each pin is also read
+//      with INPUT_PULLDOWN: the internal pull-down is ~45k, which a real push-pull UART driver
+//      wins easily, while an internal pull-up loses. HIGH *against the pull-down* is the honest
+//      "something external is driving this" signal. If nothing survives that test, the FC's TX
+//      is not reaching the XIAO (open wire, or wires on a different UART's pads) and no pin
+//      permutation will fix it.
+//   2. Probe pass. Send MSP_API_VERSION on each candidate (tx, rx) and hex-dump the answer. A
+//      reply beginning '$M>' names the wiring for FC_TX_PIN / FC_RX_PIN. The pair configured in
+//      wifi_config.h is ALWAYS probed, even if pass 1 thinks its RX is idle — pass 1 is a
+//      heuristic and must not be able to veto the documented wiring.
 //
-// Deliberately conservative about what it drives: only pins that pass 1 found *undriven* are
-// used as TX, so the probe never fights an FC output. D5/D6 are skipped (the ToF I2C bus).
+// Deliberately conservative about what it drives: only pins pass 1 found undriven are used as
+// TX, so the probe never fights an FC output. D5/D6 are skipped (the ToF I2C bus).
 
 #include <Arduino.h>
+
+#include "wifi_config.h"
 
 namespace {
 
@@ -50,29 +56,52 @@ void sendApiVersionRequest() {
   probe.flush();
 }
 
+// Sample a pin under a given input mode; returns how many of 8 reads were HIGH.
+int sampleHigh(uint8_t gpio, uint8_t mode) {
+  pinMode(gpio, mode);
+  delay(2);
+  int high = 0;
+  for (int s = 0; s < 8; s++) {
+    high += digitalRead(gpio) == HIGH ? 1 : 0;
+    delay(1);
+  }
+  return high;
+}
+
 void idleLevels() {
-  Serial.println("\n--- pass 1: idle levels (pull-ups OFF, battery must be IN) ---");
-  Serial.println("HIGH = something is driving this pin => candidate for the FC's TX pad.");
-  Serial.println("LOW/unstable = nothing driving it.\n");
-  for (size_t i = 0; i < kNumPins; i++) pinMode(kPins[i].gpio, INPUT);
-  delay(10);
+  Serial.println("\n--- pass 1: idle levels (battery must be IN) ---");
+  Serial.println("Each pin read twice: floating, then against the ~45k internal pull-down.");
+  Serial.println("Staying HIGH against the pull-down = really driven by the FC.");
+  Serial.println("HIGH floating but LOW pulled down = only an internal pull-up (e.g. GPIO44).\n");
   int driven_count = 0;
   for (size_t i = 0; i < kNumPins; i++) {
-    int high = 0;
-    for (int s = 0; s < 8; s++) {
-      high += digitalRead(kPins[i].gpio) == HIGH ? 1 : 0;
-      delay(1);
+    const int floatHigh = sampleHigh(kPins[i].gpio, INPUT);
+    const int pdHigh = sampleHigh(kPins[i].gpio, INPUT_PULLDOWN);
+    pinMode(kPins[i].gpio, INPUT);
+    driven[i] = (pdHigh == 8);
+    const char *verdict;
+    if (pdHigh == 8) {
+      verdict = "DRIVEN (external)";
+    } else if (floatHigh == 8) {
+      verdict = "internal pull-up only -- NOT connected";
+    } else if (floatHigh == 0) {
+      verdict = "LOW";
+    } else {
+      verdict = "unstable/floating";
     }
-    driven[i] = (high == 8);
-    const char *verdict = high == 8 ? "HIGH (driven)" : (high == 0 ? "LOW" : "unstable/floating");
-    Serial.printf("  %-3s GPIO%-2u : %s\n", kPins[i].name, kPins[i].gpio, verdict);
+    Serial.printf("  %-3s GPIO%-2u : float=%d/8 pulldown=%d/8  %s\n", kPins[i].name, kPins[i].gpio,
+                  floatHigh, pdHigh, verdict);
     if (driven[i]) driven_count++;
   }
   if (driven_count == 0) {
-    Serial.println("\n  !! No pin is being driven. With the battery IN, the FC's TX pad should hold");
-    Serial.println("     its line HIGH. So the FC->XIAO wire is open, or it is soldered to a pad on");
-    Serial.println("     a different UART than the one Betaflight has set to MSP. Check continuity");
-    Serial.println("     from the FC's T1 pad to the XIAO pin, and confirm you are on UART1's pads.");
+    Serial.println("\n  !! Nothing is externally driven. With the battery IN and its UART set to");
+    Serial.println("     MSP, the FC's TX pad idles HIGH and should hold a connected pin high even");
+    Serial.println("     against the pull-down. So the FC->XIAO wire is open, shorted to GND, or");
+    Serial.println("     soldered to a pad on a different UART. Check continuity from the FC's T1");
+    Serial.println("     pad to the XIAO pin, and confirm those pads really are UART1's.");
+    Serial.printf("     (The configured pair from wifi_config.h -- TX=GPIO%d RX=GPIO%d -- is still\n",
+                  FC_TX_PIN, FC_RX_PIN);
+    Serial.println("      probed below regardless, in case the line is driven but sitting low.)");
   }
 }
 
@@ -107,22 +136,39 @@ void probeAllPairs() {
   Serial.println("RX candidates = pins pass 1 saw driven; TX candidates = pins it saw undriven");
   Serial.println("(so we never drive into an FC output).\n");
   int hits = 0, tried = 0;
+
+  // The documented wiring first, unconditionally: pass 1 is a heuristic and must not be able to
+  // veto the pair the bridge actually ships with.
+  Serial.printf("  [configured pair from wifi_config.h] TX=GPIO%d RX=GPIO%d\n", FC_TX_PIN, FC_RX_PIN);
+  tried++;
+  if (probePair(FC_TX_PIN, FC_RX_PIN, "cfgTX", "cfgRX")) hits++;
+
   for (size_t r = 0; r < kNumPins; r++) {
     if (!driven[r]) continue;  // only pins the FC appears to be driving can be our RX
     for (size_t t = 0; t < kNumPins; t++) {
       if (t == r || driven[t]) continue;
+      if (kPins[t].gpio == FC_TX_PIN && kPins[r].gpio == FC_RX_PIN) continue;  // already done
       tried++;
       if (probePair(kPins[t].gpio, kPins[r].gpio, kPins[t].name, kPins[r].name)) hits++;
     }
   }
   Serial.printf("\n  %d pair(s) tried, %d MSP reply(ies).\n", tried, hits);
-  if (tried == 0) {
-    Serial.println("  Nothing to try: pass 1 found no driven pin. Fix the FC->XIAO wire first.");
-  } else if (hits == 0) {
-    Serial.println("  A pin is driven but the FC never answered MSP. That means the FC->XIAO");
-    Serial.println("  direction is probably fine and the XIAO->FC direction is not: the FC never");
-    Serial.println("  hears the request. Check the XIAO TX wire into the FC's R1 pad, and that");
-    Serial.println("  Betaflight's MSP port really is the UART those pads belong to.");
+  if (hits == 0) {
+    bool any_driven = false;
+    for (size_t i = 0; i < kNumPins; i++) any_driven |= driven[i];
+    if (!any_driven) {
+      // The common case, and the one to trust: nothing external is driving any pin, so the
+      // inbound wire is the fault. Do NOT blame the outbound direction here -- with no inbound
+      // link there is no evidence either way about whether the FC hears us.
+      Serial.println("  No MSP reply, and pass 1 found nothing externally driven. The fault is the");
+      Serial.println("  FC->XIAO direction: that wire is open, shorted, or on the wrong pad. The");
+      Serial.println("  XIAO->FC direction is UNTESTED -- a reply needs both, so nothing here says");
+      Serial.println("  anything about it. Fix the inbound wire, re-run, and this will tell you.");
+    } else {
+      Serial.println("  A pin is externally driven but no MSP reply came back. Inbound looks alive,");
+      Serial.println("  so suspect the XIAO->FC wire into the FC's R1 pad, or that Betaflight's MSP");
+      Serial.println("  port is not the UART those pads belong to.");
+    }
   }
 }
 
