@@ -83,7 +83,23 @@ p99 24 ms over 500 requests — far inside Betaflight's 300 ms MSP-RC freshness 
 
 ## Debugging the link
 
-Two helper firmwares share `wifi_config.h`: `pio run -e blink_test -t upload` (WiFi/UDP
+When `initTof()` reports `no VL53L1X on I2C`, run the bus probe — no WiFi, no FC, no battery,
+USB power alone:
+
+```bash
+pio run -e i2c_scan -t upload && pio device monitor
+```
+
+It prints two passes. First the **idle levels** of every candidate pin with the internal
+pull-ups off: the CJMCU-531 carries its own ~10k pull-ups to VIN, so a pin wired to a
+*powered* sensor reads HIGH with nothing driving it. If SDA and SCL both read LOW, **3V3→VIN
+is the fault** and SDA/SCL order is irrelevant. Then an **address sweep over every ordered
+(SDA, SCL) pin pair** (0x08–0x77; a VL53L1X answers at 0x29), so a hit names the pins the
+sensor is actually on — feed those to `Wire.begin()`. Nothing ACKing on any pair means
+unpowered, unconnected, or dead, independent of pin choice. D9/D10 are excluded (the FC UART
+pair — clocking them would drive an unpowered FC). Re-flash `xiao_bridge` when done.
+
+Three helper firmwares share `wifi_config.h`: `pio run -e blink_test -t upload` (WiFi/UDP
 smoke test, no FC needed: `printf on | nc -u -w1 <ip> 14550` toggles the LED) and
 `pio run -e uart_probe -t upload` (sends `ping N` out the FC UART once a second and
 hex-dumps received bytes to USB). Pair the probe with Betaflight CLI
