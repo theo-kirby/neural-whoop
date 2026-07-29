@@ -77,20 +77,27 @@ void idleLevels() {
   for (size_t i = 0; i < kNumPins; i++) {
     const int floatHigh = sampleHigh(kPins[i].gpio, INPUT);
     const int pdHigh = sampleHigh(kPins[i].gpio, INPUT_PULLDOWN);
+    const int puHigh = sampleHigh(kPins[i].gpio, INPUT_PULLUP);
     pinMode(kPins[i].gpio, INPUT);
     driven[i] = (pdHigh == 8);
     const char *verdict;
     if (pdHigh == 8) {
-      verdict = "DRIVEN (external)";
+      verdict = "DRIVEN high (external)";
+    } else if (puHigh == 0) {
+      // The internal pull-up cannot even lift the pin. Either the line is held low by something
+      // low-impedance (a real driver, or a short to GND), or this pin's input buffer is dead --
+      // which is exactly D7/GPIO44's documented failure on this unit. Not distinguishable from
+      // inside the chip; move the wire to a known-good pin to tell them apart.
+      verdict = "STUCK LOW even with pull-up -- shorted to GND, driven low, or DEAD INPUT";
+    } else if (puHigh == 8 && floatHigh == 0) {
+      verdict = "open (pull-up lifts it; nothing connected/driving)";
     } else if (floatHigh == 8) {
       verdict = "internal pull-up only -- NOT connected";
-    } else if (floatHigh == 0) {
-      verdict = "LOW";
     } else {
       verdict = "unstable/floating";
     }
-    Serial.printf("  %-3s GPIO%-2u : float=%d/8 pulldown=%d/8  %s\n", kPins[i].name, kPins[i].gpio,
-                  floatHigh, pdHigh, verdict);
+    Serial.printf("  %-3s GPIO%-2u : float=%d/8 pulldown=%d/8 pullup=%d/8  %s\n", kPins[i].name,
+                  kPins[i].gpio, floatHigh, pdHigh, puHigh, verdict);
     if (driven[i]) driven_count++;
   }
   if (driven_count == 0) {
