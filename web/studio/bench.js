@@ -41,6 +41,12 @@ export function createBench({ mount, panel, toast, getPolicies }) {
   let connected = false;
   let lastPhase = "waiting";           // Flip doubles as a starter when pressed while WAITING
   let cal = false;                     // calibration mode (close-up attitude check)?
+  // Poll rate to ask for while the calibration view is open. The binding constraint is the FC's
+  // 115200-baud MSP UART, not WiFi: each tick moves ~74 bytes (ATTITUDE + RAW_IMU +
+  // MOTOR_TELEMETRY requests and replies; the ToF request is answered by the bridge and never
+  // reaches the FC), and 11520 B/s / 74 B ~= 155 ticks/s is the hard ceiling. 100 Hz sits at ~64%
+  // utilisation -- double the default 50 Hz, with headroom for the periodic ANALOG/RC polls.
+  const CAL_HZ = 100;
   const tiltHist = [];
   const vzHist = [];
   // Calibration ring buffers — one per plotted signal (filled only while cal mode is on).
@@ -154,6 +160,11 @@ export function createBench({ mount, panel, toast, getPolicies }) {
       view.controls.target.set(0, 0, 0);
       view.controls.update();
     }
+    // Ask the backend to poll faster while we're staring at a live attitude readout, and hand the
+    // rate back to the panel's value on exit. `params` is accepted only in the WAITING state
+    // (flight.py), so this is a no-op mid-flight rather than something that could retune a live
+    // control loop. Backend field name is the FlightParams one.
+    send({ type: "params", hz: on ? CAL_HZ : (Number($("b_hz").value) || 50) });
   }
 
   function onCalFrame(msg, t, m, st, link) {

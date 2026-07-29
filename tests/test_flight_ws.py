@@ -11,6 +11,7 @@ flight path (the MSP link is a different resource).
 from __future__ import annotations
 
 import json
+import time
 
 from fastapi.testclient import TestClient
 
@@ -143,6 +144,43 @@ def test_params_then_start_same_batch_flies(tmp_path):
             assert flying["phase"] in ("countdown", "seek", "rise", "hover", "land")
     assert mgr._params.trim_pitch_deg == -2.5 and mgr._params.trim_roll_deg == 0.5
     assert not ROLLOUT_LOCK.locked()
+
+
+def test_params_hz_change_retimes_the_loop(tmp_path):
+    """Regression: the fly loop must recompute its sleep period from the CURRENT controller.
+
+    `period` used to be hoisted above the loop, so it was fixed to whatever the first controller was
+    built with. A `params` message swaps in a new controller (and `ctrl.params.hz` did change), but
+    the loop kept sleeping at the original rate -- so the Calibrate view's request for a faster poll,
+    and the panel's own hz field, were silently ignored. Asserts the live controller carries the new
+    rate and that frames actually speed up.
+    """
+    fake = FakeFlightBridge(armed=True, override=True)
+    mgr = FlightManager(
+        "fake", weights=_synth_weights(tmp_path), params=FlightParams(hz=20.0),
+        runs_dir=tmp_path / "pilot", client_factory=lambda *_a, **_k: fake)
+    app = _app_with(tmp_path, mgr)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/flight") as ws:
+            _read_until(ws, lambda m: m.get("step"))
+            assert mgr._ctrl.params.hz == 20.0
+            # What setCal(true) sends on opening the calibration view: hz only, no other field.
+            ws.send_json({"type": "params", "hz": 100})
+            # Let the swap land, then time how long N ticks actually take. Asserting on step counts
+            # alone does NOT catch the bug -- the reader just waits longer -- and neither does
+            # ctrl.params.hz, which changed even when the loop ignored it. Only wall-clock per tick
+            # measures the thing that was broken.
+            base = _read_until(ws, lambda m: m.get("step"))
+            t0 = time.monotonic()
+            ticks = 20
+            later = _read_until(ws, lambda m: (m.get("step") or 0) >= (base["step"] + ticks))
+            elapsed = time.monotonic() - t0
+            hz_after = mgr._ctrl.params.hz  # inside the context: stop() clears _ctrl
+    assert hz_after == 100.0
+    assert (later.get("step") or 0) >= base["step"] + ticks
+    # 20 ticks take ~0.2 s at 100 Hz but ~1.0 s at the stale 20 Hz. 0.5 s splits them with room
+    # for scheduler noise on a loaded machine.
+    assert elapsed < 0.5, f"{ticks} ticks took {elapsed:.2f}s — loop still paced by the old hz"
 
 
 def test_flip_command_as_starter_takes_off_flips_then_hovers(tmp_path):

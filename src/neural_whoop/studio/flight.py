@@ -224,10 +224,14 @@ class FlightManager:
 
     def _fly_loop(self, fc, ctrl: FlightController) -> None:
         self._ctrl = ctrl
-        period = 1.0 / max(1.0, ctrl.params.hz)
         while not self._stop.is_set():
             t0 = time.monotonic()
             ctrl = self._apply_commands(fc, ctrl)
+            # Recomputed every tick, from the CURRENT controller: `_apply_commands` swaps in a new
+            # controller when the browser sends `params`, so a period hoisted out of the loop would
+            # pin the rate to whatever the first controller was built with and silently ignore every
+            # later hz change (the panel's hz field reached ctrl.params but not this sleep).
+            period = 1.0 / max(1.0, ctrl.params.hz)
             frame = ctrl.step()
             self._link_state = self._derive_link(ctrl, frame)
             self._publish(frame)

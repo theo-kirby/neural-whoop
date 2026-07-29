@@ -380,7 +380,11 @@ def create_app(
         last_seq = -1
         try:
             while True:
-                await asyncio.sleep(0.02)
+                # 5 ms, not 20: this loop polls for a new frame, so its period lands directly on
+                # end-to-end display latency (it was ~a third of the Calibrate view's total lag).
+                # Frames are only sent when `seq` advances, so a faster poll costs no extra traffic
+                # -- it just stops a ready frame waiting for the next wake-up.
+                await asyncio.sleep(0.005)
                 for m in mgr.drain_messages():   # out-of-band (e.g. flight-report ready)
                     await ws.send_json(m)
                 f = mgr.latest()
