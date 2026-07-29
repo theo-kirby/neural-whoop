@@ -99,7 +99,24 @@ sensor is actually on — feed those to `Wire.begin()`. Nothing ACKing on any pa
 unpowered, unconnected, or dead, independent of pin choice. D9/D10 are excluded (the FC UART
 pair — clocking them would drive an unpowered FC). Re-flash `xiao_bridge` when done.
 
-Three helper firmwares share `wifi_config.h`: `pio run -e blink_test -t upload` (WiFi/UDP
+When `tof` works but `info` times out — bridge and WiFi proven, FC not answering — run the UART
+probe. This one **needs the flight battery in** (props off), because the FC has to be powered
+both to answer and to drive its TX pad:
+
+```bash
+pio run -e uart_scan -t upload && pio device monitor
+```
+
+Same two-pass shape as `i2c_scan`. Pass 1 reads idle levels: a powered FC holds its TX line
+HIGH, so a driven pin is where the FC's T1 landed. **No driven pin at all means the FC→XIAO
+wire is open or soldered to a pad on a different UART** — no pin permutation fixes that. Pass 2
+sends `MSP_API_VERSION` on each plausible (tx, rx) pair and hex-dumps the answer; a reply
+starting `$M>` names the wiring for `FC_TX_PIN`/`FC_RX_PIN`. It only drives pins pass 1 found
+*undriven*, so it never fights an FC output, and it skips D5/D6 (the ToF bus). A driven pin but
+no MSP reply isolates the fault to the XIAO→FC direction (the FC never hears the request).
+Re-flash `xiao_bridge` when done.
+
+Four helper firmwares share `wifi_config.h`: `pio run -e blink_test -t upload` (WiFi/UDP
 smoke test, no FC needed: `printf on | nc -u -w1 <ip> 14550` toggles the LED) and
 `pio run -e uart_probe -t upload` (sends `ping N` out the FC UART once a second and
 hex-dumps received bytes to USB). Pair the probe with Betaflight CLI
