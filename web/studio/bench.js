@@ -181,14 +181,18 @@ export function createBench({ mount, panel, toast, getPolicies }) {
     if (msg.cmd && msg.cmd.us_thr != null) push(calHist.thr, msg.cmd.us_thr);
     const age = m.link_age_ms ?? t.obs_age_ms;
     if (age != null) push(calHist.age, age);
-    // Symmetric auto-scale for the signed signals so level reads as a centered line.
-    const attLim = Math.max(20, ...calHist.roll.map(Math.abs), ...calHist.pitch.map(Math.abs), ...calHist.yaw.map(Math.abs));
+    // Symmetric auto-scale for the signed signals so level reads as a centered line. Yaw is
+    // deliberately EXCLUDED from the roll/pitch scale and drawn on its own fixed +-180: it is a
+    // heading that ranges over the whole circle, so letting it set the limit squashed the +-few-deg
+    // roll/pitch traces flat against the centre line and pinned yaw to the chart edge (which reads
+    // as a frozen signal). Its own scale also makes the +-180 wrap legible rather than a spike.
+    const attLim = Math.max(20, ...calHist.roll.map(Math.abs), ...calHist.pitch.map(Math.abs));
     const gyroLim = Math.max(2, ...calHist.p.map(Math.abs), ...calHist.q.map(Math.abs), ...calHist.r.map(Math.abs));
     const grey = GREY();
     drawSeries($("c_att"), [
       { data: calHist.roll, color: grey, lo: -attLim, hi: attLim },
       { data: calHist.pitch, color: CYAN, lo: -attLim, hi: attLim },
-      { data: calHist.yaw, color: AMBER, lo: -attLim, hi: attLim },
+      { data: calHist.yaw, color: AMBER, lo: -180, hi: 180 },
     ]);
     drawSeries($("c_gyro"), [
       { data: calHist.p, color: grey, lo: -gyroLim, hi: gyroLim },

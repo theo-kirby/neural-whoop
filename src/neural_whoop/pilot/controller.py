@@ -723,7 +723,14 @@ class FlightController:
         # Yaw for the Studio's calibration view, sim-signed (MSP heading is compass-positive =
         # nose-right; sim yaw about +z is nose-left, so negate). Not part of the policy obs; with
         # no magnetometer it's the FC's gyro-integrated heading (tracks rotation, drifts slowly).
-        yaw = -math.radians(self.tel.att["yaw_deg"]) if self.tel.att else 0.0
+        # Wrapped to (-pi, pi]: MSP reports an absolute 0..359 heading, so the raw negation only
+        # ever produced -359..0 and jumped a full turn at the wrap. Same orientation modulo 2pi
+        # (the glyph is unaffected), but the readout is now signed-about-zero like roll/pitch, and
+        # a chart of it can't be dominated by a ~200 deg offset.
+        yaw = 0.0
+        if self.tel.att:
+            yaw = -math.radians(self.tel.att["yaw_deg"])
+            yaw = (yaw + math.pi) % (2.0 * math.pi) - math.pi
         return {
             "type": "frame",
             "phase": phase.value,
