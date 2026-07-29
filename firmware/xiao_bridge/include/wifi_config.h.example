@@ -21,5 +21,5 @@
 
 // XIAO ESP32-S3 pins wired to the flight controller's free UART pads (UART1 on the
 // Matrix 1S 5IN1 II). XIAO TX -> FC RX pad, XIAO RX -> FC TX pad, GND -> GND.
-#define FC_TX_PIN 43  // XIAO silkscreen D6/TX
-#define FC_RX_PIN 44  // XIAO silkscreen D7/RX
+#define FC_TX_PIN 1   // XIAO silkscreen D0 (GPIO1) -> FC R1 (rx1)
+#define FC_RX_PIN 2   // XIAO silkscreen D1 (GPIO2) -> FC T1 (tx1)

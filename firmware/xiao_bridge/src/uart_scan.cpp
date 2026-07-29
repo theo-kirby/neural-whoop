@@ -92,7 +92,11 @@ void idleLevels() {
     } else if (puHigh == 8 && floatHigh == 0) {
       verdict = "open (pull-up lifts it; nothing connected/driving)";
     } else if (floatHigh == 8) {
-      verdict = "internal pull-up only -- NOT connected";
+      // Reads high floating but loses to the pull-down. Either a bare pin with a ROM pull-up
+      // (D7/GPIO44) or -- confirmed on this FC 2026-07-30 -- a live UART TX that idles through
+      // its own weak (~40k) pull-up instead of driving push-pull. Those are NOT distinguishable
+      // from here, so do not call it disconnected: only pass 2 settles it.
+      verdict = "weak high -- bare pin w/ ROM pull-up OR a live TX idling weakly (see pass 2)";
     } else {
       verdict = "unstable/floating";
     }
@@ -101,14 +105,14 @@ void idleLevels() {
     if (driven[i]) driven_count++;
   }
   if (driven_count == 0) {
-    Serial.println("\n  !! Nothing is externally driven. With the battery IN and its UART set to");
-    Serial.println("     MSP, the FC's TX pad idles HIGH and should hold a connected pin high even");
-    Serial.println("     against the pull-down. So the FC->XIAO wire is open, shorted to GND, or");
-    Serial.println("     soldered to a pad on a different UART. Check continuity from the FC's T1");
-    Serial.println("     pad to the XIAO pin, and confirm those pads really are UART1's.");
-    Serial.printf("     (The configured pair from wifi_config.h -- TX=GPIO%d RX=GPIO%d -- is still\n",
+    Serial.println("\n  Nothing reads as strongly driven -- but that is NOT conclusive: this FC's TX");
+    Serial.println("  idles through a weak pull-up, which the internal pull-down cancels out, so a");
+    Serial.println("  perfectly good link shows up as 'weak high' (seen 2026-07-30). Trust pass 2.");
+    Serial.println("  A 'STUCK LOW even with pull-up' line above IS conclusive though: that one is");
+    Serial.println("  shorted to ground -- check the joint and its neighbours for a solder bridge.");
+    Serial.printf("  (The configured pair from wifi_config.h -- TX=GPIO%d RX=GPIO%d -- is always\n",
                   FC_TX_PIN, FC_RX_PIN);
-    Serial.println("      probed below regardless, in case the line is driven but sitting low.)");
+    Serial.println("   probed below regardless of anything concluded here.)");
   }
 }
 

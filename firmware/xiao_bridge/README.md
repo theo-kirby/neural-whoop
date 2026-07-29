@@ -11,8 +11,8 @@ exception: the bridge owns a downward **VL53L1X ToF** (below) and answers MSP cm
 
 | XIAO | FC |
 |---|---|
-| D10 / MOSI (GPIO9) | UART1 RX pad (R1) |
-| D9 / MISO (GPIO8) | UART1 TX pad (T1) |
+| D0 (GPIO1) | UART1 RX pad (R1) |
+| D1 (GPIO2) | UART1 TX pad (T1) |
 | GND | GND |
 | 5V | 5V pad (FC BEC) |
 
@@ -44,11 +44,15 @@ pio run -e xiao_bridge -t upload
 python3 scripts/bench.py --udp <bridge-ip> tof     # wave a hand over it; range should track
 ```
 
-The natural RX choice would be D7/GPIO44, but on our unit that input is dead (line idles at a
-healthy 3.3 V, yet neither UART1-matrix nor native-UART0 reception ever sees a byte — presumed
-ESD/heat casualty). Any free GPIO works as UART TX/RX via the ESP32-S3 matrix; the wiring was
-moved to the SPI-side pins D9/D10 on 2026-07-10. Match `FC_TX_PIN`/`FC_RX_PIN` in
-`wifi_config.h` to wherever the FC's R1/T1 wires actually land.
+Any free GPIO works as UART TX/RX via the ESP32-S3 matrix, so match `FC_TX_PIN`/`FC_RX_PIN` in
+`wifi_config.h` to wherever the FC's R1/T1 wires actually land. Pin history on this build: the
+original D7/GPIO44 was written off on 2026-07-05 as a dead input (idled at a healthy 3.3 V, never
+received a byte on either the UART1 matrix or native UART0), the wiring moved to the SPI-side
+D9/D10 on 2026-07-10, and to **D0/D1 on 2026-07-30**. That last move was a red herring: D9 and
+D10 both measured healthy afterwards (`uart_scan`, `pullup=8/8 open`) and the real fault was a
+**solder bridge shorting the T1 line to ground** — it followed the wire from pin to pin, dragging
+whichever GPIO it touched low. D7's original verdict belongs to a since-replaced XIAO. Suspect the
+joints before the silicon; `uart_scan` distinguishes them.
 
 Mount with the antenna clear of the frame; the plain (camera-less) XIAO is enough for the
 bridge (~3 g + wiring).
