@@ -42,6 +42,14 @@ constexpr size_t kMaxFrame = 261;   // MSP v1 worst case: 6 header/trailer + 255
 constexpr size_t kRingSize = 4096;  // power of two; SPSC mask arithmetic below depends on it
 constexpr size_t kRingMask = kRingSize - 1;
 
+// Dongle-local MSP command (like the bridge's kMspBridgeTof): the dongle answers it ITSELF with
+// its own counters and never puts it on the air. Added 2026-07-30 during bring-up, when the drone
+// reported 378 replies sent + 0 send failures while the host saw only 300 — proving frames were
+// reaching this board and dying between the recv callback and USB. There is no other way to read
+// these: `Serial` is the data path, so -DDONGLE_DEBUG needs a second UART on wires the bench
+// doesn't have. In-band beats a jumper.
+constexpr uint8_t kMspDongleStats = 193;
+
 const uint8_t kDroneMac[6] = ESPNOW_DRONE_MAC;
 
 // --- lock-free SPSC ring: producer = WiFi task (recv callback), consumer = loop() -----------
@@ -52,9 +60,12 @@ uint8_t ring[kRingSize];
 volatile uint32_t ring_head = 0;  // written by the callback
 volatile uint32_t ring_tail = 0;  // written by loop()
 
-// Counters (read in the debug heartbeat; approximate by design, never gate behaviour).
+// Counters (read via kMspDongleStats / the debug heartbeat; never gate behaviour).
 volatile uint32_t n_ring_drop = 0;
+volatile uint32_t n_rx_pkts = 0;  // ESP-NOW packets the callback actually saw
 uint32_t n_tx = 0, n_rx = 0, n_oversize = 0, n_send_fail = 0, n_bad_frame = 0;
+uint32_t n_usb_short = 0;         // times the CDC layer accepted less than we offered
+uint32_t loop_max_us = 0;         // worst loop() this window — the dongle's own account
 
 inline uint32_t ringUsed() { return ring_head - ring_tail; }
 
@@ -124,7 +135,39 @@ void feedHostByte(uint8_t b) {
   }
 }
 
+// Answer kMspDongleStats locally ('$M>' framing, so the host's stock parser reads it like any
+// other reply). Consumed here, never forwarded — same contract as the bridge's ToF id.
+void sendStatsReply() {
+  const uint16_t lmax = min<uint32_t>(loop_max_us / 1000, 0xFFFF);
+  uint8_t p[24];
+  auto put32 = [&](size_t off, uint32_t v) {
+    p[off] = v & 0xFF; p[off + 1] = (v >> 8) & 0xFF; p[off + 2] = (v >> 16) & 0xFF; p[off + 3] = v >> 24;
+  };
+  auto put16 = [&](size_t off, uint16_t v) { p[off] = v & 0xFF; p[off + 1] = v >> 8; };
+  put32(0, n_tx);            // frames put on the air (host -> drone)
+  put32(4, n_rx_pkts);       // ESP-NOW packets the recv callback saw (drone -> host)
+  put32(8, n_rx);            // bytes actually written back out to USB
+  put16(12, n_oversize);
+  put16(14, n_send_fail);
+  put16(16, n_ring_drop);
+  put16(18, n_bad_frame);
+  put16(20, lmax);
+  put16(22, min<uint32_t>(n_usb_short, 0xFFFF));
+  uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspDongleStats};
+  uint8_t ck = sizeof(p) ^ kMspDongleStats;
+  for (size_t i = 0; i < sizeof(p); i++) { frame[5 + i] = p[i]; ck ^= p[i]; }
+  frame[5 + sizeof(p)] = ck;
+  Serial.write(frame, sizeof(frame));
+}
+
 void onCompleteFrame(const uint8_t* f, size_t len) {
+#ifndef DONGLE_LOOPBACK
+  // Intercept before the radio: this id is ours, the drone has never heard of it.
+  if (len >= 6 && f[2] == '<' && f[4] == kMspDongleStats) {
+    sendStatsReply();
+    return;
+  }
+#endif
 #ifdef DONGLE_LOOPBACK
   // Bring-up step 2: prove USB CDC framing (host -> dongle -> host) with no radio in the path.
   Serial.write(f, len);
@@ -159,7 +202,10 @@ void onRecv(const esp_now_recv_info_t*, const uint8_t* data, int len) {
 void onRecv(const uint8_t*, const uint8_t* data, int len) {
 #endif
   // WiFi-task context: memcpy only. No Serial, no blocking, no printf.
-  if (len > 0) ringPush(data, static_cast<size_t>(len));
+  if (len > 0) {
+    n_rx_pkts++;
+    ringPush(data, static_cast<size_t>(len));
+  }
 }
 
 void initEspNow() {
@@ -206,6 +252,8 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t t_loop_us = micros();
+
   // Host -> air: drain USB CDC through the framer. Bounded per pass so a flood of host writes
   // can never starve the air -> host direction below.
   uint8_t buf[256];
@@ -220,14 +268,32 @@ void loop() {
 
   // Air -> host: drain the ring the recv callback fills. Chunk boundaries do not matter; the
   // host's MSP parser is incremental.
+  //
+  // Serial.write() RETURNS A SHORT COUNT under USB CDC back-pressure, and honouring it is not
+  // optional: the first cut advanced ring_tail by the requested span regardless, which threw away
+  // every byte the CDC layer had not accepted AND counted them as sent. Measured 2026-07-30 —
+  // dongle reported 400/400 replies written while the host received 310 (22.5% loss), with the
+  // radio and both ring buffers provably clean. Loopback hid it completely, because that build
+  // never brings WiFi up and so never contends for the CDC FIFO. Advance only by what was
+  // actually accepted; the remainder stays in the ring for the next pass.
   while (ringUsed() > 0) {
     const uint32_t t = ring_tail;
     const uint32_t used = ringUsed();
     // One contiguous span at a time (the ring wraps).
     const uint32_t span = min(used, static_cast<uint32_t>(kRingSize - (t & kRingMask)));
-    Serial.write(&ring[t & kRingMask], span);
-    ring_tail = t + span;
-    n_rx += span;
+    const size_t wrote = Serial.write(&ring[t & kRingMask], span);
+    ring_tail = t + wrote;
+    n_rx += wrote;
+    if (wrote < span) {
+      n_usb_short++;  // back-pressure: come back next loop() rather than dropping the tail
+      break;
+    }
+    // Push it out NOW. Without this the CDC layer sits on a 14-byte MSP reply waiting for more
+    // bytes to make a full USB packet, and the reply is delivered only when the NEXT few replies
+    // pile in behind it. Measured 2026-07-30: every byte arrived (5600/5600, zero loss) but ~18%
+    // of round trips missed a 250 ms deadline, because replies were landing in batches instead of
+    // one at a time. A control link is exactly the latency-over-throughput case flushing is for.
+    Serial.flush();
   }
 
   // Solid while frames are flowing, slow blink when idle. Active-LOW on the XIAO ESP32-S3.
@@ -241,9 +307,13 @@ void loop() {
   static uint32_t last_status_ms = 0;
   if (millis() - last_status_ms > 5000) {
     last_status_ms = millis();
-    DBG("status: tx %lu  rx %lu B  oversize %lu  send_fail %lu  ring_drop %lu  bad_hdr %lu\n",
+    DBG("status: tx %lu  rx %lu B  oversize %lu  send_fail %lu  ring_drop %lu  bad_hdr %lu  usb_short %lu\n",
         (unsigned long)n_tx, (unsigned long)n_rx, (unsigned long)n_oversize,
-        (unsigned long)n_send_fail, (unsigned long)n_ring_drop, (unsigned long)n_bad_frame);
+        (unsigned long)n_send_fail, (unsigned long)n_ring_drop, (unsigned long)n_bad_frame,
+        (unsigned long)n_usb_short);
   }
 #endif
+
+  const uint32_t dt_us = micros() - t_loop_us;
+  if (dt_us > loop_max_us) loop_max_us = dt_us;
 }
