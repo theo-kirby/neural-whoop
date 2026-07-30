@@ -1,15 +1,17 @@
 """Always-on real-drone flight manager — the bridge between the browser and the Air65 II.
 
-A :class:`FlightManager` owns one background thread that connects to the XIAO WiFi bridge (retrying
-if it's down), runs a :class:`~neural_whoop.pilot.controller.FlightController` at ``params.hz``, and
+A :class:`FlightManager` owns one background thread that connects to the XIAO bridge — over WiFi/UDP
+or, with a serial bridge spec, through the ESP-NOW USB dongle (``docs/ESPNOW.md``) — retrying if
+it's down, runs a :class:`~neural_whoop.pilot.controller.FlightController` at ``params.hz``, and
 publishes each frame under a lock with an incrementing ``seq``. The Studio's ``/ws/flight`` endpoint
 polls :meth:`latest` and forwards browser commands through :meth:`command`. The manager is the
 single-flight guard for the *sequence* — it is deliberately **not** wrapped in the Studio's
 ``ROLLOUT_LOCK`` (that guards the GPU sim; the MSP link is a different resource, and several viewers
 may watch the same telemetry at once).
 
-Imports only :mod:`neural_whoop.pilot` + :mod:`neural_whoop.bench.msp` — **zero torch/numpy**, so
-the real-flight path stays pure-stdlib. The parallel CPU-torch sim rides the separate ``/ws/live``.
+Imports only :mod:`neural_whoop.pilot` + :mod:`neural_whoop.bench.msp` — **zero torch/numpy**. The
+UDP transport is stdlib-only; the serial (ESP-NOW dongle) transport pulls in **pyserial**, lazily,
+and only when that spec is used. The parallel CPU-torch sim rides the separate ``/ws/live``.
 
 Safety is inherited wholesale from the controller: the radio owns arm + override (enable) and
 drop/disarm (kill -> instant abort via the ~300 ms MSP-freshness handback); software only ever sets
@@ -59,8 +61,28 @@ _PARAM_FIELDS = ("seconds", "hz", "hover_us", "min_us", "max_us", "hold_seconds"
                  "trim_roll_deg", "trim_pitch_deg", "trim_thrust", "yaw", "target_height_m")
 
 
+def is_serial_bridge(bridge: str) -> bool:
+    """True for a serial bridge spec: ``serial:/dev/cu.usbmodem101`` or a bare device path.
+
+    That port is the **ESP-NOW dongle** (``firmware/xiao_bridge/`` env ``espnow_dongle``), which
+    relays raw MSP frames to the drone over a peer-to-peer link instead of WiFi/UDP — see
+    ``docs/ESPNOW.md``. Same MSP protocol, so only the client class changes.
+    """
+    return str(bridge).startswith(("serial:", "/"))
+
+
 def _parse_bridge(bridge: str) -> tuple[str, int]:
-    host, _, port = str(bridge).partition(":")
+    """Split a bridge spec into ``(target, port)``.
+
+    ``host[:port]`` -> a UDP bridge (default port 14550). A serial spec (see
+    :func:`is_serial_bridge`) returns ``(device_path, 0)`` — a device path has no port, and the
+    ``serial:`` prefix is stripped. ``"fake"`` falls through the host branch and is handled by
+    the fake-bridge flag instead.
+    """
+    b = str(bridge)
+    if is_serial_bridge(b):
+        return b.removeprefix("serial:"), 0
+    host, _, port = b.partition(":")
     return host, int(port or 14550)
 
 
@@ -93,8 +115,9 @@ class FlightManager:
     """Own the MSP link + a :class:`FlightController` on a background thread; publish frames.
 
     Args:
-        bridge: ``host[:port]`` of the XIAO bridge (or ``"fake"`` / ``NW_FLIGHT_FAKE=1`` for the
-            self-driving in-process bridge — no hardware).
+        bridge: ``host[:port]`` of the XIAO WiFi bridge, a serial spec (``serial:/dev/cu.usbmodemX``
+            or a bare ``/dev/...`` path) for the ESP-NOW USB dongle, or ``"fake"`` /
+            ``NW_FLIGHT_FAKE=1`` for the self-driving in-process bridge — no hardware.
         weights: path to the deploy ``policy_weights.json``.
         params: base :class:`FlightParams` (defaults to the recommended ground-takeoff flow).
         runs_dir: where per-flight CSVs are written (``runs/pilot``).
@@ -120,9 +143,7 @@ class FlightManager:
         self._params = params or FlightParams(takeoff=True)
         self._runs_dir = Path(runs_dir)
         self._use_fake = str(bridge).lower() == "fake" or _truthy(os.environ.get("NW_FLIGHT_FAKE"))
-        self._client_factory = client_factory or (
-            (lambda *_a, **_k: FakeFlightBridge()) if self._use_fake
-            else (lambda host, port: MspUdpClient(host, port)))
+        self._client_factory = client_factory or self._default_client_factory()
         self._controller_factory = controller_factory
         self._on_flight_done = on_flight_done
 
@@ -140,6 +161,17 @@ class FlightManager:
         self._csv_writer = None
         self._csv_path: Path | None = None
         self._logbuf: list[str] = []
+
+    def _default_client_factory(self):
+        """Pick the transport from the bridge spec: fake / ESP-NOW serial dongle / WiFi UDP."""
+        if self._use_fake:
+            return lambda *_a, **_k: FakeFlightBridge()
+        if is_serial_bridge(self._bridge):
+            # Imported here, not at module scope: MspClient pulls in pyserial, and the UDP path
+            # deliberately stays importable without it.
+            from neural_whoop.bench.msp import MspClient
+            return lambda path, _port=0: MspClient(path)
+        return lambda host, port: MspUdpClient(host, port)
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -344,11 +376,6 @@ def _truthy(v) -> bool:
     return str(v).lower() in ("1", "true", "yes", "on") if v is not None else False
 
 
-class _DummySock:
-    def settimeout(self, *_):  # Telemetry sets the socket non-blocking on construction
-        pass
-
-
 class FakeFlightBridge(_MspEndpoint):
     """A self-driving in-process MSP endpoint so the whole dashboard runs with no hardware.
 
@@ -360,7 +387,6 @@ class FakeFlightBridge(_MspEndpoint):
 
     def __init__(self, *_a, armed: bool = True, override: bool = True, **_k) -> None:
         super().__init__()
-        self._sock = _DummySock()
         self._out = bytearray()
         self._thr = 1000
         self._gyro = (0, 0, 0)     # echoed from the commanded roll/pitch rate (crude flip model)

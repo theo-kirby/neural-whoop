@@ -155,9 +155,13 @@ drone_count` (ring around one moving anchor). The gateless families have **no co
 replay's `scene` channel, drawn as a target/anchor/slot marker (+ command chip). The frontend loads three.js from a CDN importmap (no Node toolchain in this
 repo); the UI is a flat 2D style (custom-styled selects, rounded panels). The **Real** tab
 (`studio/flight.py` + `/ws/flight` + `web/studio/bench.js`) is the always-on **real-drone** dashboard:
-it flies the actual Air65 II over the MSP bridge via the pure-stdlib flight engine extracted from
+it flies the actual Air65 II over the MSP bridge via the stdlib-only flight engine extracted from
 `scripts/pilot.py` into `neural_whoop.pilot` (`FlightController`/`config`/`policy`/`telemetry`;
-`pilot.py` is now a thin CLI shim). An always-on `FlightManager` (a background thread, **zero
+`pilot.py` is now a thin CLI shim). **One exception to "stdlib-only", added with the ESP-NOW link:**
+a *serial* bridge spec (the ESP-NOW USB dongle — `serial:/dev/…` or a bare `/dev/…` path, and
+`pilot.py --serial`) constructs `MspClient`, which imports **pyserial** lazily; the WiFi/UDP path is
+unchanged and still stdlib. `pyserial` is therefore in the `studio` extra as well as `bench`.
+An always-on `FlightManager` (a background thread, **zero
 torch/numpy**, **not** under `ROLLOUT_LOCK`) runs the `pilot.py fly` 3·2·1→hover→land state machine and
 streams telemetry; the software **Start** only sets the flight clock and is enabled **only when
 telemetry shows ARMED + MSP-OVERRIDE** on the radio (which still owns enable + instant kill). An opt-in
@@ -254,6 +258,15 @@ uv run python scripts/flight_report.py --flight runs/pilot/<flight>.csv --out ru
 python3 scripts/sim_vs_real.py --flight runs/pilot/<flight>.csv --weights runs/<run>/policy_weights.json
 #   -> offline action MAE (predicted vs logged): the quantitative "policy is faithful in-flight" check
 #      (pure stdlib + scripts/pilot.py — no torch/numpy, runs on the bench Mac)
+
+# ESP-NOW link — peer-to-peer replacement for the WiFi/UDP bridge (docs/ESPNOW.md). WiFi stays
+# the default build; every host tool takes the dongle's serial port where it took --udp:
+cd firmware/xiao_bridge && pio run -e mac_probe -t upload   # once per board -> espnow_config.h
+pio run -e espnow_dongle    -t upload                       # desk dongle (USB CDC <-> ESP-NOW)
+pio run -e xiao_bridge_espnow -t upload                     # drone side  (rollback: -e xiao_bridge)
+python3 scripts/bench.py --port /dev/cu.usbmodemXXX latency --n 500   # THE GATE: air p50/p99
+python3 scripts/pilot.py --serial /dev/cu.usbmodemXXX fly --takeoff --ack-props-on
+uv run python scripts/serve.py --bridge /dev/cu.usbmodemXXX          # Studio Real tab
 ```
 
 **Course geometry knobs.** `gate_race`/`swarm_race` configs now surface `step_min`/`step_max`

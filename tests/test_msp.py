@@ -1,6 +1,12 @@
-"""MSP v1 codec tests — pure stdlib, no serial port needed (the bench seam's unit layer)."""
+"""MSP v1 codec + transport tests — the bench seam's unit layer.
+
+Mostly pure stdlib and hardware-free. The one exception is the non-blocking-read contract at the
+bottom, which opens a pty as a real serial port to exercise pyserial itself (skipped when the
+``bench``/``studio`` extra is absent).
+"""
 
 import struct
+import time
 
 import pytest
 
@@ -148,3 +154,101 @@ def test_decode_bridge_tof_gates_range_m():
     assert decode_bridge_tof(struct.pack("<HBHB", 743, 0, 900, 1))["range_m"] is None
     never = decode_bridge_tof(struct.pack("<HBHB", 0xFFFF, 0xFF, 0xFFFF, 0))
     assert never["range_m"] is None and never["sensor_ok"] is False
+
+
+# --- non-blocking reads: the flight-loop contract -------------------------------------------
+# `Telemetry` fires 3-5 queries per control tick and then drains until dry, against a 22 ms
+# budget at 45 Hz. A transport whose `_read()` waits for the NEXT byte burns most of that tick
+# doing nothing. This used to be handled by `fc._sock.settimeout(0)` in Telemetry — UDP-only,
+# and silently wrong the moment the ESP-NOW dongle put a serial port on the flight path
+# (docs/ESPNOW.md). These pin the per-transport behaviour instead.
+
+
+def test_set_nonblocking_zeroes_the_udp_socket_timeout():
+    from neural_whoop.bench.msp import MspUdpClient
+
+    with MspUdpClient("127.0.0.1", port=59999) as fc:
+        assert fc._sock.gettimeout() == 0.02  # blocking-ish by default (bench request/response)
+        fc.set_nonblocking()
+        assert fc._sock.gettimeout() == 0.0
+        assert fc._read() == b""  # nothing waiting -> returns immediately, no exception
+
+
+def test_set_nonblocking_base_default_is_a_noop():
+    # Transports that never block (the in-process fakes) inherit a no-op rather than needing a
+    # dummy socket to satisfy the caller.
+    from neural_whoop.bench.msp import _MspEndpoint
+
+    class Fake(_MspEndpoint):
+        def _write(self, raw: bytes) -> None:
+            pass
+
+        def _read(self) -> bytes:
+            return b""
+
+    Fake().set_nonblocking()  # must not raise
+
+
+def test_serial_read_blocks_until_set_nonblocking():
+    """The regression that would otherwise only show up as a sluggish flight loop.
+
+    With the stock 20 ms port timeout, `_read()` on an idle port falls back to `read(1)` and
+    waits — measured ~30 ms here, i.e. MORE than a whole control tick, every tick. Uses a pty as
+    a real serial port so this exercises pyserial itself, not a stand-in.
+    """
+    import os
+
+    pytest.importorskip("serial")
+    from neural_whoop.bench.msp import MspClient
+
+    master, slave = os.openpty()
+    fc = MspClient(os.ttyname(slave), baud=115200)
+    try:
+        t0 = time.perf_counter()
+        assert fc._read() == b""
+        blocking_ms = (time.perf_counter() - t0) * 1e3
+        assert blocking_ms > 15.0, f"expected the port timeout to bite, took {blocking_ms:.1f} ms"
+
+        fc.set_nonblocking()
+        assert fc._ser.timeout == 0
+        t0 = time.perf_counter()
+        assert fc._read() == b""
+        idle_ms = (time.perf_counter() - t0) * 1e3
+        assert idle_ms < 10.0, f"non-blocking read still waited {idle_ms:.1f} ms"
+
+        # ...and it still returns everything that HAS arrived (the drain path must not go quiet).
+        os.write(master, encode_msp_v1(MSP_ATTITUDE, struct.pack("<hhh", 150, -30, 90),
+                                       header=b"$M>"))
+        deadline = time.monotonic() + 2.0
+        frames: list = []
+        while time.monotonic() < deadline and not frames:
+            frames.extend(fc._drain())
+        assert len(frames) == 1
+        assert decode_attitude(frames[0].payload)["roll_deg"] == 15.0
+    finally:
+        fc.close()
+        os.close(master)
+
+
+def test_telemetry_makes_its_transport_nonblocking():
+    """Telemetry must go through the transport seam, not reach into a UDP socket attribute."""
+    from neural_whoop.bench.msp import _MspEndpoint
+    from neural_whoop.pilot import Telemetry
+
+    class Fake(_MspEndpoint):
+        def __init__(self) -> None:
+            super().__init__()
+            self.nonblocking = False
+
+        def set_nonblocking(self) -> None:
+            self.nonblocking = True
+
+        def _write(self, raw: bytes) -> None:
+            pass
+
+        def _read(self) -> bytes:
+            return b""
+
+    fc = Fake()
+    Telemetry(fc)
+    assert fc.nonblocking

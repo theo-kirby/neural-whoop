@@ -229,3 +229,4 @@ third_party/**/__pycache__/
 # Firmware (PlatformIO) build outputs + per-machine WiFi credentials.
 firmware/**/.pio/
 firmware/**/include/wifi_config.h
+firmware/**/include/espnow_config.h

@@ -45,6 +45,10 @@ studio = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "pyyaml>=6.0",
+    # The Real tab's flight path: pyserial is needed for a SERIAL bridge spec (the ESP-NOW USB
+    # dongle, docs/ESPNOW.md). The WiFi/UDP bridge spec stays stdlib-only, and the import is
+    # deferred to the moment a serial bridge is opened.
+    "pyserial>=3.5",
 ]
 # Stage-0 bench tooling (scripts/bench.py): USB serial to the real flight controller.
 # The MSP codec itself is pure stdlib; only the live client needs pyserial.

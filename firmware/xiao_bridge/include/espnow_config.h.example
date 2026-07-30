@@ -1,0 +1,28 @@
+// Copy to espnow_config.h (gitignored) and fill in. Needed by BOTH ESP-NOW binaries:
+// the desk dongle (`pio run -e espnow_dongle`) and the drone bridge built with
+// -DNW_LINK_ESPNOW (`pio run -e xiao_bridge_espnow`).
+//
+// Get the two MAC addresses first — flash each board once with the probe sketch:
+//   pio run -e mac_probe -t upload && pio device monitor
+// It prints the STA MAC in exactly the form the macros below want.
+//
+// NOTE: the FC UART wiring (FC_BAUD / FC_TX_PIN / FC_RX_PIN) stays in wifi_config.h. Those
+// describe solder joints, not the transport, so the drone build reads them either way.
+#pragma once
+
+// STA MAC of the DRONE-side XIAO (the one wired to the FC). The dongle sends here.
+#define ESPNOW_DRONE_MAC {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+
+// STA MAC of the DONGLE (the one on the desk USB cable). The drone sends replies here.
+// Fixed rather than "reply to whoever last talked to me": ESP-NOW has no association, so a
+// fixed peer is both simpler and immune to a stray packet re-pointing the telemetry stream.
+#define ESPNOW_DONGLE_MAC {0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+
+// 2.4 GHz channel both ends lock to with esp_wifi_set_channel(). No AP, no association, so
+// this is the ONLY thing that has to match — get it wrong and the link is silently dead.
+// 1 / 6 / 11 are the non-overlapping ones; pick whichever the neighbours are quietest on.
+#define ESPNOW_CHANNEL 1
+
+// Optional: PMK/LMK encryption. Off by default — encryption costs a little latency and this
+// link carries no secrets, only RC frames that Betaflight's own failsafe already bounds.
+// #define ESPNOW_PMK "whoop-pmk-16byte"

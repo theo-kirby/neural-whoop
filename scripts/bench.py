@@ -11,7 +11,8 @@ Subcommands (all read-only unless stated; writing ones require --ack-props-off):
               that the channel order is what we think. Needs `set msp_override_channels_mask`
               + the MSPRCOVERRIDE mode configured to see values land (see docs/SIM2REAL.md).
   tof         Live range from the bridge's downward VL53L1X (CJMCU-531) — bridge-answered
-              (MSP_BRIDGE_TOF), so it needs --udp. The desk bring-up check after wiring.
+              (MSP_BRIDGE_TOF), so it needs the bridge in the path: --udp over WiFi, or
+              --port <dongle> through the ESP-NOW dongle. The desk bring-up check after wiring.
   motor-test  [writes] Spin ONE motor briefly at a capped value. PROPS OFF. Value hard-capped.
 
 Safety: nothing here ever raises an arm channel; arming stays with the human on the Pocket.
@@ -75,8 +76,10 @@ def _link_hint(args: argparse.Namespace, exc: Exception) -> str:
         )
     return (
         f"{exc}\n\n"
-        "Serial link check: verify the FC port path, that Betaflight is not already held open "
-        "by Configurator, and that the selected port speaks MSP at the requested baud."
+        "Serial link check: verify the port path, that Betaflight is not already held open by "
+        "Configurator, and that the selected port speaks MSP at the requested baud.\n"
+        "If this is the ESP-NOW dongle: check both boards are flashed with matching MACs and the "
+        "same ESPNOW_CHANNEL, and that the drone bridge has power (docs/ESPNOW.md)."
     )
 
 
@@ -172,12 +175,24 @@ def _rtt_line(label: str, times_ms: list[float]) -> None:
 
 
 def cmd_latency(args: argparse.Namespace) -> int:
+    bridge_ms = None
     with _client(args) as fc:
         fc_ms = _rtt_samples(fc, (MSP_ATTITUDE, MSP_RAW_IMU), args.n)
         # The isolation split: MSP_BRIDGE_TOF is answered by the BRIDGE and never reaches the FC,
-        # so its round trip is the pure host<->bridge air path. Anything the FC path has on top of
-        # it is UART + Betaflight MSP scheduling, not WiFi. Requires --udp (no bridge over USB).
-        bridge_ms = _rtt_samples(fc, (MSP_BRIDGE_TOF,), args.n) if args.udp else None
+        # so its round trip is the pure host<->bridge air path. Anything the FC path has on top
+        # of it is UART + Betaflight MSP scheduling, not the radio. Attempted on BOTH transports:
+        # over ESP-NOW the bridge is behind a serial port (the USB dongle), so --port carries the
+        # same split. Only a direct USB cable to the FC has no bridge — there the FC rejects the
+        # id and we say so instead of pretending.
+        # Probe once, no retries, before committing to n samples. A bridge-less path normally
+        # fails fast (Betaflight answers an unknown id with an error frame), but if the id merely
+        # went UNANSWERED, request()'s 3 x 0.5 s retries would turn 500 samples into 12 minutes
+        # of timeouts.
+        try:
+            fc.request(MSP_BRIDGE_TOF, retries=0)
+            bridge_ms = _rtt_samples(fc, (MSP_BRIDGE_TOF,), args.n)
+        except (MspError, MspTimeout):
+            bridge_ms = None
 
     print(f"MSP round-trip over {args.n} requests:")
     _rtt_line("host->bridge->FC (ATT/IMU)", fc_ms)
@@ -188,14 +203,26 @@ def cmd_latency(args: argparse.Namespace) -> int:
         print("\nWhere the tail lives: ", end="")
         if air_p99 > 0.5 * fc_p99:
             print(f"the AIR. The bridge-answered path alone carries p99 {air_p99:.0f} ms — the FC\n"
-                  "  is not involved. Look at WiFi: host on ethernet instead of wireless, a\n"
-                  "  dedicated AP/channel rather than a mesh repeater, or ESP-NOW.")
+                  "  is not involved. Look at the radio: a dedicated AP/channel rather than a mesh\n"
+                  "  repeater, or the ESP-NOW dongle (docs/ESPNOW.md).")
         else:
             print(f"the FC PATH. The air is clean (p99 {air_p99:.0f} ms) but the full trip is\n"
                   f"  p99 {fc_p99:.0f} ms — that delta is UART + Betaflight MSP task scheduling.\n"
                   "  Look at the FC's UART baud and Betaflight's MSP task rate, not the network.")
+        # The ESP-NOW acceptance gate (docs/ESPNOW.md §0): air p50 < 5 ms, air p99 < 20 ms.
+        air = sorted(bridge_ms)
+        air_p50 = statistics.median(air)
+        gate = air_p50 < 5.0 and air_p99 < 20.0
+        print(f"\nAir-path gate (p50 < 5 ms, p99 < 20 ms): p50 {air_p50:.2f}, p99 {air_p99:.2f} "
+              f"-> {'PASS' if gate else 'FAIL'}")
+    else:
+        print("\n(no air/FC split: nothing bridge-answered MSP_BRIDGE_TOF. Either there is no\n"
+              " xiao_bridge in this path — a direct USB cable to the flight controller — or the\n"
+              " bridge firmware predates the ToF interception.)")
     if args.udp:
         print("(measured through the WiFi bridge: this IS the real offboard link budget)")
+    elif bridge_ms is not None:
+        print("(measured through the ESP-NOW dongle: this IS the real offboard link budget)")
     else:
         print("(this is the USB serial floor; the radio/WiFi bridge adds its own budget on top)")
     return 0
@@ -244,30 +271,33 @@ def cmd_checkup(args: argparse.Namespace) -> int:
     print("bench checkup -- battery IN, props OFF\n")
     rows: list[tuple[str, bool, str]] = []
 
-    # Layer 1: the bridge answers its own MSP id. Proves board + WiFi + our UDP path, and needs
-    # no FC power at all.
+    # Layer 1: the bridge answers its own MSP id. Proves board + link + our transport, and needs
+    # no FC power at all. Tried on BOTH transports — over ESP-NOW the bridge sits behind the USB
+    # dongle's serial port, so "serial" no longer implies "no bridge". Only a direct USB cable to
+    # the FC has none, which shows up as an MspError (Betaflight rejecting the id).
     bridge_ok, tof_note = False, ""
-    if args.udp:
-        try:
-            with _client(args) as fc:
-                r = fc.bridge_tof()
-            bridge_ok = True
-            if not r["sensor_ok"]:
-                tof_note = "bridge up, but no VL53L1X on the I2C bus"
-            elif r["range_m"] is not None:
-                tof_note = f"range {r['range_m']*100:.1f} cm, age {r['age_ms']} ms"
-            else:
-                tof_note = f"sensor up, sample invalid (status {r['status']}) -- aim it at a surface"
-        # MspTimeout subclasses TimeoutError, hence OSError -- so it must be caught FIRST or the
-        # socket-layer branch below swallows it and mislabels a timeout as "no route".
-        except (MspTimeout, MspError) as e:
-            tof_note = f"no reply ({e}) -- unpowered, firmware not running, or wrong address/port"
-        except OSError as e:
-            tof_note = f"no route to the bridge ({e}) -- absent, or wrong address"
-        rows.append(("bridge (WiFi + MSP_BRIDGE_TOF)", bridge_ok, tof_note))
-    else:
-        rows.append(("bridge", False, "skipped: serial mode, no bridge in the path"))
-        bridge_ok = True  # not in the chain; don't let it mask the FC result
+    direct_usb = False
+    try:
+        with _client(args) as fc:
+            r = fc.bridge_tof()
+        bridge_ok = True
+        if not r["sensor_ok"]:
+            tof_note = "bridge up, but no VL53L1X on the I2C bus"
+        elif r["range_m"] is not None:
+            tof_note = f"range {r['range_m']*100:.1f} cm, age {r['age_ms']} ms"
+        else:
+            tof_note = f"sensor up, sample invalid (status {r['status']}) -- aim it at a surface"
+    except MspError:
+        # The FC answered, with a rejection: no bridge in the path at all. Not a failure.
+        direct_usb, bridge_ok = True, True  # not in the chain; don't let it mask the FC result
+        tof_note = "skipped: direct USB to the FC, no bridge in the path"
+    # MspTimeout subclasses TimeoutError, hence OSError -- so it must be caught FIRST or the
+    # socket-layer branch below swallows it and mislabels a timeout as "no route".
+    except MspTimeout as e:
+        tof_note = f"no reply ({e}) -- unpowered, firmware not running, or wrong address/port"
+    except OSError as e:
+        tof_note = f"no route to the bridge ({e}) -- absent, or wrong address"
+    rows.append(("bridge (MSP_BRIDGE_TOF)", bridge_ok and not direct_usb, tof_note))
 
     # Layer 2: the FC answers. Needs FC power AND both UART directions.
     fc_ok, fc_note = False, ""
@@ -335,9 +365,12 @@ def cmd_checkup(args: argparse.Namespace) -> int:
 
 
 def cmd_tof(args: argparse.Namespace) -> int:
-    """Live-print the bridge's VL53L1X range — the CJMCU-531 desk bring-up check."""
-    if not args.udp:
-        sys.exit("tof is bridge-answered (MSP_BRIDGE_TOF): run with --udp <bridge-ip>")
+    """Live-print the bridge's VL53L1X range — the CJMCU-531 desk bring-up check.
+
+    Bridge-answered (MSP_BRIDGE_TOF), so it needs the bridge in the path: ``--udp <bridge-ip>``
+    over WiFi, or ``--port <dongle>`` through the ESP-NOW USB dongle. A direct USB cable to the
+    FC has no bridge, and Betaflight rejects the id — caught below and reported as such.
+    """
     period = 1.0 / args.hz
     print("bridge ToF (ctrl-C to stop) — wave a hand over the sensor, range should track it")
     try:
@@ -361,6 +394,10 @@ def cmd_tof(args: argparse.Namespace) -> int:
                 time.sleep(max(0.0, period - (time.monotonic() - t0)))
     except KeyboardInterrupt:
         print("\nstopped.")
+    except MspError:
+        sys.exit("the FC rejected MSP_BRIDGE_TOF: there is no xiao_bridge in this path.\n"
+                 "Run through the bridge — '--udp <bridge-ip>' over WiFi, or '--port <dongle>'\n"
+                 "through the ESP-NOW USB dongle (docs/ESPNOW.md).")
     return 0
 
 
@@ -414,7 +451,8 @@ def main() -> int:
     p.add_argument("--seconds", type=float, default=10.0)
     p.add_argument("--ack-props-off", action="store_true")
 
-    p = sub.add_parser("tof", help="live bridge VL53L1X range (needs --udp; desk bring-up)")
+    p = sub.add_parser("tof", help="live bridge VL53L1X range (needs the bridge in the path; "
+                                   "desk bring-up)")
     p.add_argument("--hz", type=float, default=10.0)
 
     p = sub.add_parser("motor-test", help="spin one motor, capped + props off")

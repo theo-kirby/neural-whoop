@@ -38,11 +38,6 @@ from neural_whoop.pilot import (
 )
 
 
-class _DummySock:
-    def settimeout(self, *_):  # Telemetry sets the socket non-blocking on construction
-        pass
-
-
 class FakeMsp(_MspEndpoint):
     """A scriptable in-process MSP endpoint: every query gets an immediate canned response, and
     ``MSP_SET_RAW_RC`` writes are captured in :attr:`sent_rc`. Mutate the public fields to script a
@@ -50,7 +45,6 @@ class FakeMsp(_MspEndpoint):
 
     def __init__(self) -> None:
         super().__init__()
-        self._sock = _DummySock()
         self._out = bytearray()
         self.sent_rc: list[tuple[int, ...]] = []
         # Scriptable telemetry state.

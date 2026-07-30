@@ -101,6 +101,11 @@ thread: it connects to the bridge (retrying if it's down), runs the extracted fl
 **zero torch/numpy** and is **not** wrapped in the GPU sim's `ROLLOUT_LOCK` (the MSP link is a
 different resource; several viewers may watch one flight).
 
+The `--bridge` spec picks the transport: `host[:port]` for the WiFi bridge, `serial:/dev/cu.usbmodemX`
+(or a bare `/dev/…` path) for the **ESP-NOW USB dongle** (`docs/ESPNOW.md`), `fake` for the
+self-driving in-process bridge. The serial spec is the one place the real-flight path leaves the
+stdlib — it pulls in **pyserial** (in the `studio` extra), lazily, only when opened.
+
 Open the Real tab and:
 - The **link** line + **ARMED** / **OVERRIDE** dots show the radio state live.
 - **Start** is a **software clock only**, and is **enabled only when telemetry shows the drone ARMED
@@ -124,8 +129,8 @@ Open the Real tab and:
   hz; hover µs) default to the safe CLI values and ride along with **Start**.
 - **parallel sim (CPU torch)** — an opt-in toggle that opens a `/ws/live` session flying the **same
   deployed policy** in sim (a cyan twin beside the real drone), so you can watch the real and
-  simulated hover side-by-side. Off by default so the real-flight path stays pure-stdlib; it needs a
-  CPU torch wheel on the Mac (`pip install torch`).
+  simulated hover side-by-side. Off by default so the real-flight path keeps torch out of it; it
+  needs a CPU torch wheel on the Mac (`pip install torch`).
 - **⌖ Calibrate** — a Betaflight-setup-style **attitude check**: the camera zooms onto the drone
   glyph; tilt the real drone by hand and the on-screen drone tracks its rotation live
   (roll/pitch/**yaw** — yaw is the FC's gyro-integrated heading, since the Air65 has no

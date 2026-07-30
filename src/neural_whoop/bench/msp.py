@@ -263,6 +263,16 @@ class _MspEndpoint:
     def _read(self) -> bytes:
         raise NotImplementedError
 
+    def set_nonblocking(self) -> None:
+        """Make :meth:`_read` return immediately with whatever has already arrived.
+
+        The control loop (``neural_whoop.pilot.Telemetry``) fires 3-5 queries per tick and then
+        drains until dry; a transport that blocks waiting for the *next* byte spends the whole
+        tick budget in ``_read``. Each transport implements this its own way (UDP: a zero socket
+        timeout; serial: ``timeout = 0`` plus reading only ``in_waiting``) — the base is a no-op
+        for transports that never block, like the in-process fake bridge.
+        """
+
     def close(self) -> None:  # pragma: no cover - transport-specific
         pass
 
@@ -337,7 +347,14 @@ class _MspEndpoint:
 
 
 class MspClient(_MspEndpoint):
-    """MSP over a USB serial port (pyserial — the ``bench`` extra, imported lazily)."""
+    """MSP over a USB serial port (pyserial — the ``bench`` extra, imported lazily).
+
+    Two things are on the other end of this port: the flight controller itself (plugged in over
+    USB, the Stage-0 bench setup) or the **ESP-NOW dongle** (``firmware/xiao_bridge/`` env
+    ``espnow_dongle``), which relays raw MSP frames to the drone's bridge over the air. The
+    protocol is identical either way, which is why the ESP-NOW link needed no new client — see
+    ``docs/ESPNOW.md``.
+    """
 
     def __init__(self, port: str, baud: int = 115200, timeout_s: float = 0.5) -> None:
         import serial  # deferred so the codec imports without the bench extra
@@ -345,15 +362,25 @@ class MspClient(_MspEndpoint):
         super().__init__()
         self._ser = serial.Serial(port, baudrate=baud, timeout=0.02)
         self.timeout_s = timeout_s
+        self._nonblocking = False
 
     def close(self) -> None:
         self._ser.close()
+
+    def set_nonblocking(self) -> None:
+        # Both halves matter. `timeout = 0` alone still lets `read(1)` below wait for a byte on
+        # some backends, and `read(1)` alone would block for the port's 20 ms timeout — either
+        # way the flight loop stalls most of its 22 ms budget in here, every tick.
+        self._ser.timeout = 0
+        self._nonblocking = True
 
     def _write(self, raw: bytes) -> None:
         self._ser.write(raw)
 
     def _read(self) -> bytes:
         waiting = self._ser.in_waiting
+        if self._nonblocking:
+            return self._ser.read(waiting) if waiting else b""
         return self._ser.read(waiting if waiting else 1)
 
 
@@ -375,6 +402,9 @@ class MspUdpClient(_MspEndpoint):
 
     def close(self) -> None:
         self._sock.close()
+
+    def set_nonblocking(self) -> None:
+        self._sock.settimeout(0.0)
 
     def _write(self, raw: bytes) -> None:
         self._sock.sendto(raw, self._addr)

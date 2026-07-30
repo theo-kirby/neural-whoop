@@ -21,10 +21,11 @@ def main() -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--device", default="cuda", help="Torch device for rollouts (cuda/cpu).")
-    p.add_argument("--bridge", default=os.environ.get("NW_BRIDGE"), metavar="HOST[:PORT]",
-                   help="XIAO bridge address for the always-on Bench dashboard (default: $NW_BRIDGE). "
-                        "Pass 'fake' (or set NW_FLIGHT_FAKE=1) to run the self-driving fake bridge "
-                        "with no hardware. Omit to disable the real-drone tab.")
+    p.add_argument("--bridge", default=os.environ.get("NW_BRIDGE"), metavar="SPEC",
+                   help="XIAO bridge for the always-on Bench dashboard (default: $NW_BRIDGE). "
+                        "HOST[:PORT] = the WiFi bridge; '/dev/cu.usbmodemX' or 'serial:/dev/...' = "
+                        "the ESP-NOW USB dongle (docs/ESPNOW.md); 'fake' (or NW_FLIGHT_FAKE=1) = "
+                        "the self-driving fake bridge, no hardware. Omit to disable the real tab.")
     p.add_argument("--flight-weights", default=os.environ.get("NW_FLIGHT_WEIGHTS",
                    "runs/hover_blind_air65_d50var_s8/policy_weights.json"),
                    help="Deploy policy_weights.json the Bench dashboard flies.")

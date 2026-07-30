@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Offboard pilot: fly a trained hover_blind policy over the WiFi MSP bridge — pure stdlib.
+"""Offboard pilot: fly a trained hover_blind policy over the MSP bridge.
 
 The deployment end of sim2real branch B (docs/SIM2REAL.md Stage 0.5): observations come from
 MSP_ATTITUDE + MSP_RAW_IMU over the xiao_bridge, the TinyPolicy actor runs right here in pure
 Python (weights from ``policy_weights.json``), and act-v2 commands stream back as MSP_SET_RAW_RC in
 **AETR wire order** at ``--hz``.
 
-Deliberately dependency-free (like bench.py's UDP path): runs on a macOS laptop with no venv.
+Two transports (docs/ESPNOW.md):
+  ``--udp HOST[:PORT]``  the WiFi bridge. Dependency-free stdlib — runs on a macOS laptop with
+                         no venv, like bench.py's UDP path.
+  ``--serial PORT``      the ESP-NOW USB dongle. **Needs pyserial** (``pip install pyserial``),
+                         which is the one dependency the flight path has; everything else here,
+                         including the policy forward pass, is still stdlib.
 
 This file is now a thin CLI shim: the flight engine (the policy forward, the MSP telemetry poller,
 and the ``fly`` state machine) lives in the importable, torch-free :mod:`neural_whoop.pilot` package,
@@ -61,6 +66,7 @@ from neural_whoop.bench.msp import (  # noqa: E402
     MspError,
     MspTimeout,
     MspUdpClient,
+    _MspEndpoint,
     decode_altitude,
     decode_analog,
     decode_attitude,
@@ -103,6 +109,18 @@ LOG_COLUMNS = [
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
     "rpm_rms", "us_corr", "tof_m", "h_err",
 ]
+
+
+def open_link(args: argparse.Namespace) -> _MspEndpoint:
+    """Open the MSP link the flags selected: ESP-NOW serial dongle, or the WiFi/UDP bridge.
+
+    ``--serial`` puts pyserial in the path (see the module docstring); ``--udp`` stays stdlib.
+    The fake in-process bridge is handled by the caller — only ``fly`` supports it.
+    """
+    if args.serial:
+        from neural_whoop.bench.msp import MspClient  # lazy: pyserial, only on this path
+        return MspClient(args.serial, baud=args.baud)
+    return MspUdpClient(args.udp_host, args.udp_port)
 
 
 # --- subcommands ----------------------------------------------------------------------------
@@ -163,7 +181,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     if pol.uses_vz:
         print("  lift/lower STEADILY     -> vz_est +/- (leaky, decays back); throttle counters it")
     print("Ctrl+C to stop. Nothing is streamed to the FC in this mode.\n")
-    with MspUdpClient(args.udp_host, args.udp_port) as fc:
+    with open_link(args) as fc:
         tel = Telemetry(fc)
         hist: deque = deque(maxlen=pol.obs_stack)
         # Same vz estimator the fly loop runs (full projection, leak, clamp, tilt-freeze) so a
@@ -217,7 +235,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
     """Discover better vertical-state sensors than acc integration: a barometer (Betaflight
     fuses altitude+vario for us) and bidirectional-DShot RPM telemetry (hover RPM is a true
     thrust anchor, immune to pack freshness/sag). Battery in; props off is fine."""
-    with MspUdpClient(args.udp_host, args.udp_port) as fc:
+    with open_link(args) as fc:
         sensors = decode_status_sensors(fc.request(MSP_STATUS))
         print("sensors:", " ".join(f"{k}={'YES' if v else 'no'}" for k, v in sensors.items()))
         try:
@@ -283,7 +301,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         from neural_whoop.studio.flight import FakeFlightBridge
         fc, start_mode = FakeFlightBridge(), "software"
     else:
-        fc, start_mode = MspUdpClient(args.udp_host, args.udp_port), "switch"
+        fc, start_mode = open_link(args), "switch"
     try:
         # The override edge auto-starts the flight clock (start_mode="switch"); the human log lines
         # and the CSV rows (LOG_COLUMNS order) route through the injected callbacks so console +
@@ -334,8 +352,13 @@ def cmd_fly(args: argparse.Namespace) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--udp", default=os.environ.get("NW_BRIDGE"), metavar="HOST[:PORT]",
-                    help="bridge address (default: $NW_BRIDGE, so you can set it once per "
+                    help="WiFi bridge address (default: $NW_BRIDGE, so you can set it once per "
                          "bench session with `export NW_BRIDGE=<ip>`)")
+    ap.add_argument("--serial", default=None, metavar="PORT",
+                    help="talk to the bridge through the ESP-NOW USB dongle on this serial port "
+                         "(e.g. /dev/cu.usbmodem101) instead of --udp. Needs pyserial; see "
+                         "docs/ESPNOW.md")
+    ap.add_argument("--baud", type=int, default=115200, help="--serial baud (USB CDC ignores it)")
     ap.add_argument("--weights", default=DEFAULT_WEIGHTS)
     ap.add_argument("--hover-us", type=int, default=1410, help="bench-measured hover throttle (us)")
     ap.add_argument("--vbat-ref", type=float, default=0.0,
@@ -401,9 +424,13 @@ def main() -> int:
 
     args.fake = str(os.environ.get("NW_FLIGHT_FAKE", "")).lower() in ("1", "true", "yes", "on") \
         or (args.udp or "").lower() == "fake"
-    if not args.udp and not args.fake:
-        ap.error("no bridge address: pass --udp HOST[:PORT] or set $NW_BRIDGE "
-                 "(e.g. `export NW_BRIDGE=<ip>`), or NW_FLIGHT_FAKE=1 for the in-process bridge")
+    # $NW_BRIDGE is a convenience default, so --serial has to be able to beat it rather than
+    # collide with it: an explicit --serial wins and the UDP default is dropped.
+    if args.serial:
+        args.udp = None
+    if not args.udp and not args.serial and not args.fake:
+        ap.error("no bridge: pass --udp HOST[:PORT] (or set $NW_BRIDGE), --serial PORT for the "
+                 "ESP-NOW dongle, or NW_FLIGHT_FAKE=1 for the in-process bridge")
     host, _, port = (args.udp or "fake").partition(":")
     args.udp_host, args.udp_port = host, int(port or 14550)
     return {"selftest": cmd_selftest, "check": cmd_check, "probe": cmd_probe,

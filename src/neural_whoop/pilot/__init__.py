@@ -1,4 +1,9 @@
-"""The offboard-pilot flight engine — pure-stdlib (zero torch/numpy).
+"""The offboard-pilot flight engine — stdlib-only (zero torch/numpy).
+
+One caveat, added with the ESP-NOW link (``docs/ESPNOW.md``): the engine is transport-agnostic, and
+the *serial* transport it can be handed (:class:`neural_whoop.bench.msp.MspClient`, the ESP-NOW USB
+dongle) imports **pyserial** lazily. Nothing in this package imports it; the WiFi/UDP path is still
+stdlib top to bottom.
 
 Extracted from the old monolithic ``scripts/pilot.py`` so the same control code drives both the CLI
 (``scripts/pilot.py``, now a thin shim) and the always-on web dashboard

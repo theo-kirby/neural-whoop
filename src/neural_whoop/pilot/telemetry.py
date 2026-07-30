@@ -1,9 +1,13 @@
 """Non-blocking MSP telemetry poller + the RC-stream helper — moved verbatim from ``pilot.py``.
 
-:class:`Telemetry` sits on top of an :class:`MspUdpClient` (or any ``_MspEndpoint``): each
-:meth:`Telemetry.poll` fires the attitude/IMU/(optional analog/rc/rpm/bridge-ToF) queries and drains every
-waiting datagram, so the control loop never blocks. :func:`stream_rc` packs one AETR RC frame.
-Pure stdlib — imports only the codec (``neural_whoop.bench.msp``) and this package's policy layer.
+:class:`Telemetry` sits on top of any ``_MspEndpoint`` — :class:`MspUdpClient` (the WiFi bridge)
+or :class:`MspClient` (the ESP-NOW USB dongle): each :meth:`Telemetry.poll` fires the
+attitude/IMU/(optional analog/rc/rpm/bridge-ToF) queries and drains every waiting reply, so the
+control loop never blocks. :func:`stream_rc` packs one AETR RC frame.
+
+This module imports only the codec (``neural_whoop.bench.msp``) and this package's policy layer,
+so it is stdlib-only; the *serial* transport it can be handed pulls pyserial in lazily
+(``docs/ESPNOW.md``), which is the one place the flight path leaves the stdlib.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from neural_whoop.bench.msp import (
     MSP_RAW_IMU,
     MSP_RC,
     MSP_SET_RAW_RC,
-    MspUdpClient,
+    _MspEndpoint,
     decode_analog,
     decode_attitude,
     decode_bridge_tof,
@@ -34,11 +38,13 @@ from .policy import obs_from_msp
 class Telemetry:
     """Fire-and-forget MSP pollers + latest-known state. Never blocks the control loop."""
 
-    def __init__(self, fc: MspUdpClient) -> None:
+    def __init__(self, fc: _MspEndpoint) -> None:
         self.fc = fc
-        # Non-blocking reads: poll() must drain EVERY waiting datagram each tick (we send 2-3
+        # Non-blocking reads: poll() must drain EVERY waiting reply each tick (we send 2-3
         # queries per tick; one blocking read per tick would back-log replies -> stale obs).
-        self.fc._sock.settimeout(0.0)
+        # Transport-dispatched, NOT `fc._sock.settimeout(0)` — that was UDP-only, and over the
+        # ESP-NOW dongle's serial port a blocking read costs up to 20 ms of a 22 ms tick.
+        self.fc.set_nonblocking()
         self.att: dict | None = None
         self.imu: dict | None = None
         self.vbat: float | None = None
@@ -141,6 +147,6 @@ class Telemetry:
         return obs_from_msp(self.att, self.imu)
 
 
-def stream_rc(fc: MspUdpClient, us4: list[int]) -> None:
+def stream_rc(fc: _MspEndpoint, us4: list[int]) -> None:
     # AETR + aux low. Aux is not overridden (mask) — values here are ignored by the FC.
     fc.send(MSP_SET_RAW_RC, pack_rc_channels(us4 + [1000, 1000, 1000, 1000]))
