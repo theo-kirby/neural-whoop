@@ -371,8 +371,10 @@ The CJMCU-531 (VL53L1X ToF) arrived ahead of the PMW3901 and is integrated as th
 **downward height sensor** — the first *measured* (non-IMU-integrated) state channel, and the
 direct answer to the vz_est-drift smoking gun above:
 
-- **Bridge (`firmware/xiao_bridge`):** sensor on the XIAO's stock I²C (D4/SDA, D5/SCL — free, the
-  UART lives on D9/D10), short-distance mode @ ~40 Hz. The bridge answers MSP cmd **192**
+- **Bridge (`firmware/xiao_bridge`):** sensor on I²C **D5/SDA + D6/SCL** at **100 kHz** (not the
+  stock D4/D5, and not 400 kHz — the 2026-07-30 rewire's longer harness stopped ACKing at 400 kHz;
+  see `firmware/xiao_bridge/README.md`), short-distance mode @ ~40 Hz. The FC UART lives on
+  **D0/D1** as of the same rewire. The bridge answers MSP cmd **192**
   (`MSP_BRIDGE_TOF`, our bridge-local id) itself and never forwards it — transparency preserved for
   everything else, no FC config touched, and the bridge still boots/proxies with no sensor wired.
   Wiring + `bench.py --udp <ip> tof` bring-up in `firmware/xiao_bridge/README.md`.
