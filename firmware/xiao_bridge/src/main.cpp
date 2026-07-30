@@ -70,6 +70,19 @@ uint32_t tof_poll_ms = 0;
 // telemetry frame (obs_age_ms spikes). Reported on the USB heartbeat and in the ToF reply.
 uint32_t loop_max_us = 0;
 
+// Per-section worst case in the same window. loop_max alone said "something blocks ~100 ms under
+// host traffic" but not WHAT: 2026-07-30 measurements exonerated both original suspects (the I2C
+// poll runs every loop and idles at 4 ms; WiFi modem sleep is already off, see connectWifi). The
+// stall appears ONLY when the host polls — i.e. somewhere in the UDP path — so time each section
+// separately and let the bridge name the guilty call instead of guessing again.
+// NOTE: sec_tof_reply is a SUBSET of sec_udp_rx (the reply is sent inside the drain loop).
+uint32_t sec_udp_rx = 0, sec_tof_reply = 0, sec_uart_tx = 0, sec_poll_tof = 0, sec_status = 0;
+
+inline void bump(uint32_t& slot, uint32_t t0_us) {
+  const uint32_t dt = micros() - t0_us;
+  if (dt > slot) slot = dt;
+}
+
 uint8_t rx_buf[kBufSize];  // UDP -> UART
 uint8_t tx_buf[kBufSize];  // UART -> UDP
 
@@ -182,10 +195,13 @@ void loop() {
   // Host -> FC: forward each UDP payload that looks like MSP ('$' header) to the UART —
   // except requests for the bridge's own MSP_BRIDGE_TOF id, answered here and consumed.
   // Drain the whole burst: the host sends its per-tick queries back to back.
+  const uint32_t t_rx_us = micros();
   for (int i = 0; i < kMaxUdpPerLoop && udp.parsePacket() > 0; i++) {
     int n = udp.read(rx_buf, sizeof(rx_buf));
     if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeTof) {
+      const uint32_t t_tx_us = micros();
       sendTofReply();
+      bump(sec_tof_reply, t_tx_us);
     } else if (n > 0 && rx_buf[0] == '$') {
       peer_ip = udp.remoteIP();
       peer_port = udp.remotePort();
@@ -193,9 +209,11 @@ void loop() {
       fc.write(rx_buf, n);
     }
   }
+  bump(sec_udp_rx, t_rx_us);
 
   // FC -> host: ship whatever telemetry bytes are waiting back to the last commander.
   // Chunk boundaries don't matter — the host parser is incremental.
+  const uint32_t t_utx_us = micros();
   int avail = fc.available();
   if (avail > 0 && peer_port != 0) {
     size_t take = min((size_t)avail, sizeof(tx_buf));
@@ -206,10 +224,13 @@ void loop() {
       udp.endPacket();
     }
   }
+  bump(sec_uart_tx, t_utx_us);
 
   // Blocking I2C — deliberately LAST, so it can never sit between an inbound MSP request and
   // its forward to the FC. A stalled bus now costs a dropped range sample, not a dropped tick.
+  const uint32_t t_tof_us = micros();
   pollTof();
+  bump(sec_poll_tof, t_tof_us);
 
   // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
@@ -219,11 +240,19 @@ void loop() {
   // (BSSID changes when a repeater steals the association), and whether commands are flowing.
   static uint32_t last_status_ms = 0;
   if (millis() - last_status_ms > 5000) {
+    const uint32_t t_st_us = micros();
     last_status_ms = millis();
-    Serial.printf("status: %s  RSSI %d dBm  BSSID %s  %s  loop_max %.1f ms\n",
+    Serial.printf("status: %s  RSSI %d dBm  BSSID %s  %s  loop_max %.1f ms"
+                  "  [udp_rx %.1f (tof_reply %.1f)  uart_tx %.1f  poll_tof %.1f  status %.1f]\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.BSSIDstr().c_str(),
-                  fresh ? "commands flowing" : "idle", loop_max_us / 1000.0);
-    loop_max_us = 0;  // worst case per 5 s window, not since boot
+                  fresh ? "commands flowing" : "idle", loop_max_us / 1000.0,
+                  sec_udp_rx / 1000.0, sec_tof_reply / 1000.0, sec_uart_tx / 1000.0,
+                  sec_poll_tof / 1000.0, sec_status / 1000.0);
+    // Worst case per 5 s window, not since boot.
+    loop_max_us = sec_udp_rx = sec_tof_reply = sec_uart_tx = sec_poll_tof = 0;
+    // This print's own cost (USB CDC + the blocking WiFi.RSSI/BSSIDstr calls) seeds the new
+    // window, so a slow heartbeat indicts itself rather than hiding in loop_max.
+    sec_status = micros() - t_st_us;
   }
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
