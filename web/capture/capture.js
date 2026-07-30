@@ -34,8 +34,10 @@ const DEFAULTS = {
   scale: TRUE_FOOTPRINT,     // drone tip-to-tip footprint (m)
   roomSize: null,            // greybox room footprint (m); null -> derived from the flight
   camDir: [0.9, 0.35, 1.0],  // lower + more heroic than the Studio's [0.9, 0.65, 1.0]
-  camDist: 1.15,             // pull-back on the exact box fit (1.0 = corners touch frame)
+  camDist: 1.15,             // pull-back on the fitted distance (1.0 = corners touch frame)
   fov: 40,                   // a longer lens than the Studio's 55 — less wide-angle wall bulge
+  track: false,              // tripod shot: fixed position, camera pans/tilts to follow the drone
+  droneFrac: 0.14,           // (track only) fraction of the frame height the airframe fills
   propRate: 0.8,             // radians per frame at hover thrust (stylized — see spinProps)
   title: "neural-whoop",
   titleFrames: 0,            // opening card; the same count is held as a closing card
@@ -90,20 +92,28 @@ const roomSize = opts.roomSize || Math.max(6, bounds ? bounds.footprint : 6);
 const roomHeight = clamp((bounds ? bounds.zMax : 2) + 1.2, 2.5, 4);
 environment.setSize({ footprint: roomSize, height: roomHeight, floorZ: 0 });
 
-// A fixed 3/4 shot, written straight onto the camera and never touched again (no OrbitControls,
-// so nothing accumulates between frames). The fit is an exact BOX fit, not cameras.js's
-// bounding-SPHERE fit: this flight is tall and thin (1.6 m of climb inside ~0.7 m of drift), and a
-// sphere fit would hold the camera ~25% further back than it needs to be — which at true scale is
-// the difference between reading the airframe and not.
+// The camera. Two modes, both with a FIXED position — nothing dollies, and nothing accumulates
+// between frames (no OrbitControls, no damping), so frame N stays a pure function of N.
+//
+//   wide (default) — an exact BOX fit of the whole flight, not cameras.js's bounding-SPHERE fit:
+//     this flight is tall and thin (1.6 m of climb inside ~0.7 m of drift) and a sphere fit holds
+//     the camera ~25% further back than it needs to be. Fixed lookAt at the flight's centre.
+//
+//   track (`--track`) — a TRIPOD shot: the position is fixed, but the camera pans/tilts to follow
+//     the drone. This is the only way to get genuinely close at true scale. The arithmetic is
+//     unforgiving: with the whole 1.56 m flight in a fixed frame, an 82 mm airframe can occupy at
+//     most 82/1560 = 5% of the frame height, full stop. Tracking decouples the two — distance is
+//     set from how large the DRONE should read (`--drone-frac`), and the flight extent no longer
+//     constrains it. The cost is that you no longer see the whole trajectory at once.
 view.world.updateMatrixWorld();
+const flight = new THREE.Box3();
 {
   const cam = view.camera;
-  const box = new THREE.Box3();
   const v = new THREE.Vector3();
-  for (const frames of framesList) for (const f of frames) box.expandByPoint(v.set(...f.pos));
-  for (const g of episode.gates || []) box.expandByPoint(v.set(...g.pos));
-  if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(1, 1, 1));
-  box.expandByScalar(opts.scale);              // don't clip the airframe itself at the extremes
+  for (const frames of framesList) for (const f of frames) flight.expandByPoint(v.set(...f.pos));
+  for (const g of episode.gates || []) flight.expandByPoint(v.set(...g.pos));
+  if (flight.isEmpty()) flight.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(1, 1, 1));
+  const box = flight.clone().expandByScalar(opts.scale);  // don't clip the airframe at the extremes
   const target = box.getCenter(new THREE.Vector3()).applyMatrix4(view.world.matrixWorld);
 
   cam.fov = opts.fov;
@@ -114,29 +124,55 @@ view.world.updateMatrixWorld();
   const dir = new THREE.Vector3(...opts.camDir).normalize();
   const right = new THREE.Vector3(0, 1, 0).cross(dir).normalize();
   const up = dir.clone().cross(right).normalize();
-  // For a corner at camera-space (u, v, w) the frustum needs depth >= |u|/tanH and >= |v|/tanV;
-  // depth is (d - w), so each corner imposes a minimum d. Take the max over all eight.
-  let dist = 0;
-  for (const x of [box.min.x, box.max.x]) {
-    for (const y of [box.min.y, box.max.y]) {
-      for (const z of [box.min.z, box.max.z]) {
-        const c = v.set(x, y, z).applyMatrix4(view.world.matrixWorld).sub(target);
-        const w = c.dot(dir);
-        dist = Math.max(dist, w + Math.abs(c.dot(right)) / tanH, w + Math.abs(c.dot(up)) / tanV);
+
+  let dist;
+  if (opts.track) {
+    // Distance that makes the airframe fill `droneFrac` of the frame height.
+    dist = opts.scale / (2 * tanV * Math.max(0.001, opts.droneFrac));
+  } else {
+    // For a corner at camera-space (u, v, w) the frustum needs depth >= |u|/tanH and >= |v|/tanV;
+    // depth is (d - w), so each corner imposes a minimum d. Take the max over all eight.
+    dist = 0;
+    for (const x of [box.min.x, box.max.x]) {
+      for (const y of [box.min.y, box.max.y]) {
+        for (const z of [box.min.z, box.max.z]) {
+          const c = v.set(x, y, z).applyMatrix4(view.world.matrixWorld).sub(target);
+          const w = c.dot(dir);
+          dist = Math.max(dist, w + Math.abs(c.dot(right)) / tanH, w + Math.abs(c.dot(up)) / tanV);
+        }
       }
     }
   }
   cam.position.copy(target).add(dir.multiplyScalar(dist * opts.camDist));
-  cam.lookAt(target);
+  cam.lookAt(target);       // the wide shot's final aim; renderFrame re-aims it when tracking
   cam.updateMatrixWorld();
 }
 
+// Where the tracking camera aims, per flight frame: the hero's three-world position, box-smoothed
+// over a symmetric window so a jittery frame doesn't shake the whole shot. Precomputed (symmetric,
+// not a causal EMA) so renderFrame(i) never depends on having rendered i-1.
+const aimTrack = (() => {
+  if (!opts.track) return null;
+  const raw = playback.heroFrames.map((f) =>
+    new THREE.Vector3(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld));
+  const W = 4;
+  return raw.map((_, i) => {
+    const acc = new THREE.Vector3();
+    let n = 0;
+    for (let k = Math.max(0, i - W); k <= Math.min(raw.length - 1, i + W); k++, n++) acc.add(raw[k]);
+    return acc.multiplyScalar(1 / Math.max(1, n));
+  });
+})();
+
 // Shadows: scene.js sizes the sun's shadow ortho for a ±30 m arena, where an 82 mm drone spans
-// ~1.4 texels of the 1024² map — i.e. no contact shadow at all. Refit it to the room and double
-// the map, which is what makes the airframe look like it's ON the floor rather than pasted over it.
+// ~1.4 texels of the 1024² map — i.e. no contact shadow at all. Refit it and double the map, which
+// is what makes the airframe look like it's ON the floor rather than pasted over it. Only the DRONE
+// casts (the room is receive-only), so the ortho only has to cover the flight, not the room — which
+// at whoop scale is another ~4x of shadow resolution, and it shows in a close shot.
 {
   const sun = view.lights.sun;
-  const h = roomSize * 0.75;
+  const reach = flight.getSize(new THREE.Vector3()).length() * 0.5 + 0.5;
+  const h = clamp(reach, 1.0, roomSize * 0.75);
   sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.left = -h; sun.shadow.camera.right = h;
   sun.shadow.camera.top = h; sun.shadow.camera.bottom = -h;
@@ -208,6 +244,12 @@ function renderFrame(i) {
     const angles = propAngles[k];
     if (angles.length) spinProps(a.glyph, angles[Math.min(flightIdx, angles.length - 1)]);
   });
+
+  // Tripod pan/tilt. The camera POSITION is still never touched — only where it aims.
+  if (aimTrack && aimTrack.length) {
+    view.camera.lookAt(aimTrack[Math.min(flightIdx, aimTrack.length - 1)]);
+    view.camera.updateMatrixWorld();
+  }
 
   const hero = playback.heroFrames[Math.min(flightIdx, playback.heroFrames.length - 1)];
   if (hero) {

@@ -205,8 +205,23 @@ uv run python scripts/capture_video.py --replay ... --out out.png --stills 120,2
 ```
 
 Flags: `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`, `--theme light|dark`,
-`--room-size`, `--cam-dir/--cam-dist/--fov`, `--scale` (drone footprint, m), `--prop-rate`,
-`--title/--title-frames`.
+`--room-size`, `--cam-dir/--cam-dist/--fov`, `--track/--drone-frac`, `--scale` (drone footprint, m),
+`--prop-rate`, `--title/--title-frames` (`0` disables the cards).
+
+**Two camera modes, both with a fixed position.** The default is a **wide** shot: an exact box fit
+of the whole flight (not `cameras.js`'s bounding-sphere fit — this flight is tall and thin, and a
+sphere fit sits ~25% further back than it needs to). `--track` is a **tripod** shot: the position
+still never moves, but the camera pans/tilts to follow the drone, and the distance comes from
+`--drone-frac` (how much of the frame height the airframe should fill) instead of the flight
+extent. That decoupling is the whole point — at true scale, a fixed frame containing all 1.56 m of
+the flight caps an 82 mm airframe at **~5% of the frame height**, i.e. a speck. The trade is that
+you no longer see the whole trajectory at once. The concept video uses:
+
+```bash
+uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
+    --width 1080 --height 1080 --theme dark --title-frames 0 --track
+```
 
 With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which runs the
 same capturer server-side into `runs/studio/<stem>.mp4` and hands the browser the download. Without

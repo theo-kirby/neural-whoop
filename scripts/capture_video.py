@@ -129,6 +129,8 @@ def render(
     cam_dir: tuple[float, float, float] = (0.9, 0.35, 1.0),
     cam_dist: float = 1.15,
     fov: float = 40.0,
+    track: bool = False,
+    drone_frac: float = 0.14,
     scale: float | None = None,
     prop_rate: float = 0.8,
     title: str = "neural-whoop",
@@ -149,6 +151,12 @@ def render(
         theme: ``light`` (the bright prototype-map room) or ``dark``.
         room_size: Greybox room footprint (m); ``None`` -> derived from the flight's own bounds.
         cam_dir/cam_dist/fov: Fixed camera direction, distance multiplier, lens.
+        track: Tripod shot — the camera position stays fixed but it pans/tilts to follow the
+            drone. The only way to get genuinely close at true scale: with the whole flight in a
+            fixed frame, an 82 mm airframe can occupy at most ~5% of the frame height. The cost
+            is that you no longer see the whole trajectory at once.
+        drone_frac: With ``track``, the fraction of the frame height the airframe should fill —
+            this, not the flight extent, is what sets the camera distance.
         scale: Drone tip-to-tip footprint (m); ``None`` -> the true 82 mm airframe.
         prop_rate: Stylized prop spin, radians per frame at hover thrust.
         title/title_frames: Opening/closing card text and how long each is held (frames).
@@ -172,7 +180,7 @@ def render(
     page_opts = {
         "episode": episode, "theme": theme, "camDir": list(cam_dir), "camDist": cam_dist,
         "propRate": prop_rate, "title": title, "titleFrames": title_frames,
-        "fov": fov,
+        "fov": fov, "track": track, "droneFrac": drone_frac,
     }
     if room_size is not None:
         page_opts["roomSize"] = room_size
@@ -253,6 +261,11 @@ def main() -> int:
     p.add_argument("--cam-dist", type=float, default=1.15,
                    help="pull-back on the exact box fit (1.0 = the flight touches the frame edges)")
     p.add_argument("--fov", type=float, default=40.0, help="vertical field of view (deg)")
+    p.add_argument("--track", action="store_true",
+                   help="tripod shot: fixed camera position, panning/tilting to follow the drone "
+                        "(lets the shot get close; you lose the whole-trajectory framing)")
+    p.add_argument("--drone-frac", type=float, default=0.14,
+                   help="with --track, fraction of the frame height the airframe fills")
     p.add_argument("--scale", type=float, default=None,
                    help="drone footprint in m (default: the true 0.082 m airframe)")
     p.add_argument("--prop-rate", type=float, default=0.8,
@@ -269,6 +282,7 @@ def main() -> int:
         width=a.width, height=a.height, fps=a.fps, crf=a.crf, stride=a.stride,
         episode=a.episode, theme=a.theme, room_size=a.room_size,
         cam_dir=tuple(float(v) for v in a.cam_dir.split(",")), cam_dist=a.cam_dist, fov=a.fov,
+        track=a.track, drone_frac=a.drone_frac,
         scale=a.scale, prop_rate=a.prop_rate, title=a.title, title_frames=a.title_frames,
         stills=[int(v) for v in a.stills.split(",")] if a.stills else None,
         quiet=a.quiet,

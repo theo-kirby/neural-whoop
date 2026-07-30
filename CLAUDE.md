@@ -126,8 +126,9 @@ capturer**: `web/capture/` + `scripts/capture_video.py` (the `capture` extra: pl
 imageio-ffmpeg). The capture page is *not* a second renderer — it imports the Studio's own
 `scene.js` / `environment.js` / `geometry.js` / `drone-model.js` / `playback.js`, so the video is
 the dashboard's look (CAD chassis, greybox room) and cannot drift; what it adds is the cinematic
-mode: clean full frame, a **fixed** camera box-fitted to the flight, **true-scale** airframe
-(82 mm, vs the Studio's ~7× hero glyph), spinning props, and title/phase captions. The Python
+mode: clean full frame, a **fixed-position** camera (box-fitted wide, or `--track`'s tripod
+pan/tilt for a close shot), **true-scale** airframe (82 mm, vs the Studio's ~7× hero glyph),
+spinning props, and title/phase captions. The Python
 driver serves `web/` on loopback, drives headless Chromium (SwiftShader) with `renderFrame(i)` →
 screenshot (the **frame index is the only clock**), and pipes PNGs to ffmpeg — same shape the
 sibling `../nw-viz` Node project had, which is now only a fallback. `scripts/viz.py --video` and
@@ -251,10 +252,14 @@ events → no curves; no `--baseline` → no comparison).
 uv pip install -e '.[capture]'
 uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
-# The take-off -> hover -> flip -> land concept sequence (trained acro_flip owns the flip window):
+# The take-off -> hover -> flip -> land concept sequence (trained acro_flip owns the flip window).
+# --track is the close "tripod" shot: fixed camera position, panning/tilting to follow the drone —
+# the only way to read an 82 mm airframe at true scale (a fixed frame holding the whole 1.56 m
+# flight caps the drone at ~5% of frame height).
 uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
-    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --title "neural-whoop"
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
+    --width 1080 --height 1080 --theme dark --title-frames 0 --track
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn
