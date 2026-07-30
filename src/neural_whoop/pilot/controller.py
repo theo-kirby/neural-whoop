@@ -110,6 +110,10 @@ class FlightParams:
     vbat_ref: float = 0.0
     trim_thrust: float = 0.0
     target_height_m: float = 1.0  # hover_tof family: the height the policy is asked to hold
+    # ToF validity gates — these MUST mirror tasks/hover_tof.py's HoverTofConfig, or the deployed
+    # policy sees a channel with different semantics than the one it trained against.
+    tof_max_m: float = 1.3            # trusted slant range (short mode); beyond -> hold
+    tof_tilt_limit_deg: float = 45.0  # past this tilt the ray misses the spot below -> hold
     min_us: int = 1000
     max_us: int = 1600
     ramp_s: float = RAMP_DOWN_S   # end-of-flight thrust ramp-down window (s)
@@ -206,9 +210,14 @@ class FlightController:
         self.rpm_hover: float | None = None
         self.us_corr = 0.0
         # ToF height estimate: tilt-corrected, zero-order-held at the last valid reading (the
-        # hover_tof obs contract). t_last_tof gates the sensor-lost abort for ToF policies.
+        # hover_tof obs contract). t_last_tof gates the sensor-lost abort for ToF policies;
+        # t_tof_used is the sample stamp h_est was built from, so a re-served range never
+        # re-corrects. att_hist buys the ~200 ms of attitude the correction pairs against.
         self.h_est: float | None = None
         self.t_last_tof: float | None = None
+        self.t_tof_used: float = 0.0
+        self.att_hist: deque = deque(maxlen=24)  # (t, roll, pitch), ~0.5 s at 50 Hz
+        self._tof_cos_limit = math.cos(math.radians(params.tof_tilt_limit_deg))
         self.trim_roll_rad = math.radians(params.trim_roll_deg)
         self.trim_pitch_rad = math.radians(params.trim_pitch_deg)
 
@@ -472,13 +481,32 @@ class FlightController:
         # height over a flat floor — exactly the sim task's h_meas) and hold the last valid
         # value across dropouts. A ToF policy flying >1 s without the sensor must not keep
         # trusting a frozen channel -> abort.
-        tof_m = self.tel.height_m(now)
-        if tof_m is not None:
-            self.h_est = tof_m * math.cos(o[0]) * math.cos(o[1])
-            self.t_last_tof = now
-        elif (self.pol.uses_tof and self.t_start is not None
+        #
+        # Two disciplines here, both learned from the 2026-07-30 flights:
+        #  1. Correct ONCE PER SAMPLE, against the attitude from the instant that sample was
+        #     taken. Re-projecting a held range through the current attitude is what put a
+        #     0.449 m single-tick step into flight_1785399097's obs channel (range frozen at
+        #     0.824 m while pitch snapped 63° -> 15°).
+        #  2. Apply the SAME validity gates the sim does (tasks/hover_tof.py): past the tilt
+        #     limit the ray misses the spot below and the cos correction degrades; past the
+        #     trusted range the short-mode reading is not believable. Either -> hold.
+        self.att_hist.append((now, o[0], o[1]))
+        sample = self.tel.height_sample(now)
+        tof_m = sample[0] if sample is not None else None
+        if sample is not None and sample[1] > self.t_tof_used:
+            rng, t_sample = sample
+            self.t_tof_used = t_sample
+            roll_s, pitch_s = self._att_at(t_sample)
+            cos_tilt = math.cos(roll_s) * math.cos(pitch_s)
+            if cos_tilt > self._tof_cos_limit and 0.0 <= rng <= p.tof_max_m:
+                self.h_est = rng * cos_tilt
+                self.t_last_tof = now
+        if (self.pol.uses_tof and self.t_start is not None
                 and (self.t_last_tof is None or now - self.t_last_tof > 1.0)):
-            self._log("\nToF height lost > 1 s and the policy observes it -> releasing")
+            why = ("sensor silent" if tof_m is None else
+                   "every reading rejected by the tilt/range gate")
+            self._log(f"\nno valid ToF height for > 1 s ({why}) and the policy observes it"
+                      " -> releasing")
             return self._abort("tof_lost")
         # Crash detector: sustained extreme attitude -> cut + release. SUSPENDED while `flipping`:
         # a legitimate flip passes |roll|>110° by design, so the detector would false-fire. The
@@ -693,6 +721,20 @@ class FlightController:
                       f"{tof_m:.3f}" if tof_m is not None else "",
                       f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else ""])
         return self._make_frame()
+
+    # ------------------------------------------------------------------ helpers
+    def _att_at(self, t: float) -> tuple[float, float]:
+        """(roll, pitch) nearest in time to ``t`` from the recent attitude history.
+
+        The ToF range and the attitude ride different MSP replies at different rates, so the
+        newest attitude is generally NOT the one contemporaneous with a given range. Nearest-
+        neighbour is enough: att_hist is sampled every control tick (~22 ms) and the range is
+        at most 200 ms old, well inside the deque.
+        """
+        if not self.att_hist:
+            return self.roll, self.pitch
+        _, roll, pitch = min(self.att_hist, key=lambda a: abs(a[0] - t))
+        return roll, pitch
 
     # ------------------------------------------------------------------ frame / phase
     def _derive_phase(self) -> Phase:

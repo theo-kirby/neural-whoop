@@ -23,19 +23,27 @@ from test_flight_controller import Clock, FakeMsp, _run_until
 
 
 class TofFakeMsp(FakeMsp):
-    """FakeMsp + a scriptable MSP_BRIDGE_TOF answer (range_mm/status/answer switch)."""
+    """FakeMsp + a scriptable MSP_BRIDGE_TOF answer (range_mm/status/age/answer switch).
+
+    ``tof_age_ms`` is the bridge's own "how old is this range" stamp. Bumping it WITHOUT
+    changing ``tof_mm`` re-serves the same sample, which is exactly what a bridge stall looks
+    like on the wire — the case the tilt-correction must not re-project (see
+    ``test_held_range_is_not_reprojected_through_fresh_attitude``).
+    """
 
     def __init__(self) -> None:
         super().__init__()
         self.tof_mm = 500
         self.tof_status = 0
         self.tof_answer = True
+        self.tof_age_ms = 10
 
     def _write(self, raw: bytes) -> None:
         if raw[4] == MSP_BRIDGE_TOF:
             if self.tof_answer:
                 self._resp(MSP_BRIDGE_TOF,
-                           struct.pack("<HBHB", self.tof_mm, self.tof_status, 10, 1))
+                           struct.pack("<HBHB", self.tof_mm, self.tof_status,
+                                       self.tof_age_ms, 1))
         else:
             super()._write(raw)
 
@@ -119,6 +127,75 @@ def test_height_estimate_is_tilt_corrected_and_held(tmp_path):
         clk.t += 0.02
         ctrl.step()
     assert ctrl.h_est == pytest.approx(expect, rel=1e-3)
+
+
+def test_held_range_is_not_reprojected_through_fresh_attitude(tmp_path):
+    """The 2026-07-30 phantom-step regression.
+
+    flight_1785399097 held a 0.824 m range across a bridge stall while the attitude kept
+    updating; the old code re-multiplied it by cos(current tilt) every tick and handed the
+    policy a 0.449 m single-tick step that never happened. A held range must hold h_est.
+    """
+    fake = TofFakeMsp()
+    clk = Clock()
+    fake.tof_mm = 800
+    pol, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=5.0)
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    assert ctrl.h_est == pytest.approx(0.8, rel=1e-3)
+
+    # Bridge stalls: the same sample is re-served with a growing age while attitude moves.
+    fake.pitch_deg = 30.0
+    for _ in range(5):
+        clk.t += 0.02
+        fake.tof_age_ms += 20
+        ctrl.step()
+    assert ctrl.h_est == pytest.approx(0.8, rel=1e-3)  # NOT 0.8 * cos(30 deg) = 0.693
+
+
+def test_reading_past_the_tilt_limit_is_held(tmp_path):
+    # Mirrors tasks/hover_tof.py: past tof_tilt_limit_deg the ray misses the spot below -> hold.
+    fake = TofFakeMsp()
+    clk = Clock()
+    fake.tof_mm = 800
+    pol, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=5.0,
+                          tof_tilt_limit_deg=45.0)
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    assert ctrl.h_est == pytest.approx(0.8, rel=1e-3)
+    fake.pitch_deg = 60.0  # past the gate; fresh samples keep arriving
+    for _ in range(10):
+        clk.t += 0.02
+        ctrl.step()
+    assert ctrl.h_est == pytest.approx(0.8, rel=1e-3)  # NOT 0.8 * cos(60 deg) = 0.4
+
+
+def test_reading_past_the_trusted_range_is_held(tmp_path):
+    # Mirrors tasks/hover_tof.py: slant > tof_max_m is not believable in short mode -> hold.
+    fake = TofFakeMsp()
+    clk = Clock()
+    fake.tof_mm = 800
+    pol, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=5.0,
+                          tof_max_m=1.3)
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    fake.tof_mm = 2000  # 2.0 m, past the trusted band
+    for _ in range(10):
+        clk.t += 0.02
+        ctrl.step()
+    assert ctrl.h_est == pytest.approx(0.8, rel=1e-3)
+
+
+def test_abort_when_every_reading_is_gated_out(tmp_path):
+    # A live sensor whose readings are ALL rejected is as blind as a dead one: same 1 s abort.
+    fake = TofFakeMsp()
+    clk = Clock()
+    pol, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=30.0)
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    fake.tof_mm = 3000  # valid status, but far past tof_max_m
+    assert _run_until(ctrl, clk, lambda c: c.done, max_steps=120)
+    assert ctrl.abort_reason == "tof_lost"
 
 
 def test_logged_h_err_matches_the_fed_channel(tmp_path):

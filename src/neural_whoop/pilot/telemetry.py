@@ -49,7 +49,8 @@ class Telemetry:
         self.t_imu = 0.0
         self.t_rc = 0.0
         self.t_mt = 0.0
-        self.t_tof = 0.0
+        self.t_tof = 0.0         # arrival time of the newest ToF frame
+        self.t_tof_sample = 0.0  # when that RANGE was taken (arrival - the bridge's own age stamp)
 
     def poll(self, now: float, want_analog: bool = False, want_rc: bool = False,
              want_rpm: bool = False, want_tof: bool = False) -> None:
@@ -83,13 +84,34 @@ class Telemetry:
             elif frame.cmd == MSP_MOTOR_TELEMETRY and len(frame.payload) >= 14:
                 self.mt, self.t_mt = decode_motor_telemetry(frame.payload), now
             elif frame.cmd == MSP_BRIDGE_TOF and len(frame.payload) >= 6:
-                self.tof, self.t_tof = decode_bridge_tof(frame.payload), now
+                tof = decode_bridge_tof(frame.payload)
+                self.tof, self.t_tof = tof, now
+                # The bridge stamps every range with its own age, so we can recover WHEN the
+                # sensor ranged rather than when the reply happened to arrive. Consecutive polls
+                # re-serve the same sample with a growing age -> the same stamp, which is how
+                # height_sample() tells a NEW range from a re-served one.
+                if tof["range_m"] is not None:
+                    self.t_tof_sample = now - tof["age_ms"] / 1000.0
+
+    def height_sample(self, now: float) -> tuple[float, float] | None:
+        """Newest valid ToF range as ``(range_m, sample_time)``; None if absent/invalid/stale.
+
+        ``sample_time`` is when the sensor actually ranged, NOT when the frame arrived. Callers
+        that tilt-correct the range MUST pair it with the attitude from that instant: the range
+        and the attitude ride different MSP replies at different rates, and projecting a held
+        range through a fresh attitude manufactures height steps that never happened (a 0.45 m
+        phantom step showed up in flight_1785399097, 180 ms before the tumble).
+        """
+        if self.tof is None or self.tof["range_m"] is None:
+            return None
+        if now - self.t_tof > 0.2 or now - self.t_tof_sample > 0.2:
+            return None
+        return self.tof["range_m"], self.t_tof_sample
 
     def height_m(self, now: float) -> float | None:
         """Measured height (bridge VL53L1X, m); None if absent, invalid, or stale (>0.2 s)."""
-        if self.tof is None or now - self.t_tof > 0.2:
-            return None
-        return self.tof["range_m"]
+        sample = self.height_sample(now)
+        return None if sample is None else sample[0]
 
     def rpm_rms(self, now: float) -> float | None:
         """RMS motor RPM (thrust ~ sum(rpm^2)); None if stale, missing, or bidir-DShot off."""
