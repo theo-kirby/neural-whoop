@@ -42,6 +42,7 @@ from neural_whoop.bench import (  # noqa: E402
     MspTimeout,
     MspUdpClient,
 )
+from neural_whoop.bench.msp import MSP_BRIDGE_TOF  # noqa: E402
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
 # MSP_SET_RAW_RC frames are in WIRE order and the FC applies its channel map (AETR on our
@@ -148,25 +149,51 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _rtt_samples(fc, cmds: tuple, n: int) -> list[float]:
+    """``n`` round-trip times (ms), cycling ``cmds`` so a late/duplicate reply can't match.
+
+    MSP has no sequence ids and UDP duplicates are real on this LAN, so a stale reply to request
+    N would otherwise satisfy request N+1 and report a fake sub-ms round trip.
+    """
+    out: list[float] = []
+    fc.request(cmds[0])  # warm up
+    for i in range(n):
+        t0 = time.perf_counter()
+        fc.request(cmds[i % len(cmds)])
+        out.append((time.perf_counter() - t0) * 1e3)
+    return out
+
+
+def _rtt_line(label: str, times_ms: list[float]) -> None:
+    s = sorted(times_ms)
+    p = lambda q: s[min(len(s) - 1, int(q * len(s)))]  # noqa: E731
+    print(f"  {label:<28} median {statistics.median(s):6.2f} ms  p90 {p(0.90):6.2f}  "
+          f"p99 {p(0.99):6.2f}  max {s[-1]:6.2f}")
+
+
 def cmd_latency(args: argparse.Namespace) -> int:
-    # Alternate two commands so a late/duplicate reply from request N can never satisfy
-    # request N+1 (MSP has no sequence ids; UDP duplicates are real — seen on this LAN).
-    # Otherwise stale matches report fake sub-ms round-trips and smear the distribution.
-    times_ms: list[float] = []
-    cmds = (MSP_ATTITUDE, MSP_RAW_IMU)
     with _client(args) as fc:
-        fc.request(MSP_ATTITUDE)  # warm up
-        for i in range(args.n):
-            t0 = time.perf_counter()
-            fc.request(cmds[i % 2])
-            times_ms.append((time.perf_counter() - t0) * 1e3)
-    times_ms.sort()
-    p = lambda q: times_ms[min(len(times_ms) - 1, int(q * len(times_ms)))]  # noqa: E731
-    print(
-        f"MSP round-trip over {args.n} requests (alternating ATTITUDE/RAW_IMU): "
-        f"median {statistics.median(times_ms):.2f} ms  p90 {p(0.90):.2f}  p99 {p(0.99):.2f}  "
-        f"max {times_ms[-1]:.2f}"
-    )
+        fc_ms = _rtt_samples(fc, (MSP_ATTITUDE, MSP_RAW_IMU), args.n)
+        # The isolation split: MSP_BRIDGE_TOF is answered by the BRIDGE and never reaches the FC,
+        # so its round trip is the pure host<->bridge air path. Anything the FC path has on top of
+        # it is UART + Betaflight MSP scheduling, not WiFi. Requires --udp (no bridge over USB).
+        bridge_ms = _rtt_samples(fc, (MSP_BRIDGE_TOF,), args.n) if args.udp else None
+
+    print(f"MSP round-trip over {args.n} requests:")
+    _rtt_line("host->bridge->FC (ATT/IMU)", fc_ms)
+    if bridge_ms is not None:
+        _rtt_line("host->bridge only (ToF)", bridge_ms)
+        air_p99 = sorted(bridge_ms)[min(len(bridge_ms) - 1, int(0.99 * len(bridge_ms)))]
+        fc_p99 = sorted(fc_ms)[min(len(fc_ms) - 1, int(0.99 * len(fc_ms)))]
+        print("\nWhere the tail lives: ", end="")
+        if air_p99 > 0.5 * fc_p99:
+            print(f"the AIR. The bridge-answered path alone carries p99 {air_p99:.0f} ms — the FC\n"
+                  "  is not involved. Look at WiFi: host on ethernet instead of wireless, a\n"
+                  "  dedicated AP/channel rather than a mesh repeater, or ESP-NOW.")
+        else:
+            print(f"the FC PATH. The air is clean (p99 {air_p99:.0f} ms) but the full trip is\n"
+                  f"  p99 {fc_p99:.0f} ms — that delta is UART + Betaflight MSP task scheduling.\n"
+                  "  Look at the FC's UART baud and Betaflight's MSP task rate, not the network.")
     if args.udp:
         print("(measured through the WiFi bridge: this IS the real offboard link budget)")
     else:
