@@ -131,10 +131,17 @@ def test_decode_raw_imu_keeps_raw_units():
 def test_decode_bridge_tof_gates_range_m():
     from neural_whoop.bench.msp import decode_bridge_tof
 
-    # Fresh valid sample: range_m populated.
+    # Fresh valid sample: range_m populated. Pre-2026-07-30 firmware sends 6 bytes and carries
+    # no loop_max_ms; the decoder must still accept it (the bridge is flashed independently of
+    # the host, so both generations are live at once).
     p = struct.pack("<HBHB", 743, 0, 24, 1)
     out = decode_bridge_tof(p)
-    assert out == {"range_m": 0.743, "range_mm": 743, "status": 0, "age_ms": 24, "sensor_ok": True}
+    assert out == {"range_m": 0.743, "range_mm": 743, "status": 0, "age_ms": 24,
+                   "sensor_ok": True, "loop_max_ms": None}
+
+    # Current firmware appends u16 loop_max_ms (worst loop() stall in the last 5 s window).
+    out8 = decode_bridge_tof(struct.pack("<HBHBH", 743, 0, 24, 1, 97))
+    assert out8["range_m"] == 0.743 and out8["loop_max_ms"] == 97
 
     # Invalid status (VL53L1X wrap/no-return), stale sample, or absent sensor -> range_m None.
     assert decode_bridge_tof(struct.pack("<HBHB", 743, 4, 24, 1))["range_m"] is None

@@ -320,11 +320,16 @@ def cmd_tof(args: argparse.Namespace) -> int:
                 r = fc.bridge_tof()
                 if not r["sensor_ok"]:
                     print("  sensor_ok=0 — bridge up but no VL53L1X found (check D4/SDA D5/SCL + 3V3)")
-                elif r["range_m"] is not None:
+                # loop_max_ms: the bridge's own worst loop() stall this 5 s window. Anything
+                # over ~20 ms is a blind window in the MSP proxy and will show up as an
+                # obs_age spike in flight; the old 100 ms I2C timeout used to park it at ~100.
+                lmax = r.get("loop_max_ms")
+                stall = "" if lmax is None else f"  loop_max {lmax:3d} ms"
+                if r["range_m"] is not None:
                     bar = "#" * min(60, int(r["range_m"] * 40))
-                    print(f"  {r['range_m']*100:6.1f} cm  age {r['age_ms']:3d} ms  {bar}")
+                    print(f"  {r['range_m']*100:6.1f} cm  age {r['age_ms']:3d} ms{stall}  {bar}")
                 else:
-                    print(f"  -- invalid (status {r['status']}, age {r['age_ms']} ms) — "
+                    print(f"  -- invalid (status {r['status']}, age {r['age_ms']} ms){stall} — "
                           "out of range / no return")
                 time.sleep(max(0.0, period - (time.monotonic() - t0)))
     except KeyboardInterrupt:

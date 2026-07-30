@@ -37,10 +37,19 @@ constexpr uint32_t kLinkFreshMs = 250;
 constexpr size_t kBufSize = 512;
 
 // Bridge-local MSP command: latest ToF range. Payload: u16 range_mm, u8 range_status
-// (VL53L1X, 0 = valid), u16 age_ms (65535 = never), u8 sensor_ok. Mirrored in
+// (VL53L1X, 0 = valid), u16 age_ms (65535 = never), u8 sensor_ok, u16 loop_max_ms. Mirrored in
 // neural_whoop/bench/msp.py (MSP_BRIDGE_TOF / decode_bridge_tof) — change both together.
+// The trailing loop_max_ms was appended 2026-07-30; older hosts slice the first 6 bytes and
+// ignore it, so the field is backwards-compatible in both directions.
 constexpr uint8_t kMspBridgeTof = 192;
-constexpr uint32_t kTofPollMs = 5;  // dataReady() is an I2C read; don't hammer it every loop
+// dataReady() is a BLOCKING I2C read, so every poll is dead time for the proxy. The sensor
+// free-runs at 25 ms; 12 ms still catches every sample with one spare poll, at half the bus
+// traffic of the old 5 ms.
+constexpr uint32_t kTofPollMs = 12;
+// Cap on UDP packets serviced per loop() pass. The host fires 3-5 MSP queries per control tick
+// as a burst; draining one per pass made the burst take 3-5 loop iterations (and any blocking
+// call in between stretched the whole tick). Bounded so a flood can't starve the FC->host path.
+constexpr int kMaxUdpPerLoop = 8;
 
 HardwareSerial fc(1);
 WiFiUDP udp;
@@ -55,6 +64,11 @@ uint16_t tof_mm = 0xFFFF;   // latest range (mm)
 uint8_t tof_status = 0xFF;  // latest VL53L1X range_status (0 = valid)
 uint32_t tof_ms = 0;        // millis() of the latest sample (0 = never)
 uint32_t tof_poll_ms = 0;
+
+// Worst loop() duration in the current 5 s status window. This is the bridge's own account of
+// how long it went without servicing UDP — the quantity that shows up host-side as a frozen
+// telemetry frame (obs_age_ms spikes). Reported on the USB heartbeat and in the ToF reply.
+uint32_t loop_max_us = 0;
 
 uint8_t rx_buf[kBufSize];  // UDP -> UART
 uint8_t tx_buf[kBufSize];  // UART -> UDP
@@ -102,7 +116,12 @@ void initTof() {
   // inside the 25 ms poll period, but it is blocking, so watch `bench.py latency` if the MSP
   // RTT budget ever gets tight.
   Wire.setClock(100000);
-  tof.setTimeout(100);
+  // 10 ms, not 100: setTimeout bounds how long a BLOCKING I2C transaction may stall loop(),
+  // and loop() is the whole MSP proxy. The 2026-07-30 flights show host-side obs_age spiking
+  // to ~200 ms on ~5% of control ticks with the entire telemetry frame frozen — the signature
+  // of one or two I2C reads timing out at the old 100 ms budget. A whoop control loop cannot
+  // afford a 100 ms blind window to salvage one range sample; drop the sample instead.
+  tof.setTimeout(10);
   if (!tof.init()) {
     Serial.println("tof: no VL53L1X on I2C (D5=SDA D6=SCL) — ranging disabled");
     return;
@@ -129,9 +148,11 @@ void pollTof() {
 // host's stock MSP parser reads it like any FC reply).
 void sendTofReply() {
   const uint32_t age = tof_ms ? min<uint32_t>(millis() - tof_ms, 0xFFFE) : 0xFFFF;
-  uint8_t p[6] = {static_cast<uint8_t>(tof_mm & 0xFF), static_cast<uint8_t>(tof_mm >> 8),
+  const uint32_t lmax = min<uint32_t>(loop_max_us / 1000, 0xFFFF);
+  uint8_t p[8] = {static_cast<uint8_t>(tof_mm & 0xFF), static_cast<uint8_t>(tof_mm >> 8),
                   tof_status, static_cast<uint8_t>(age & 0xFF), static_cast<uint8_t>(age >> 8),
-                  static_cast<uint8_t>(tof_ok ? 1 : 0)};
+                  static_cast<uint8_t>(tof_ok ? 1 : 0),
+                  static_cast<uint8_t>(lmax & 0xFF), static_cast<uint8_t>(lmax >> 8)};
   uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeTof};
   uint8_t ck = sizeof(p) ^ kMspBridgeTof;
   for (size_t i = 0; i < sizeof(p); i++) {
@@ -156,13 +177,13 @@ void setup() {
 }
 
 void loop() {
-  pollTof();
+  const uint32_t t_loop_us = micros();
 
   // Host -> FC: forward each UDP payload that looks like MSP ('$' header) to the UART —
   // except requests for the bridge's own MSP_BRIDGE_TOF id, answered here and consumed.
-  int n = udp.parsePacket();
-  if (n > 0) {
-    n = udp.read(rx_buf, sizeof(rx_buf));
+  // Drain the whole burst: the host sends its per-tick queries back to back.
+  for (int i = 0; i < kMaxUdpPerLoop && udp.parsePacket() > 0; i++) {
+    int n = udp.read(rx_buf, sizeof(rx_buf));
     if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeTof) {
       sendTofReply();
     } else if (n > 0 && rx_buf[0] == '$') {
@@ -186,6 +207,10 @@ void loop() {
     }
   }
 
+  // Blocking I2C — deliberately LAST, so it can never sit between an inbound MSP request and
+  // its forward to the FC. A stalled bus now costs a dropped range sample, not a dropped tick.
+  pollTof();
+
   // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
   digitalWrite(LED_BUILTIN, fresh ? LOW : (((millis() >> 9) & 1) ? LOW : HIGH));
@@ -195,10 +220,14 @@ void loop() {
   static uint32_t last_status_ms = 0;
   if (millis() - last_status_ms > 5000) {
     last_status_ms = millis();
-    Serial.printf("status: %s  RSSI %d dBm  BSSID %s  %s\n",
+    Serial.printf("status: %s  RSSI %d dBm  BSSID %s  %s  loop_max %.1f ms\n",
                   WiFi.localIP().toString().c_str(), WiFi.RSSI(), WiFi.BSSIDstr().c_str(),
-                  fresh ? "commands flowing" : "idle");
+                  fresh ? "commands flowing" : "idle", loop_max_us / 1000.0);
+    loop_max_us = 0;  // worst case per 5 s window, not since boot
   }
 
   if (WiFi.status() != WL_CONNECTED) connectWifi();
+
+  const uint32_t dt_us = micros() - t_loop_us;
+  if (dt_us > loop_max_us) loop_max_us = dt_us;
 }

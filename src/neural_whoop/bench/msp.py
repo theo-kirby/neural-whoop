@@ -184,10 +184,14 @@ def decode_motor_telemetry(payload: bytes) -> list[dict]:
 
 def decode_bridge_tof(payload: bytes) -> dict:
     """MSP_BRIDGE_TOF: u16 range_mm, u8 VL53L1X range_status (0 = valid), u16 age_ms
-    (65535 = never sampled), u8 sensor_ok.
+    (65535 = never sampled), u8 sensor_ok, and (firmware >= 2026-07-30) u16 loop_max_ms.
 
     ``range_m`` is ``None`` unless the sensor is present, the sample is valid (status 0) and
     fresh (age < 200 ms) — one field the callers can trust without re-deriving the gating.
+
+    ``loop_max_ms`` is the bridge's worst ``loop()`` duration in the current 5 s window, i.e.
+    how long it went without servicing UDP. It is the direct measure of the host-side
+    ``obs_age_ms`` spikes; ``None`` on pre-2026-07-30 firmware, which sends only 6 bytes.
     """
     range_mm, status, age_ms, ok = struct.unpack("<HBHB", payload[:6])
     valid = bool(ok) and status == 0 and age_ms < 200
@@ -197,6 +201,7 @@ def decode_bridge_tof(payload: bytes) -> dict:
         "status": status,
         "age_ms": age_ms,
         "sensor_ok": bool(ok),
+        "loop_max_ms": struct.unpack("<H", payload[6:8])[0] if len(payload) >= 8 else None,
     }
 
 

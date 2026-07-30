@@ -33,9 +33,23 @@ sensor ignores, but keep it in mind if SCL ever looks noisy at boot.)
 Mount the sensor **facing down** (it is the measured-height channel: `tof_m` in the pilot
 flight CSV, real z in the flight-report replay). Firmware runs it in short-distance mode at
 ~40 Hz (ambient-robust to ~1.3 m — the whoop's hover band; switch to `Medium` in `initTof()`
-for higher ceilings at a slower rate). Leave XSHUT/GPIO1 unwired. The sensor is fully
-optional: with nothing on the I²C the bridge boots and proxies exactly as before, and
-`MSP_BRIDGE_TOF` replies carry `sensor_ok=0`.
+for higher ceilings at a slower rate). Measured on hardware 2026-07-30: **~25 Hz of genuinely
+fresh ranges reach the pilot**, and the static noise floor is 23.9 mm ± 2.4 mm. Leave
+XSHUT/GPIO1 unwired. The sensor is fully optional: with nothing on the I²C the bridge boots and
+proxies exactly as before, and `MSP_BRIDGE_TOF` replies carry `sensor_ok=0`.
+
+**The I²C reads are blocking, and `loop()` is the whole MSP proxy.** `tof.setTimeout(10)` bounds
+how long one stalled transaction can freeze telemetry — the old 100 ms budget matched the ~200 ms
+`obs_age_ms` spikes seen on 5% of control ticks in the 2026-07-30 flights. `pollTof()` runs last
+in `loop()` so it can never delay forwarding an inbound MSP request. To watch it: the USB
+heartbeat prints `loop_max <ms>` (worst `loop()` in the last 5 s), and the same number rides the
+`MSP_BRIDGE_TOF` reply as a trailing `u16 loop_max_ms`, printed by:
+
+```bash
+python3 scripts/bench.py --udp <bridge-ip> tof     # ... age N ms  loop_max M ms
+```
+
+**Anything over ~20 ms is a blind window in the proxy.**
 
 Desk bring-up after wiring (before mounting anything):
 
