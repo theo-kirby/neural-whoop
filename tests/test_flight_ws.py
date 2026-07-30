@@ -10,11 +10,14 @@ flight path (the MSP link is a different resource).
 
 from __future__ import annotations
 
+import csv
 import json
 import time
 
 from fastapi.testclient import TestClient
 
+from neural_whoop.analysis.flight_log import LOG_COLUMNS as ANALYSIS_LOG_COLUMNS
+from neural_whoop.analysis.flight_log import load_flight
 from neural_whoop.pilot import FlightParams
 from neural_whoop.studio.flight import FakeFlightBridge, FlightManager
 from neural_whoop.studio.flight_report import run_flight_report
@@ -238,6 +241,39 @@ def test_flight_report_emitted_on_landing(tmp_path):
         <= set(report["metrics"])
     assert list((runs / "pilot").glob("*_report/flight_summary.json")), "no report pack written"
     assert not ROLLOUT_LOCK.locked()
+
+
+def test_dashboard_csv_matches_the_analysis_schema(tmp_path):
+    """A dashboard flight must write a CSV that ``load_flight`` accepts, header AND row width.
+
+    studio/flight.py duplicates LOG_COLUMNS (it imports without numpy), and the row itself comes
+    from FlightController._on_log — three places that can drift apart silently. They did not when
+    ``bridge_loop_max_ms`` was appended, but only because this test now says so: the dashboard is
+    the path the real flights actually use.
+    """
+    runs = tmp_path / "runs"
+    fake = FakeFlightBridge(armed=True, override=True)
+    mgr = FlightManager(
+        "fake", weights=_synth_weights(tmp_path),
+        params=FlightParams(launch=True, hold_seconds=0.15, seconds=0.5, ramp_s=0.1),
+        runs_dir=runs / "pilot", client_factory=lambda *_a, **_k: fake)
+    app = create_app(repo_root=tmp_path, runs_dir=runs, courses_dir=tmp_path / "courses",
+                     device="cpu", flight_manager=mgr)
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/flight") as ws:
+            _read_until(ws, lambda m: m.get("status", {}).get("armed")
+                        and m["status"]["override_on"])
+            ws.send_json({"type": "start"})
+            _read_until(ws, lambda m: m.get("status", {}).get("phase") == "released",
+                        max_reads=3000)
+
+    csvs = list((runs / "pilot").glob("flight_*.csv"))
+    assert csvs, "dashboard flight wrote no CSV"
+    with csvs[0].open(newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[0] == ANALYSIS_LOG_COLUMNS, "dashboard header drifted from the analysis schema"
+    assert all(len(r) == len(ANALYSIS_LOG_COLUMNS) for r in rows[1:]), "row width != header width"
+    load_flight(csvs[0])  # the real contract: flight_report.py must be able to read it
 
 
 def test_create_app_builds_manager_for_fake_bridge(tmp_path):

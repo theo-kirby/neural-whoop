@@ -415,8 +415,10 @@ class FakeFlightBridge(_MspEndpoint):
             self._resp(cmd, struct.pack("<8H", 1500, 1500, 1500, 1000, aux1, 1000, aux3, 1000))
         elif cmd == MSP_BRIDGE_TOF:
             # The bridge's downward VL53L1X: crude z from the throttle integral, floored at the
-            # ~3 cm the sensor sits above the ground when landed. Always valid + fresh.
-            self._resp(cmd, struct.pack("<HBHB", max(30, int(self._z * 1000)), 0, 12, 1))
+            # ~3 cm the sensor sits above the ground when landed. Always valid + fresh. The
+            # trailing loop_max_ms mirrors current firmware (>= 2026-07-30) at its measured
+            # healthy bench value (~5 ms), so the fake path exercises CSV col 27 too.
+            self._resp(cmd, struct.pack("<HBHBH", max(30, int(self._z * 1000)), 0, 12, 1, 5))
         elif cmd == MSP_MOTOR_TELEMETRY:
             rpm = max(600, int((self._thr - 1000) * 45))
             p = bytes([4])
