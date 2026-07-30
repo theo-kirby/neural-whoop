@@ -373,13 +373,54 @@ direct answer to the vz_est-drift smoking gun above:
 
 - **Bridge (`firmware/xiao_bridge`):** sensor on I²C **D5/SDA + D6/SCL** at **100 kHz** (not the
   stock D4/D5, and not 400 kHz — the 2026-07-30 rewire's longer harness stopped ACKing at 400 kHz;
-  see `firmware/xiao_bridge/README.md`), short-distance mode @ ~40 Hz. The FC UART lives on
+  see `firmware/xiao_bridge/README.md`), short-distance mode free-running at 25 ms (~40 Hz
+  nominal; **~25 Hz of genuinely fresh ranges reach the pilot** — see the characterization
+  below). The FC UART lives on
   **D0/D1** as of the same rewire. The bridge answers MSP cmd **192**
   (`MSP_BRIDGE_TOF`, our bridge-local id) itself and never forwards it — transparency preserved for
   everything else, no FC config touched, and the bridge still boots/proxies with no sensor wired.
   Wiring + `bench.py --udp <ip> tof` bring-up in `firmware/xiao_bridge/README.md`.
 - **Pilot:** `Telemetry.poll(want_tof=True)` every tick; `tof_m` is CSV column 25 (validity-gated:
   status 0 + age < 200 ms; pre-ToF 24-col logs still load).
+
+#### Sensor characterization + three fixes (2026-07-30, `runs/pilot/flight_17853990{04,32,79,97}` + `…119`)
+
+Five bench flights, first real data on the rewired 100 kHz bus. **The sensor is good; what sat
+around it was not.** Measured:
+
+- **Static noise floor 23.9 mm mean, σ 2.4 mm** (629 pre-liftoff samples, all five flights;
+  per-flight σ 1.4–2.5 mm). No drift, no ambient sensitivity. Airborne the trace is monotone in
+  ~10 mm steps — a credible control input, not just a diagnostic.
+- **Coverage 92–99%** of control ticks carry a value.
+- **Effective fresh-range rate 24.8–27.1 Hz**, not the nominal 40 (log loop itself ran 41–44 Hz,
+  so this is the sensor/link). → `HoverTofConfig.tof_rate_hz` default 40 → **25**;
+  `configs/hover_tof_air65_w128u15_r25.yaml` is the one-factor retrain off the shipped baseline.
+  Historical ladder configs keep their explicit `40.0` so past nodes stay reproducible.
+- **Link stalls on ~5% of ticks** (`obs_age_ms` p50 23 ms, p99 190–224 ms, max 250; flight `…032`
+  worst at 10.2% >100 ms). The *whole* telemetry frame freezes, attitude included — so this is the
+  bridge's `loop()`, not the ToF. Prime suspect: `tof.setTimeout(100)` — a blocking I2C read that
+  can park the MSP proxy for 100 ms to salvage one sample. Firmware now sets **10 ms**, polls at
+  12 ms instead of 5, drains the whole UDP burst per pass, and runs the blocking I2C **last**.
+  The bridge reports its own worst `loop()` duration per 5 s window on the USB heartbeat and as a
+  new trailing `u16 loop_max_ms` in the `MSP_BRIDGE_TOF` payload (`bench.py … tof` prints it;
+  6-byte pre-2026-07-30 replies still decode, `loop_max_ms=None`). **This is the confirmation
+  step — it is a hypothesis until `loop_max_ms` is read on hardware.**
+- **Stale range × fresh attitude manufactured a 0.449 m phantom step** in the policy's obs
+  (flight `…097`, t=7.285: range frozen at 0.824 m across a stall while pitch snapped 63°→15°;
+  180 ms later the drone tumbled). The pilot cos-corrected *every tick* against the *current*
+  attitude. Now: correct **once per sample**, against the attitude from the instant that sample
+  was taken (`Telemetry.height_sample()` returns `(range_m, sample_time)`, recovered from the
+  bridge's own age stamp; `FlightController._att_at()` pairs it).
+- **The deploy path applied none of the sim's validity gates.** `tasks/hover_tof.py` holds past
+  45° tilt and past 1.3 m slant; the pilot accepted anything — the 0.824 m reading at 63° pitch
+  was slant-range garbage the sim would have rejected. `FlightParams.tof_max_m` /
+  `tof_tilt_limit_deg` now mirror `HoverTofConfig`, and a live-but-wholly-rejected sensor aborts
+  on the same 1 s `tof_lost` clock as a silent one.
+
+Honesty note: none of the five flights hovered. Two never left the ground on sagging packs
+(3.58→2.89 V, 3.22→2.96 V); the other three ended inverted. `…097` is the only one genuinely
+airborne (~0.3–0.45 m corrected, ~2 s). Naive summaries of `…079` report a 0.406 m max — that is
+tumble garbage, not altitude.
 - **Flight report:** `flight_metrics()["height"]` (hover mean/sd, max, airborne coverage) and the
   replay's `pos` z becomes the **measured** height (`meta.pos_z_measured=true`; the ∫vz_est
   vertical-only stub remains the fallback). The ceiling-crash class of flight above would now show

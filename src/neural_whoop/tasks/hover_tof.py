@@ -12,8 +12,12 @@ Deploy contract (``neural_whoop.pilot``): the pilot feeds ``target_height_m − 
 body −z, so slant·cosθ IS the height), zero-order-held at the last valid reading whenever the
 sensor is stale/invalid. The sim mirrors exactly that estimator structure:
 
-- **Update rate**: the sensor ranges at ~``tof_rate_hz`` (40) against the 50 Hz control loop —
-  each step each drone refreshes with probability ``tof_rate_hz · dt``, else holds.
+- **Update rate**: the sensor ranges at ~``tof_rate_hz`` (25) against the 50 Hz control loop —
+  each step each drone refreshes with probability ``tof_rate_hz · dt``, else holds. 25, not the
+  VL53L1X's nominal 40: the 2026-07-30 flights measured **24.8–27.1 Hz** of genuinely fresh
+  ranges at the pilot (distinct values per second across five flights). The bridge's 25 ms
+  free-run is the ceiling, and polling/UDP jitter eats the rest — so 40 was optimistic by ~1.6x
+  and trained the policy on a fresher channel than it ever gets.
 - **Saturation**: short-distance mode is trustworthy to ~``tof_max_m`` (1.3 m) slant range; a
   longer ray returns status != 0 on the real part → the pilot holds. Here: hold.
 - **Tilt gating**: past ``tof_tilt_limit_deg`` the ray misses the spot under the drone (and the
@@ -52,7 +56,7 @@ from neural_whoop.tasks.hover_blind import HoverBlindTask
 class HoverTofConfig(HoverConfig):
     """Hover config + the bridge VL53L1X sensor model (firmware/xiao_bridge short-distance mode)."""
 
-    tof_rate_hz: float = 40.0        # ranging rate (bridge short-distance timing budget)
+    tof_rate_hz: float = 25.0        # measured fresh-range rate at the pilot (2026-07-30 flights)
     tof_max_m: float = 1.3           # trustworthy slant range in short mode (ambient-robust band)
     tof_tilt_limit_deg: float = 45.0  # beyond this tilt: reading invalid -> hold
 
