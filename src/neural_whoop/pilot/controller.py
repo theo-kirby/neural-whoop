@@ -719,7 +719,12 @@ class FlightController:
                       f"{self.vz:.3f}", f"{self.thr_trim:+.4f}", *self.tel.imu["acc_raw"],
                       f"{rpm_now:.0f}" if rpm_now else "", f"{self.us_corr:+.0f}",
                       f"{tof_m:.3f}" if tof_m is not None else "",
-                      f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else ""])
+                      f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else "",
+                      # The bridge's own worst loop() in its current 5 s window. obs_age_ms (col 2)
+                      # is the symptom of a bridge stall; this is the cause, self-reported. Empty
+                      # on pre-2026-07-30 firmware, which sends a 6-byte ToF reply.
+                      self.tel.bridge_loop_max_ms() if self.tel.bridge_loop_max_ms() is not None
+                      else ""])
         return self._make_frame()
 
     # ------------------------------------------------------------------ helpers

@@ -39,10 +39,11 @@ _VZ_STABLE = [0.0, -0.3, -0.6, -0.9, -1.2, -1.5, -1.8, -2.0, -2.0, -2.0]
 
 
 def _row(**over) -> list:
-    """One CSV row (26 cols) with hover-ish defaults; override any column by name.
+    """One CSV row (27 cols) with hover-ish defaults; override any column by name.
 
-    ``tof_m``/``h_err`` default blank — the synthetic baseline flight predates the bridge ToF,
-    so the legacy code paths (∫vz_est replay z, height.present=False) stay exercised.
+    ``tof_m``/``h_err``/``bridge_loop_max_ms`` default blank — the synthetic baseline flight
+    predates both the bridge ToF and the loop-timing firmware, so the legacy code paths
+    (∫vz_est replay z, height.present=False) stay exercised.
     """
     base = {
         "t": 0.0, "obs_age_ms": 25, "roll": 0.0, "pitch": 0.0, "p": 0.0, "q": 0.0, "r": 0.0,
@@ -50,7 +51,7 @@ def _row(**over) -> list:
         "us_roll": 1500, "us_pitch": 1500, "us_thr": _IDLE_US, "us_yaw": 1500,
         "vbat": 4.10, "hover_eff": 1330, "vz_est": 0.0, "trim": 0.0,
         "acc_x": 0, "acc_y": 0, "acc_z": 2048, "rpm_rms": 26000, "us_corr": 0, "tof_m": "",
-        "h_err": "",
+        "h_err": "", "bridge_loop_max_ms": "",
     }
     base.update(over)
     return [base[c] for c in LOG_COLUMNS]

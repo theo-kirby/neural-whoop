@@ -1,6 +1,6 @@
 """Pure flight-log load + metrics — the characterization core, unit-testable without the sim.
 
-A ``scripts/pilot.py`` flight writes a 26-column CSV (:data:`LOG_COLUMNS`; the 25-column ToF-era
+A ``scripts/pilot.py`` flight writes a 27-column CSV (:data:`LOG_COLUMNS`; the 26-, 25-column ToF-era
 and 24-column pre-ToF schemas still load) — one row per control
 step of a real tiny-whoop flight. This module parses that CSV into a :class:`FlightLog` (per-column
 numpy arrays, empty cells -> NaN) and derives :func:`flight_metrics`: the phase segmentation, hover
@@ -38,17 +38,22 @@ import numpy as np
 #: ``tof_m`` the bridge's downward VL53L1X range in metres (empty when absent/invalid/stale —
 #: the first *measured* height channel, everything before it is IMU-integrated estimate);
 #: ``h_err`` the hover_tof obs channel exactly as the policy saw it
-#: (``target_height_m − tilt-corrected last-valid-held height``; empty before the first reading).
+#: (``target_height_m − tilt-corrected last-valid-held height``; empty before the first reading);
+#: ``bridge_loop_max_ms`` the bridge's OWN worst ``loop()`` duration in its current 5 s window
+#: (firmware >= 2026-07-30; empty on older bridges). ``obs_age_ms`` is the symptom of a bridge
+#: stall — this is the cause, reported by the thing that stalled. Bench testing could not
+#: reproduce the ~200 ms stalls seen in the 2026-07-30 flights (idle 4.5 / ToF-polling 4.9 /
+#: full FC round-trip at 50 Hz 5.1 ms), so the flight log is where the question gets settled.
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr", "tof_m", "h_err",
+    "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
 ]
 
-#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 25 columns
-#: (ToF-era, pre-``h_err``) and 24 columns (pre-ToF, through 2026-07).
-_LEGACY_HEADERS = (LOG_COLUMNS[:-1], LOG_COLUMNS[:-2])
+#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 26 columns
+#: (pre-``bridge_loop_max_ms``), 25 (ToF-era, pre-``h_err``) and 24 (pre-ToF, through 2026-07).
+_LEGACY_HEADERS = (LOG_COLUMNS[:-1], LOG_COLUMNS[:-2], LOG_COLUMNS[:-3])
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose
 #: ``|vz_est|`` reaches this is "railed" — the estimator has saturated and is lying about descent.

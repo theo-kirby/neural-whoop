@@ -113,6 +113,16 @@ class Telemetry:
         sample = self.height_sample(now)
         return None if sample is None else sample[0]
 
+    def bridge_loop_max_ms(self) -> int | None:
+        """The bridge's worst ``loop()`` duration in its current 5 s window (ms).
+
+        Deliberately NOT staleness-gated: this is a 5 s-window maximum, so the last value the
+        bridge sent is the right answer even if the reply is a moment old — and if the bridge
+        has gone silent entirely there is no newer number to have. ``None`` on pre-2026-07-30
+        firmware, which sends a 6-byte ToF reply with no such field.
+        """
+        return None if self.tof is None else self.tof.get("loop_max_ms")
+
     def rpm_rms(self, now: float) -> float | None:
         """RMS motor RPM (thrust ~ sum(rpm^2)); None if stale, missing, or bidir-DShot off."""
         if self.mt is None or now - self.t_mt > 0.2:

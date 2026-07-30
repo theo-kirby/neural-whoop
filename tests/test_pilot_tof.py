@@ -15,6 +15,7 @@ import struct
 
 import pytest
 
+from neural_whoop.analysis.flight_log import LOG_COLUMNS
 from neural_whoop.bench.msp import MSP_BRIDGE_TOF
 from neural_whoop.pilot import FlightController, FlightParams, Phase, Policy
 from neural_whoop.pilot.controller import FlightSetupError
@@ -37,13 +38,15 @@ class TofFakeMsp(FakeMsp):
         self.tof_status = 0
         self.tof_answer = True
         self.tof_age_ms = 10
+        self.tof_loop_max_ms: int | None = None  # None = 6-byte (pre-2026-07-30) reply
 
     def _write(self, raw: bytes) -> None:
         if raw[4] == MSP_BRIDGE_TOF:
             if self.tof_answer:
-                self._resp(MSP_BRIDGE_TOF,
-                           struct.pack("<HBHB", self.tof_mm, self.tof_status,
-                                       self.tof_age_ms, 1))
+                payload = struct.pack("<HBHB", self.tof_mm, self.tof_status, self.tof_age_ms, 1)
+                if self.tof_loop_max_ms is not None:
+                    payload += struct.pack("<H", self.tof_loop_max_ms)
+                self._resp(MSP_BRIDGE_TOF, payload)
         else:
             super()._write(raw)
 
@@ -211,9 +214,32 @@ def test_logged_h_err_matches_the_fed_channel(tmp_path):
     ctrl.setup()
     _start(ctrl, clk, fake)
     assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
-    h_err = float(rows[-1][-1])
+    assert len(rows[-1]) == len(LOG_COLUMNS)
+    h_err = float(rows[-1][LOG_COLUMNS.index("h_err")])
     assert h_err == pytest.approx(0.7 - ctrl.h_est, abs=1e-3)
-    assert len(rows[-1]) == 26
+    # Pre-2026-07-30 bridge firmware (6-byte ToF reply): the loop-timing cell stays blank.
+    assert rows[-1][LOG_COLUMNS.index("bridge_loop_max_ms")] == ""
+
+
+def test_logged_bridge_loop_max_comes_from_the_reply(tmp_path):
+    """The bridge self-reports its worst loop(); the pilot logs it beside obs_age_ms.
+
+    obs_age_ms is the SYMPTOM of a bridge stall, this is the cause. Bench testing could not
+    reproduce the 2026-07-30 flight stalls (idle 4.5 / ToF-polling 4.9 / full FC round-trip
+    5.1 ms), so the flight log is the only place left to catch one.
+    """
+    rows: list[list] = []
+    fake = TofFakeMsp()
+    fake.tof_loop_max_ms = 97          # 8-byte reply: current firmware
+    clk = Clock()
+    pol = Policy(str(_weights(tmp_path, "hover_tof")))
+    ctrl = FlightController(fake, pol, FlightParams(launch=True, hold_seconds=0.1, seconds=5.0),
+                            start_mode="software", clock=clk,
+                            sleep=lambda s: setattr(clk, "t", clk.t + s), on_log=rows.append)
+    ctrl.setup()
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    assert rows[-1][LOG_COLUMNS.index("bridge_loop_max_ms")] == 97
 
 
 def test_tof_policy_disables_external_damper(tmp_path):

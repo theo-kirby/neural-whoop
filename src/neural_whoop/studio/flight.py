@@ -45,13 +45,13 @@ from neural_whoop.bench.msp import (
 from neural_whoop.pilot import FlightController, FlightParams, FlightSetupError, Policy
 from neural_whoop.pilot.config import BF_MAX_RATE_RP, GYRO_RAW_TO_DPS
 
-#: The 26-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
+#: The 27-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
 #: here so this module — like the pilot engine — imports without numpy).
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr", "tof_m", "h_err",
+    "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
 ]
 
 #: Fields a browser ``params`` message may override on the WAITING controller.

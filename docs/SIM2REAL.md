@@ -381,7 +381,9 @@ direct answer to the vz_est-drift smoking gun above:
   everything else, no FC config touched, and the bridge still boots/proxies with no sensor wired.
   Wiring + `bench.py --udp <ip> tof` bring-up in `firmware/xiao_bridge/README.md`.
 - **Pilot:** `Telemetry.poll(want_tof=True)` every tick; `tof_m` is CSV column 25 (validity-gated:
-  status 0 + age < 200 ms; pre-ToF 24-col logs still load).
+  status 0 + age < 200 ms; pre-ToF 24-col logs still load). Column 27 `bridge_loop_max_ms` carries
+  the bridge's own worst `loop()` in its current 5 s window — `obs_age_ms` is the *symptom* of a
+  bridge stall, this is the *cause*, self-reported (26/25/24-col logs still load, padding NaN).
 
 #### Sensor characterization + three fixes (2026-07-30, `runs/pilot/flight_17853990{04,32,79,97}` + `…119`)
 
@@ -398,13 +400,30 @@ around it was not.** Measured:
   Historical ladder configs keep their explicit `40.0` so past nodes stay reproducible.
 - **Link stalls on ~5% of ticks** (`obs_age_ms` p50 23 ms, p99 190–224 ms, max 250; flight `…032`
   worst at 10.2% >100 ms). The *whole* telemetry frame freezes, attitude included — so this is the
-  bridge's `loop()`, not the ToF. Prime suspect: `tof.setTimeout(100)` — a blocking I2C read that
-  can park the MSP proxy for 100 ms to salvage one sample. Firmware now sets **10 ms**, polls at
-  12 ms instead of 5, drains the whole UDP burst per pass, and runs the blocking I2C **last**.
+  bridge's `loop()`, not the ToF. Prime suspect *was* `tof.setTimeout(100)` — a blocking I2C read
+  that can park the MSP proxy for 100 ms to salvage one sample. Firmware now sets **10 ms**, polls
+  at 12 ms instead of 5, drains the whole UDP burst per pass, and runs the blocking I2C **last**.
   The bridge reports its own worst `loop()` duration per 5 s window on the USB heartbeat and as a
   new trailing `u16 loop_max_ms` in the `MSP_BRIDGE_TOF` payload (`bench.py … tof` prints it;
-  6-byte pre-2026-07-30 replies still decode, `loop_max_ms=None`). **This is the confirmation
-  step — it is a hypothesis until `loop_max_ms` is read on hardware.**
+  6-byte pre-2026-07-30 replies still decode, `loop_max_ms=None`).
+
+  **Bench measurement the same day could not reproduce the stall, and refuted every suspect.**
+  Per-section loop timers (`udp_rx` / `tof_reply` / `uart_tx` / `poll_tof` / `status`):
+
+  | condition | loop_max | dominant section |
+  |---|---|---|
+  | idle, no host traffic | 3.8–4.5 ms | `poll_tof` 3.8 |
+  | `bench.py tof` @ 10 Hz, FC dark | 4.5–4.9 ms | `poll_tof` 3.8, `tof_reply` 0.8 |
+  | `bench.py monitor` @ 50 Hz, **FC powered** — full host→bridge→FC→bridge→host | **4.6–5.1 ms** | `poll_tof` 3.9, `uart_tx` 0.9–1.3 |
+
+  Not the I2C poll (runs every loop regardless of traffic, idles at 3.8 ms), not WiFi modem sleep
+  (`connectWifi` already calls `setSleep(false)`), not the status block, not `fc.readBytes`. One
+  isolated 100 ms event appeared ~1 s into the first host contact after a fresh flash and has not
+  recurred across ~2.5 min of subsequent polling. **Bench ceiling ~5 ms; the flights showed
+  ~200 ms on 5% of ticks.** Whatever causes it needs conditions the bench does not create — motor
+  EMI on the I2C harness, the in-flight RF environment, or BEC current draw are the standing
+  candidates. Hence `bridge_loop_max_ms` as CSV col 27: the next flight settles it, because the
+  USB heartbeat is unreadable in the air.
 - **Stale range × fresh attitude manufactured a 0.449 m phantom step** in the policy's obs
   (flight `…097`, t=7.285: range frozen at 0.824 m across a stall while pitch snapped 63°→15°;
   180 ms later the drone tumbled). The pilot cos-corrected *every tick* against the *current*
