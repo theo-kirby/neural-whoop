@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>neural-whoop · capture</title>
+  <style>
+    /* Cinematic capture page: one full-bleed scene plus a DOM caption layer. The driver
+       screenshots #app (NOT the canvas), which is what bakes the text overlay into the frame for
+       free — no compositing step, no second render pass. Flat 2D styling to match the Studio. */
+    /* :root holds the DARK-room caption palette; capture.js stamps data-theme on <html> and the
+       light block below flips the secondary type to dark ink — on the bright prototype-map floor a
+       white clock is simply invisible. The phase pill stays a dark chip in both (it reads on
+       either room, and keeps the caption anchored). */
+    :root {
+      --cap-fg: #f4f5f7; --cap-dim: rgba(244, 245, 247, .72);
+      --cap-panel: rgba(20, 22, 26, .72); --cap-line: rgba(244, 245, 247, .22);
+      --cap-font: Calibri, "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
+    }
+    :root[data-theme="light"] { --cap-dim: rgba(26, 28, 32, .66); }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #000;
+      font: 16px/1.4 var(--cap-font); }
+    canvas { display: block; }
+    /* #app is the capture rect: exactly the requested output size, no page scroll, no chrome. */
+    #app { position: fixed; inset: 0; overflow: hidden; }
+    #scene { position: absolute; inset: 0; }
+    #scene > canvas { width: 100% !important; height: 100% !important; }
+
+    /* --- caption layer -------------------------------------------------------------------- */
+    #overlay { position: absolute; inset: 0; pointer-events: none; }
+
+    /* Full-frame title / end card: a soft scrim so the type reads over the bright room. */
+    #card { position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 14px;
+      background: radial-gradient(ellipse at center, rgba(10,11,13,.58) 0%, rgba(10,11,13,.82) 100%);
+      opacity: 0; }
+    #card .t { color: var(--cap-fg); font-size: 4.2vh; font-weight: 700; letter-spacing: .12em;
+      text-transform: uppercase; }
+    #card .rule { width: 12vh; height: 2px; background: var(--cap-line); }
+    /* Fixed light ink, not --cap-dim: the card always sits on its own dark scrim. */
+    #card .s { color: rgba(244, 245, 247, .72); font-size: 1.7vh; letter-spacing: .22em;
+      text-transform: uppercase; }
+
+    /* Per-frame phase caption — a single flat pill, bottom-left. No stats, no gizmos: the point of
+       the shot is the airframe, not the telemetry. */
+    #caption { position: absolute; left: 4.2vh; bottom: 4.2vh; display: flex; align-items: center;
+      gap: 1.6vh; opacity: 0; }
+    #caption .pill { background: var(--cap-panel); color: var(--cap-fg);
+      border: 1.5px solid var(--cap-line); border-radius: 999px;
+      padding: .9vh 2.2vh; font-size: 1.7vh; font-weight: 700; letter-spacing: .22em; }
+    #caption .clock { color: var(--cap-dim); font-size: 1.6vh; letter-spacing: .12em;
+      font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="scene"></div>
+    <div id="overlay">
+      <div id="card">
+        <div class="t" data-h="card-title">neural-whoop</div>
+        <div class="rule"></div>
+        <div class="s" data-h="card-sub"></div>
+      </div>
+      <div id="caption">
+        <span class="pill" data-h="phase">—</span>
+        <span class="clock" data-h="clock">0.00 s</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Same pinned three.js as the Studio (no Node toolchain in this repo). The capture driver
+       intercepts this host and serves it from a local cache, so renders are offline + repeatable. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module" src="./capture.js"></script>
+</body>
+</html>

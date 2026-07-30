@@ -9,35 +9,54 @@
 // procedural body/arms/rotors once loaded; the procedural glyph stays as the instant placeholder
 // and the no-asset fallback. The center marker and nav lights survive the swap — they carry
 // identity and heading either way.
+//
+// The glyph's XY footprint is a per-drone option: the Studio draws it ~7x life size (GLYPH_FOOTPRINT)
+// so it reads in the wide hero shot, while the headless capture page (web/capture/) asks for the
+// TRUE 82 mm airframe so the concept video is honest against the 1 m floor grid.
 
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
-const CHASSIS_URL = "assets/whoop_chassis.glb";
+// Resolved against THIS MODULE, not the document, so a second page (web/capture/) can import the
+// Studio's scene modules verbatim without its own copy of the asset.
+const CHASSIS_URL = new URL("assets/whoop_chassis.glb", import.meta.url).href;
 // The studio's drone glyph has always been drawn ~7x life size so it reads in the wide hero shot;
 // the CAD (a true-scale ~82 mm whoop) is blown up to the same XY footprint the procedural glyph
 // has. Scale is derived from the model's own bbox, so the source units (mm here) don't matter.
-const GLYPH_FOOTPRINT = 0.54;
+export const GLYPH_FOOTPRINT = 0.54;
+//: The real airframe, tip to tip (m) — the chassis CAD's own bbox measures 82.0 x 83.4 mm.
+export const TRUE_FOOTPRINT = 0.082;
+
+// The CAD's four prop nodes. Real quad-X convention: the two diagonals counter-rotate, so a
+// stopped-frame render still reads as a quadcopter rather than four props chasing each other.
+const PROP_NAMES = ["front-left-prop", "front-right-prop", "rear-left-prop", "rear-right-prop"];
+const PROP_DIR = {
+  "front-left-prop": 1, "rear-right-prop": 1,
+  "front-right-prop": -1, "rear-left-prop": -1,
+};
 
 let chassisPromise = null; // Promise<THREE.Group|null>, one fetch shared by every drone instance
 
-function chassisPrototype() {
+// The shared CAD prototype, normalized to a UNIT XY footprint — callers scale it to the footprint
+// they want (see `makeDrone`'s `footprint` option). Exported so a headless renderer can await the
+// asset before its first frame: without that, frame 0 captures the procedural placeholder.
+export function chassisPrototype() {
   if (!chassisPromise) {
     chassisPromise = new GLTFLoader()
       .loadAsync(CHASSIS_URL)
       .then((gltf) => {
         const cad = gltf.scene;
         // CAD frame (Blender FBX export, Z-up, mm): +Y forward — the front props sit at y=+23 mm.
-        // Yaw -90 deg so the nose faces sim body +X, recenter on the bounding box, then scale the
-        // XY footprint to the glyph size. Authored materials are kept verbatim (that's the whole
-        // point of the FBX); we only flag meshes to cast shadows.
+        // Yaw -90 deg so the nose faces sim body +X, recenter on the bounding box, then normalize
+        // the XY footprint to 1. Authored materials are kept verbatim (that's the whole point of
+        // the FBX); we only flag meshes to cast shadows.
         cad.rotation.z = -Math.PI / 2;
         const proto = new THREE.Group();
         proto.add(cad);
         const box = new THREE.Box3().setFromObject(proto);
         cad.position.sub(box.getCenter(new THREE.Vector3()));
         const size = box.getSize(new THREE.Vector3());
-        proto.scale.setScalar(GLYPH_FOOTPRINT / Math.max(size.x, size.y));
+        proto.scale.setScalar(1 / Math.max(size.x, size.y));
         proto.traverse((o) => {
           if (o.isMesh) o.castShadow = true;
         });
@@ -51,9 +70,63 @@ function chassisPrototype() {
   return chassisPromise;
 }
 
-export function makeDrone(centerColor = 0xf2f2f2) {
+// Give each prop node its own rotation pivot at the motor hub, returning the four pivot groups.
+// The blade geometry is baked in CAD space and every prop node's transform is identity, so a
+// node's bbox centroid is NOT its spin axis — it carries the same blade-shape offset on all four.
+// The hubs are symmetric about the airframe centre, so subtracting the mean of the four centroids
+// cancels that shared offset and recovers the hub positions exactly. Returns null if the CAD (and
+// therefore the named nodes) isn't in this drone yet.
+function pivotProps(drone) {
+  const nodes = PROP_NAMES.map((n) => drone.getObjectByName(n)).filter(Boolean);
+  if (nodes.length !== PROP_NAMES.length) return null;
+  drone.updateWorldMatrix(true, true);
+  const centers = nodes.map((n) =>
+    n.parent.worldToLocal(new THREE.Box3().setFromObject(n).getCenter(new THREE.Vector3())));
+  const mean = centers
+    .reduce((a, c) => a.add(c), new THREE.Vector3())
+    .multiplyScalar(1 / centers.length);
+  return nodes.map((n, k) => {
+    const hub = centers[k].clone().sub(mean);
+    const parent = n.parent;
+    const pivot = new THREE.Group();
+    pivot.position.copy(hub);
+    n.position.sub(hub);
+    parent.add(pivot);
+    pivot.add(n);
+    pivot.userData.dir = PROP_DIR[n.name] || 1;
+    return pivot;
+  });
+}
+
+// Set this drone's prop angle to `radians` about the body +Z axis (counter-rotating diagonals).
+// ABSOLUTE, not a delta: a headless renderer must be able to draw frame N without having drawn
+// N-1, so the caller integrates the spin itself and passes the accumulated angle. The pivots are
+// built lazily on the first call and cached on the drone group, so this is safe to call before the
+// CAD has loaded (it just no-ops until the named nodes exist) and returns whether it applied.
+//
+// NOTE this is deliberately NOT physical. A real whoop turns ~30 000 rpm — at 50 fps that aliases
+// to a stroboscopic mess, so the caller picks a rate that simply READS as spin and scales with the
+// recorded collective thrust. It is the one non-literal element in the render.
+export function spinProps(drone, radians) {
+  let pivots = drone.userData.propPivots;
+  if (!pivots) {
+    pivots = pivotProps(drone);
+    if (!pivots) return false;
+    drone.userData.propPivots = pivots;
+  }
+  for (const p of pivots) p.rotation.z = radians * p.userData.dir;
+  return true;
+}
+
+// `opts`: { footprint } XY tip-to-tip size in metres; { axes } the RGB body-frame triad;
+// { marker } the tinted centre sphere. The defaults are the Studio's look — a headless/cinematic
+// renderer turns the two gizmos off and asks for the true-scale footprint.
+export function makeDrone(centerColor = 0xf2f2f2, opts = {}) {
+  const { footprint = GLYPH_FOOTPRINT, axes = true, marker = true } = opts;
+  const glyphScale = footprint / GLYPH_FOOTPRINT;
   const g = new THREE.Group();
   const placeholder = new THREE.Group(); // procedural glyph, swapped for the CAD chassis on load
+  placeholder.scale.setScalar(glyphScale);
   g.add(placeholder);
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(0.18, 0.18, 0.06),
@@ -64,11 +137,13 @@ export function makeDrone(centerColor = 0xf2f2f2) {
 
   // Bright center marker at the drone origin — this exact point is what gate detection tests
   // against the gate sphere. Tinted per-drone for identity.
-  const center = new THREE.Mesh(
-    new THREE.SphereGeometry(0.04, 12, 8),
-    new THREE.MeshBasicMaterial({ color: centerColor })
-  );
-  g.add(center);
+  if (marker) {
+    const center = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04 * glyphScale, 12, 8),
+      new THREE.MeshBasicMaterial({ color: centerColor })
+    );
+    g.add(center);
+  }
 
   const armMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.8 });
   const rotorMat = new THREE.MeshStandardMaterial({ color: 0x303030, transparent: true, opacity: 0.85 });
@@ -92,16 +167,20 @@ export function makeDrone(centerColor = 0xf2f2f2) {
   // Body-frame axis triad (red +X forward, green +Y left, blue +Z up) — the direction gizmo that
   // replaced the nav-light dots. Drawn always-on-top so it stays readable through the chassis, and
   // added to `g` (not the placeholder) so it survives the CAD swap.
-  const axes = new THREE.AxesHelper(0.34);
-  axes.material.depthTest = false;
-  axes.material.transparent = true;
-  axes.renderOrder = 10;
-  g.add(axes);
+  if (axes) {
+    const triad = new THREE.AxesHelper(0.34 * glyphScale);
+    triad.material.depthTest = false;
+    triad.material.transparent = true;
+    triad.renderOrder = 10;
+    g.add(triad);
+  }
 
   chassisPrototype().then((proto) => {
     if (!proto) return;
     g.remove(placeholder);
-    g.add(proto.clone(true)); // clones share geometry + materials across drones
+    const chassis = proto.clone(true); // clones share geometry + materials across drones
+    chassis.scale.multiplyScalar(footprint);
+    g.add(chassis);
   });
   return g;
 }

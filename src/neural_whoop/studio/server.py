@@ -12,9 +12,11 @@ one is running and offloads the blocking work off the event loop.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import anyio
@@ -29,7 +31,8 @@ from neural_whoop.studio import courses as courses_mod
 #: Repo root (src/neural_whoop/studio/server.py -> repo).
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: The sibling nw-viz capture entrypoint (../nw-viz/capture.mjs), mirroring scripts/viz.py.
+#: The sibling nw-viz capture entrypoint (../nw-viz/capture.mjs) — the legacy fallback the
+#: in-repo capturer (scripts/capture_video.py + web/capture/) replaced. Mirrors scripts/viz.py.
 _NW_VIZ_CAPTURE = _REPO_ROOT.parent / "nw-viz" / "capture.mjs"
 
 #: Single-flight guard: only one rollout runs at a time (the batched GPU sim isn't re-entrant).
@@ -68,7 +71,7 @@ class CourseModel(BaseModel):
 
 
 class ExportRequest(BaseModel):
-    """Render a loaded replay to a hero MP4 via the sibling nw-viz capture pipeline."""
+    """Render a loaded replay to a hero MP4 via the headless capture pipeline."""
 
     run_path: str                                   # runs-relative replay path (from /api/rollout)
     width: int = Field(default=1280, ge=320, le=3840)
@@ -281,7 +284,7 @@ def create_app(
                 reader.cancel()
                 await anyio.to_thread.run_sync(session.close)
 
-    # ----------------------------------------------------------------- export (hero MP4 via nw-viz)
+    # ------------------------------------------------------- export (hero MP4, headless capture)
     @app.post("/api/export")
     async def export_video(req: ExportRequest) -> dict:
         try:
@@ -289,12 +292,12 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-        node = shutil.which("node")
-        if node is None or not _NW_VIZ_CAPTURE.exists():
+        node = shutil.which("node") if _NW_VIZ_CAPTURE.exists() else None
+        if not _capture_available() and node is None:
             raise HTTPException(
                 status_code=503,
-                detail=("video export needs node + ../nw-viz; "
-                        "run `cd ../nw-viz && npm install` (and install node) to enable it"),
+                detail=("video export needs the capture extra: "
+                        "`uv pip install -e '.[capture]' && playwright install chromium`"),
             )
         if EXPORT_LOCK.locked():
             raise HTTPException(status_code=409, detail="a video export is already running")
@@ -429,12 +432,34 @@ def _arena_for(preset: str) -> course_mod.ArenaSpec:
     return course_mod.ARENA_PRESETS.get(preset, course_mod.ArenaSpec())
 
 
-def _run_capture(node: str, replay_abs: Path, out_mp4: Path, req: "ExportRequest") -> None:
-    """Shell out to ``node ../nw-viz/capture.mjs`` to render the hero MP4 (blocking; off-thread).
+def _capture_available() -> bool:
+    """Whether the in-repo headless capturer (``scripts/capture_video.py``) can run here."""
+    return (
+        importlib.util.find_spec("playwright") is not None
+        and importlib.util.find_spec("imageio_ffmpeg") is not None
+        and (_REPO_ROOT / "scripts" / "capture_video.py").exists()
+    )
 
-    Mirrors ``scripts/viz.py::_maybe_render_video`` — byte-identical to the committed pipeline.
-    Raises ``RuntimeError`` (-> 500) with the captured stderr tail on a non-zero exit.
+
+def _run_capture(node: str | None, replay_abs: Path, out_mp4: Path, req: "ExportRequest") -> None:
+    """Render the hero MP4 (blocking; called off-thread), in-repo capturer first.
+
+    Mirrors ``scripts/viz.py::_maybe_render_video``: ``scripts/capture_video.py`` drives
+    ``web/capture/`` — the Studio's own scene — under headless Chromium; the sibling
+    ``../nw-viz`` Node project is only a fallback for installs that still have it.
+    Raises ``RuntimeError`` (-> 500) on failure.
     """
+    if _capture_available():
+        sys.path.insert(0, str(_REPO_ROOT / "scripts"))
+        try:
+            from capture_video import render as capture_render
+        finally:
+            sys.path.pop(0)
+        capture_render(replay_abs, out_mp4, width=req.width, height=req.height,
+                       fps=req.fps, crf=req.crf, quiet=True)
+        return
+    if node is None:
+        raise RuntimeError("no video capturer available")
     cmd = [node, str(_NW_VIZ_CAPTURE), "--replay", str(replay_abs), "--out", str(out_mp4),
            "--width", str(req.width), "--height", str(req.height), "--crf", str(req.crf)]
     if req.fps is not None:

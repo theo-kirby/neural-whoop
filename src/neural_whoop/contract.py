@@ -32,6 +32,15 @@ from torch import Tensor
 OBS_DIM = 11
 ACT_DIM = 4
 
+#: Height of the drone's ORIGIN above the floor when the airframe rests on the ground (m).
+#: The whoop's body origin sits at the centre of its bounding box, so "resting on the floor"
+#: means ``pos.z == half the airframe's height``. Measured off the chassis CAD
+#: (``web/studio/assets/whoop_chassis.glb``, the source of truth for the rendered airframe):
+#: bbox 81.96 x 83.40 x 18.68 mm, normalized to the true-scale 82 mm tip-to-tip footprint
+#: (``0.082 / 0.08340``), giving 18.37 mm of height -> 9.2 mm half-height. Shared by the
+#: take-off/land sequence generator and the renderer so ground contact agrees in both.
+WHOOP_REST_Z_M = 0.0092
+
 # obs-v2 (vision): proprio-only body-frame state (minus the target oracle), for camera tasks.
 PROPRIO_DIM = 8
 

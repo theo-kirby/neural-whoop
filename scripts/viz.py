@@ -23,24 +23,42 @@ import sys
 from pathlib import Path
 
 # Optional sibling tool: a Node/Three.js project that turns a replay into a composited hero MP4
-# (wide 3D course + onboard-FPV & top-down picture-in-picture). It is deliberately OUT of this
-# pure-Python repo (no Node here); we only shell out to it when present. Mirrors the ``render_depth``
-# "documented seam" pattern — additive and non-fatal, so the pack still builds without it.
+# (wide 3D course + onboard-FPV & top-down picture-in-picture). It predates the in-repo capturer
+# and is only used as a fallback when it happens to be checked out next door.
 NW_VIZ_CAPTURE = Path(__file__).resolve().parents[1].parent / "nw-viz" / "capture.mjs"
 
 
 def _maybe_render_video(replay_path: Path, out_dir: Path) -> None:
-    """Best-effort: render ``out_dir/replay.mp4`` via the sibling ``nw-viz`` tool, if available.
+    """Best-effort: render ``out_dir/replay.mp4``, preferring the in-repo headless capturer.
 
-    Guarded on ``node`` being on PATH and ``../nw-viz/capture.mjs`` existing; any failure is a
-    skip notice, never an error (the visual pack's PNGs are the durable artifacts).
+    Order is (1) ``scripts/capture_video.py`` — the Studio's own scene under headless Chromium,
+    which needs the ``capture`` extra; (2) the sibling ``../nw-viz`` Node project, if present;
+    (3) a skip notice. Any failure is a notice, never an error (the pack's PNGs are the durable
+    artifacts).
     """
+    out_mp4 = out_dir / "replay.mp4"
+    try:
+        from capture_video import render as capture_render
+    except ImportError:
+        capture_render = None
+    if capture_render is not None:
+        print(f"[video] rendering {out_mp4} via the in-repo capturer …")
+        try:
+            capture_render(replay_path, out_mp4)
+            print(f"[video] {out_mp4}")
+            return
+        except ImportError as e:      # playwright / imageio-ffmpeg missing
+            print(f"[video] in-repo capturer unavailable ({e}); "
+                  "install it with `uv pip install -e '.[capture]' && playwright install chromium`")
+        except Exception as e:  # noqa: BLE001 - a video is never worth failing the pack
+            print(f"[video] in-repo capturer failed ({e}); falling back to nw-viz if present")
+
     node = shutil.which("node")
     if node is None or not NW_VIZ_CAPTURE.exists():
-        print(f"[video] skipped (need node + {NW_VIZ_CAPTURE}); the nw-viz sibling project renders "
-              "the hero MP4 — see its README.")
+        print("[video] skipped — install the capture extra "
+              "(`uv pip install -e '.[capture]' && playwright install chromium`) "
+              f"or check out {NW_VIZ_CAPTURE}.")
         return
-    out_mp4 = out_dir / "replay.mp4"
     print(f"[video] rendering {out_mp4} via {NW_VIZ_CAPTURE} …")
     try:
         subprocess.run(
@@ -73,7 +91,7 @@ def main() -> int:
     p.add_argument("--no-fpv", action="store_true", help="Skip synthetic FPV keyframes.")
     p.add_argument("--gif", action="store_true", help="Stitch FPV keyframes into a GIF (needs imageio).")
     p.add_argument("--video", action="store_true",
-                   help="Also render a hero MP4 via the sibling nw-viz tool (no-op if absent).")
+                   help="Also render a hero MP4 (in-repo capturer; no-op if its extra is absent).")
     args = p.parse_args()
 
     from neural_whoop.eval.pack import build_pack, build_run_meta, record_rollout

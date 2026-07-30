@@ -9,8 +9,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-export function createScene(mount, { grid = true } = {}) {
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+// `preserveDrawingBuffer` keeps the colour buffer readable after a render — needed only by the
+// headless capture page (web/capture/), which screenshots the page between explicit render() calls
+// instead of inside a rAF; the Studio leaves it off (the default) so the driver can discard.
+export function createScene(mount, { grid = true, preserveDrawingBuffer = false } = {}) {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
   mount.appendChild(renderer.domElement);

@@ -79,6 +79,9 @@ export class Playback {
     this.follow = false;
     this.onFrame = null;        // (heroFrame, index) -> void
     this.onStateChange = null;  // () -> void  (play/pause toggled or run ended)
+    // Per-drone glyph options forwarded to makeDrone (footprint / axes / marker). Default {} =
+    // the Studio look; the headless capture page asks for a true-scale, gizmo-free airframe.
+    this.droneOptions = {};
     this._v = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     this._q2 = new THREE.Quaternion();
@@ -104,7 +107,7 @@ export class Playback {
     const multi = tracks.length > 1;
     this.actors = tracks.map((t, k) => {
       const tint = multi ? DRONE_TINTS[k % DRONE_TINTS.length] : 0xffe14a;
-      const glyph = makeDrone(tint);
+      const glyph = makeDrone(tint, this.droneOptions);
       this.view.world.add(glyph);
       const frames = t.frames || [];
       const trail = frames.length ? buildTrail(this.view.world, frames) : null;

@@ -121,13 +121,18 @@ pure stdlib+numpy (imports without the sim/viz extras); `viz/render.py` is lazil
 `viz` extra: matplotlib + Pillow + tbparse) and turns a replay into Flywheel-native PNG/CSV
 artifacts. Recording is **hero-subset** (full frames for a few drones; aggregate metrics over the
 full population) and the training path stays render-free. The same JSON shape feeds the in-repo
-**Studio** (`web/studio/`, served by `scripts/serve.py` — see below) **and** the sibling
-**`../nw-viz/`** project (`theo-kirby/nw-viz`) — a standalone pure-JS/Three.js tool (no Node in this
-repo) that renders a replay into a composited **hero MP4**: a fixed wide 3D course shot plus synced
-onboard-FPV and top-down picture-in-picture insets, captured headlessly (Playwright + SwiftShader →
-ffmpeg). It consumes the locked replay contract unchanged; `scripts/viz.py --video` optionally
-shells out to it (non-fatal if absent). `render_depth` is a documented stub for the future DiffAero
-Taichi renderer (deferred — Blackwell camera path).
+**Studio** (`web/studio/`, served by `scripts/serve.py` — see below) **and** the in-repo **video
+capturer**: `web/capture/` + `scripts/capture_video.py` (the `capture` extra: playwright +
+imageio-ffmpeg). The capture page is *not* a second renderer — it imports the Studio's own
+`scene.js` / `environment.js` / `geometry.js` / `drone-model.js` / `playback.js`, so the video is
+the dashboard's look (CAD chassis, greybox room) and cannot drift; what it adds is the cinematic
+mode: clean full frame, a **fixed** camera box-fitted to the flight, **true-scale** airframe
+(82 mm, vs the Studio's ~7× hero glyph), spinning props, and title/phase captions. The Python
+driver serves `web/` on loopback, drives headless Chromium (SwiftShader) with `renderFrame(i)` →
+screenshot (the **frame index is the only clock**), and pipes PNGs to ffmpeg — same shape the
+sibling `../nw-viz` Node project had, which is now only a fallback. `scripts/viz.py --video` and
+the Studio's `/api/export` both route through it. `render_depth` is a documented stub for the
+future DiffAero Taichi renderer (deferred — Blackwell camera path).
 
 **Studio (`web/studio/` + `src/neural_whoop/studio/`).** An interactive browser viewer with **two
 tabs** (a sim-to-real pair) and a **draggable scene/sidebar divider** (width persisted):
@@ -241,9 +246,15 @@ loop attaches to each empirical node. `scripts/eval.py --record` writes just the
 events → no curves; no `--baseline` → no comparison).
 
 ```bash
-# Hero MP4 (3D wide shot + FPV/top-down PiP) via the sibling nw-viz project (one-time: cd ../nw-viz && npm install):
+# Hero / concept MP4 — the IN-REPO headless capturer (web/capture/ imports web/studio/'s scene
+# modules verbatim, so the video is the Studio's look). One-time: playwright install chromium.
+uv pip install -e '.[capture]'
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
-cd ../nw-viz && node capture.mjs --replay ../neural-whoop/runs/<run>/replay.json.gz --out out/<run>.mp4  # or directly
+# The take-off -> hover -> flip -> land concept sequence (trained acro_flip owns the flip window):
+uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
+uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --title "neural-whoop"
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn

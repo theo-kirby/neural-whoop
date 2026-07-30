@@ -106,12 +106,22 @@ have **no gates** — they chase a moving target/anchor instead — so each fram
 | `command` | `gesture_follow` (0/1), `command_follow` (0/1/2) | raw command index — label via `scene_info.command_labels` |
 | `anchor` | `swarm_formation` | world position of the shared moving anchor (same for the env's agents) |
 | `slot` | `swarm_formation` | this drone's assigned ring slot (world position) |
+| `phase` | scripted sequences (`hero_takeoff_flip_land.py`) | **numeric** flight-phase code — label via `scene_info.phase_labels` |
 
 `meta.scene_info` carries the static descriptors a viewer needs to label/scale those markers without
 hardcoding task names: `standoff` / `fov_deg` (follow), `command_labels` (e.g. `["STOP","NEAR","FAR"]`),
-`d_near` / `d_far` (command_follow), `formation_radius` (swarm_formation). Both viewers
-(`web/studio/` + `nw-viz`) draw `target`/`anchor` as a sphere (cyan/amber), `slot` as a faint ring,
-tint the target by `command`, and show a command chip from the labels. Gate tasks emit neither key.
+`d_near` / `d_far` (command_follow), `formation_radius` (swarm_formation), `phase_labels`. Both viewers
+(`web/studio/` + `web/capture/`) draw `target`/`anchor` as a sphere (cyan/amber), `slot` as a faint ring,
+tint the target by `command`, and show a command chip from the labels. Gate tasks emit none of these.
+
+**`phase` (additive, no version bump).** A scripted sequence — take-off → hover → flip → recover →
+land — is one flight with named beats, and the renderer needs to caption them. Every `scene` value
+goes through `_vec()`, so a **string is not representable**: the per-frame channel is the integer
+**index** into `meta.scene_info.phase_labels` (e.g.
+`["TAKE-OFF","HOVER","FLIP","RECOVER","LAND"]`), which rides once in `meta`. `web/capture/` turns it
+into the on-screen caption; a consumer that doesn't know the key ignores it, exactly like `command`.
+`scene_info.rest_z` (the airframe half-height, `contract.WHOOP_REST_Z_M`) travels with it so a
+renderer can tell "on the ground" from "hovering low".
 
 > **Frame-name note.** `vel`/`angvel` keep the lab's exact wire names so the existing
 > `web/replay-viewer/` Three.js viewer consumes new-repo rollouts unchanged. Their *frames* (world
@@ -194,3 +204,6 @@ any change here and in `CLAUDE.md`, mirroring the obs/act versioning discipline 
   follow/formation tasks (moving target/anchor/slot + command channel). Purely additive optional
   fields, so the version **stays at 2** per the rule above; old replays and the matplotlib pack are
   unaffected.
+- **(v2, no bump)** — added the optional `scene.phase` code + `meta.scene_info.phase_labels`
+  (+ `rest_z`) for scripted flight sequences, consumed by `web/capture/` as on-screen captions.
+  Same rule: additive optional fields, no bump.

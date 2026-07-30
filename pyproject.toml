@@ -50,6 +50,13 @@ studio = [
     # deferred to the moment a serial bridge is opened.
     "pyserial>=3.5",
 ]
+# Headless video capture (scripts/capture_video.py): drives web/capture/ — the Studio's own
+# scene modules — in headless Chromium and pipes the frames to ffmpeg. Needs a one-time
+# `playwright install chromium`; imageio-ffmpeg vendors the ffmpeg binary (there is no system one).
+capture = [
+    "playwright>=1.44",
+    "imageio-ffmpeg>=0.5",
+]
 # Stage-0 bench tooling (scripts/bench.py): USB serial to the real flight controller.
 # The MSP codec itself is pure stdlib; only the live client needs pyserial.
 bench = [

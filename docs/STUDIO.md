@@ -182,14 +182,43 @@ the player (the camera re-frames the loaded replay). Workflow:
 - **Save & fly** — saves, flips back to play mode, selects the saved course, and runs it with the
   current policy/drone count — no tab switch.
 
-## Export hero MP4
+## Export MP4 — the in-repo headless capturer
 
-With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which shells out to
-the sibling `../nw-viz/capture.mjs` (the proven, committed capture pipeline — byte-identical to
-`scripts/viz.py --video`) to render `runs/studio/<stem>.mp4`, then the browser downloads it. It needs
-`node` on PATH and `../nw-viz` installed (`cd ../nw-viz && npm install`); if either is absent the
-route returns **503** with that guidance instead of hanging. Capture is heavy (headless Chromium +
-ffmpeg), so it runs off the event loop under a single-flight lock (HTTP 409 if one is already going).
+Video capture lives **in this repo** now: `scripts/capture_video.py` + `web/capture/`. The capture
+page is not a second renderer — it *imports the Studio's own* `scene.js` / `environment.js` /
+`geometry.js` / `drone-model.js` / `playback.js`, so the exported clip is the same chassis CAD and
+the same greybox room you're looking at, and the look cannot drift. What it changes is the
+presentation: clean full frame (no PiP cells, no HUD chrome), a **fixed** camera fitted to the
+flight's own bounding box, **true-scale** drone (the real 82 mm airframe, not the Studio's ~7×
+hero glyph), spinning props, and title/phase captions.
+
+The driver is four small pieces: read the replay in Python, serve `web/` on an ephemeral loopback
+port, drive headless Chromium (SwiftShader) with `renderFrame(i)` → screenshot — the frame index is
+the only clock, so there is no rAF and no wall-time jitter — and pipe the PNGs into ffmpeg. three.js
+is cached under `.cache/three/` on first use, so subsequent renders are offline and repeatable.
+
+```bash
+uv pip install -e '.[capture]' && playwright install chromium     # one-time
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
+uv run python scripts/capture_video.py --replay ... --out ... --stride 40 --width 960 --height 540
+uv run python scripts/capture_video.py --replay ... --out out.png --stills 120,250   # PNG frames
+```
+
+Flags: `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`, `--theme light|dark`,
+`--room-size`, `--cam-dir/--cam-dist/--fov`, `--scale` (drone footprint, m), `--prop-rate`,
+`--title/--title-frames`.
+
+With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which runs the
+same capturer server-side into `runs/studio/<stem>.mp4` and hands the browser the download. Without
+the `capture` extra installed the route falls back to a sibling `../nw-viz/capture.mjs` if one
+happens to be checked out, and otherwise returns **503** with the install line instead of hanging.
+Capture is heavy (headless Chromium + ffmpeg), so it runs off the event loop under a single-flight
+lock (HTTP 409 if one is already going).
+
+**Prop spin is the one deliberately non-literal element.** A real whoop turns ~30 000 rpm, which at
+50 fps aliases to a stroboscopic mess, so `--prop-rate` sets a stylized rate that simply reads as
+spin and scales with the recorded collective thrust. Everything else in the frame is the recorded
+flight.
 
 ## Drone-count semantics
 
