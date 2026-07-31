@@ -430,3 +430,66 @@ def test_flip_as_starter_takes_off_flips_then_keeps_hovering(weights, acro_weigh
         clk.t += 0.02
         ctrl.step()
         assert not ctrl.flipping and ctrl.phase is Phase.HOVER
+
+
+# --- free-flight throttle floor -----------------------------------------------------------------
+# act-v2 thrust -1.0 maps to min_us = 1000 = motors off, which on this airframe is free fall AND a
+# loss of rate authority (no AIRMODE at idle). Measured 2026-07-31: every flight's brake saturated
+# there and the drone arrived at the floor at ~2 m/s. The policy's brake must be "less thrust".
+
+
+class _FixedThrustPolicy:
+    """Delegates to a real Policy (family flags, obs_stack) but pins the commanded thrust."""
+
+    def __init__(self, pol, a0: float) -> None:
+        self._pol, self._a0 = pol, a0
+
+    def __getattr__(self, k):
+        return getattr(self._pol, k)
+
+    def __call__(self, _obs):
+        return [self._a0, 0.0, 0.0, 0.0]
+
+
+def _fly_with_thrust(weights, a0, **params_kw):
+    fake, clk = FakeMsp(), Clock()
+    pol, ctrl = _make(weights, fake, clk, takeoff=False, launch=False, seconds=5.0,
+                      hover_us=1410, min_us=1000, max_us=1600, **params_kw)
+    ctrl.pol = _FixedThrustPolicy(pol, a0)
+    _arm_and_start(ctrl, clk, fake)
+    clk.t += 0.02
+    ctrl.step()
+    assert ctrl.phase is Phase.HOVER
+    return fake.sent_rc[-1][2]
+
+
+def test_throttle_floor_stops_the_brake_being_motors_off(weights):
+    # 0.25 hover-thrust units against a 1410 us hover anchor:
+    #   1000 + (1410 - 1000) * sqrt(0.25) = 1205 us  (-0.75 g of braking, props still spinning)
+    assert _fly_with_thrust(weights, -1.0, min_thrust_frac=0.25) == 1205
+
+
+def test_throttle_floor_off_reproduces_motors_off(weights):
+    # The legacy path is still reachable, and is exactly the behaviour the flights showed.
+    assert _fly_with_thrust(weights, -1.0, min_thrust_frac=0.0) == 1000
+
+
+def test_throttle_floor_does_not_touch_commands_above_it(weights):
+    # Hover is a0 = -0.5 (thrust 1.0x): well clear of the floor, so the mapping is untouched.
+    assert _fly_with_thrust(weights, -0.5, min_thrust_frac=0.25) == 1410
+    assert _fly_with_thrust(weights, -0.5, min_thrust_frac=0.0) == 1410
+
+
+def test_throttle_floor_never_spins_props_while_waiting_on_the_floor(weights):
+    """The floor is FREE-FLIGHT only — armed-and-waiting must still stream idle throttle."""
+    fake, clk = FakeMsp(), Clock()
+    pol, ctrl = _make(weights, fake, clk, takeoff=True, seconds=5.0, hold_seconds=3.0,
+                      hover_us=1410, min_us=1000, max_us=1600, min_thrust_frac=0.25)
+    ctrl.pol = _FixedThrustPolicy(pol, 1.0)   # policy screaming "full throttle" the whole time
+    fake.set_armed(True)
+    fake.set_override(True)
+    for _ in range(10):
+        clk.t += 0.02
+        ctrl.step()
+    assert ctrl.phase is Phase.WAITING
+    assert all(rc[2] == 1000 for rc in fake.sent_rc), "idle RC must be min_us, not the floor"

@@ -37,7 +37,16 @@ const DEFAULTS = {
   camDist: 1.15,             // pull-back on the fitted distance (1.0 = corners touch frame)
   fov: 40,                   // a longer lens than the Studio's 55 — less wide-angle wall bulge
   track: false,              // tripod shot: fixed position, camera pans/tilts to follow the drone
-  droneFrac: 0.14,           // (track only) fraction of the frame height the airframe fills
+  droneFrac: 0.22,           // (track) fraction of the frame height the airframe fills at the top
+  camAbove: 0.30,            // (track) metres the camera sits above the flight's highest point,
+                             //         so the shot NEVER tilts upward — level or looking down
+  trackSmooth: 25,           // (track) symmetric smoothing half-window, frames — bigger = calmer
+  trackAmount: 1.0,          // (track) 1 = drone locked centre, <1 = camera stays nearer centre
+  frameHeight: null,         // (fixed) metres of world the frame spans vertically — the direct
+                             //         "how big is the drone" control (drone = scale/frameHeight)
+  aim: null,                 // (fixed) sim [x,y,z] the shot is centred on; null -> flight centre
+  aimZ: null,                // (fixed) sim-z only, if `aim` is not given
+  roomLabels: true,          // bake the "1 METER" / "PROTOTYPE" text into the greybox tiles
   propRate: 0.8,             // radians per frame at hover thrust (stylized — see spinProps)
   title: "neural-whoop",
   titleFrames: 0,            // opening card; the same count is held as a closing card
@@ -67,7 +76,7 @@ view.renderer.setPixelRatio(1);
 view.controls.enabled = false;     // nothing may move the camera; we render explicitly below
 view.resize();
 
-const environment = createEnvironment(view);
+const environment = createEnvironment(view, { labels: opts.roomLabels });
 environment.setTheme(opts.theme);
 document.documentElement.dataset.theme = opts.theme;   // drives the caption-layer palette
 
@@ -81,16 +90,10 @@ playback.setEpisode(episode, dt);
 await chassisPrototype();          // flush the swap callback makeDrone queued a moment ago
 playback.setTrailVisible(false);   // cinematic: the airframe, not the analysis overlay
 
-// --- room + camera ----------------------------------------------------------------------------
+// --- camera + room ----------------------------------------------------------------------------
 const framesList = playback.actors.map((a) => a.frames);
 const bounds = courseBounds(view.world, framesList, episode.gates || []);
-// A real indoor room, not a hangar. The floor is big enough that the CAMERA stands inside it —
-// otherwise the near wall culls (it's a BackSide box) and you get a hard diagonal seam across the
-// frame where the room simply stops. 6 m covers the default camera pull-back for a whoop-scale
-// flight; a bigger course widens it. The ceiling stays low enough to read as a ceiling.
-const roomSize = opts.roomSize || Math.max(6, bounds ? bounds.footprint : 6);
-const roomHeight = clamp((bounds ? bounds.zMax : 2) + 1.2, 2.5, 4);
-environment.setSize({ footprint: roomSize, height: roomHeight, floorZ: 0 });
+let roomSize = 6;                  // set once the camera is placed (the room must contain it)
 
 // The camera. Two modes, both with a FIXED position — nothing dollies, and nothing accumulates
 // between frames (no OrbitControls, no damping), so frame N stays a pure function of N.
@@ -107,6 +110,17 @@ environment.setSize({ footprint: roomSize, height: roomHeight, floorZ: 0 });
 //     constrains it. The cost is that you no longer see the whole trajectory at once.
 view.world.updateMatrixWorld();
 const flight = new THREE.Box3();
+
+// Component-wise median of the hero's sim-frame track — a robust "where is the drone, mostly?".
+function medianHeroPos() {
+  const fr = playback.heroFrames;
+  if (!fr.length) return new THREE.Vector3();
+  const at = (k) => {
+    const col = fr.map((f) => f.pos[k]).sort((a, b) => a - b);
+    return col[col.length >> 1];
+  };
+  return new THREE.Vector3(at(0), at(1), at(2));
+}
 {
   const cam = view.camera;
   const v = new THREE.Vector3();
@@ -128,7 +142,40 @@ const flight = new THREE.Box3();
   let dist;
   if (opts.track) {
     // Distance that makes the airframe fill `droneFrac` of the frame height.
-    dist = opts.scale / (2 * tanV * Math.max(0.001, opts.droneFrac));
+    dist = opts.camDist * opts.scale / (2 * tanV * Math.max(0.001, opts.droneFrac));
+    // NEVER TILT UP. The camera is parked `camAbove` metres over the highest point the shot will
+    // ever aim at, so every frame looks level-to-downward. That fixes the elevation, so `dist`
+    // buys HORIZONTAL offset with whatever is left — the shot is a slightly-high three-quarter
+    // when the drone is at hover height and looks progressively further down as it descends.
+    // (Apparent size therefore shrinks near the floor; that is what a fixed overhead camera sees,
+    // and `--drone-frac` is calibrated at the top of the flight where the flip happens.)
+    const topY = flight.max.z + opts.scale;                 // sim z == three y under world's rot
+    const camY = Math.max(topY + opts.camAbove, target.y + dir.y * dist);
+    const dy = camY - topY;
+    const h = Math.max(0.15 * dist, Math.sqrt(Math.max(dist * dist - dy * dy, 0)));
+    const dirH = new THREE.Vector3(dir.x, 0, dir.z).normalize();
+    cam.position.set(target.x + dirH.x * h, camY, target.z + dirH.z * h);
+    cam.lookAt(target);
+    cam.updateMatrixWorld();
+  } else if (opts.frameHeight) {
+    // LOCKED-OFF shot with an explicit framing: `frameHeight` is how many metres of world the
+    // frame spans vertically, so the airframe is exactly scale/frameHeight of the picture — the
+    // direct "how big is the drone" control, instead of deriving it from the flight extent.
+    // `aimZ` (sim z, metres) picks the height the shot is centred on; with a level `camDir` the
+    // camera sits AT that height, i.e. dead straight-on, which is also the tightest framing that
+    // still never tilts up.
+    dist = opts.frameHeight / (2 * tanV);
+    // Default aim: the MEDIAN hero position, not the bbox centre. A bbox centre is dragged around
+    // by wherever the flight happened to reach its extremes — on this sequence that puts it 0.33 m
+    // from where the drone actually spends its time, which at a tight framing throws the subject
+    // clean out of frame. The median is where the drone IS.
+    const aim = opts.aim
+      ? new THREE.Vector3(...opts.aim).applyMatrix4(view.world.matrixWorld)
+      : medianHeroPos().applyMatrix4(view.world.matrixWorld);
+    if (!opts.aim && opts.aimZ !== null) aim.y = opts.aimZ;   // sim z == three y under world's rot
+    cam.position.copy(aim).add(dir.multiplyScalar(dist));
+    cam.lookAt(aim);
+    cam.updateMatrixWorld();
   } else {
     // For a corner at camera-space (u, v, w) the frustum needs depth >= |u|/tanH and >= |v|/tanV;
     // depth is (d - w), so each corner imposes a minimum d. Take the max over all eight.
@@ -142,10 +189,29 @@ const flight = new THREE.Box3();
         }
       }
     }
+    cam.position.copy(target).add(dir.multiplyScalar(dist * opts.camDist));
+    cam.lookAt(target);
+    cam.updateMatrixWorld();
   }
-  cam.position.copy(target).add(dir.multiplyScalar(dist * opts.camDist));
-  cam.lookAt(target);       // the wide shot's final aim; renderFrame re-aims it when tracking
-  cam.updateMatrixWorld();
+}
+
+// --- the room ----------------------------------------------------------------------------------
+// Built AFTER the camera, because the floor has to be big enough that the CAMERA stands inside it:
+// the walls are a BackSide box, so a camera outside culls the near wall and you get a hard diagonal
+// seam where the room simply stops. That is a hard floor on `--room-size`, not a preference — a
+// smaller request is raised to fit, silently, rather than rendering visibly broken. Otherwise the
+// room is as small as the shot allows, which is what makes it read as a room instead of a hangar.
+{
+  const cam = view.camera;
+  const camReach = 2 * (Math.hypot(cam.position.x, cam.position.z) + 0.6);
+  const wanted = opts.roomSize || Math.max(4, bounds ? bounds.footprint : 4);
+  const footprint = Math.max(wanted, camReach);
+  environment.setSize({
+    footprint,
+    height: clamp((bounds ? bounds.zMax : 2) + 1.2, 2.2, 4),
+    floorZ: 0,
+  });
+  roomSize = footprint;
 }
 
 // Where the tracking camera aims, per flight frame: the hero's three-world position, box-smoothed
@@ -155,12 +221,23 @@ const aimTrack = (() => {
   if (!opts.track) return null;
   const raw = playback.heroFrames.map((f) =>
     new THREE.Vector3(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld));
-  const W = 4;
+  if (!raw.length) return null;
+  const W = Math.max(0, Math.round(opts.trackSmooth));
+  const camY = view.camera.position.y;
+  const centre = raw.reduce((a, p) => a.add(p), new THREE.Vector3()).multiplyScalar(1 / raw.length);
   return raw.map((_, i) => {
     const acc = new THREE.Vector3();
     let n = 0;
     for (let k = Math.max(0, i - W); k <= Math.min(raw.length - 1, i + W); k++, n++) acc.add(raw[k]);
-    return acc.multiplyScalar(1 / Math.max(1, n));
+    const aim = acc.multiplyScalar(1 / Math.max(1, n));
+    // `trackAmount` < 1 keeps the camera partly parked on the flight's centre, so it swings less;
+    // 1.0 locks the drone dead centre. Smoothing (above) is the gentler knob — at a close framing
+    // the drone leaves frame fast if the aim under-travels.
+    aim.lerpVectors(centre, aim, opts.trackAmount);
+    // Belt and braces on "never upwards": whatever the smoothing did, the aim stays at or below
+    // the camera, so the shot is level or looking down. Always.
+    aim.y = Math.min(aim.y, camY);
+    return aim;
   });
 })();
 
@@ -218,6 +295,34 @@ const nFlight = playback.maxFrames;
 const nCard = Math.max(0, Math.round(opts.titleFrames));
 const frameCount = nCard + nFlight + nCard;
 
+// Worst-case framing over the WHOLE flight: project the hero (padded by the airframe's angular
+// radius) through the camera it will actually be rendered with, and report the largest |NDC| in
+// each axis. >= 1 means the drone leaves frame at some point. Reported by the driver so "does it
+// stay in frame?" is a measured number, not something you check by scrubbing.
+function framingReport() {
+  const cam = view.camera;
+  const v = new THREE.Vector3();
+  const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
+  const tanH = tanV * (cam.aspect || 1);
+  const rad = opts.scale * 0.5;
+  let mx = 0, my = 0;
+  for (let i = 0; i < nFlight; i++) {
+    if (aimTrack && aimTrack.length) {
+      cam.lookAt(aimTrack[Math.min(i, aimTrack.length - 1)]);
+      cam.updateMatrixWorld();
+    }
+    const f = playback.heroFrames[Math.min(i, playback.heroFrames.length - 1)];
+    if (!f) continue;
+    v.set(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld);
+    const depth = Math.max(1e-3, v.distanceTo(cam.position));
+    const pad = rad / depth;                    // angular radius -> NDC (half-frame == tan(fov/2))
+    v.project(cam);
+    mx = Math.max(mx, Math.abs(v.x) + pad / tanH);
+    my = Math.max(my, Math.abs(v.y) + pad / tanV);
+  }
+  return { x: mx, y: my };
+}
+
 function renderFrame(i) {
   let flightIdx;
   if (i < nCard) {
@@ -267,5 +372,7 @@ function renderFrame(i) {
 }
 
 renderFrame(0);
-window.NW_CAPTURE = { frameCount, renderFrame, meta, dt, nFlight, nCard };
+const framing = framingReport();
+renderFrame(0);
+window.NW_CAPTURE = { frameCount, renderFrame, meta, dt, nFlight, nCard, framing };
 window.NW_CAPTURE_READY = true;

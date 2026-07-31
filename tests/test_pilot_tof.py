@@ -278,3 +278,81 @@ def test_blind_policy_flies_without_tof(tmp_path):
     ctrl.setup()
     _start(ctrl, clk, fake)
     assert _run_until(ctrl, clk, lambda c: c.phase is Phase.RELEASED)
+
+
+# --- blind fade: the 2026-07-31 crash mechanism -------------------------------------------------
+# The sim holds the last valid reading forever and so did this pilot. In the air that has a mode
+# the sim never sees: the climb overshoots the setpoint straight past the VL53L1X's ~1.3 m ceiling,
+# so the hold pins h_err maximally NEGATIVE and the policy commands motors-off, open loop, until
+# the drone falls back into range. Past the grace window the observed error must fade to 0 instead.
+
+
+def test_blind_fade_curve(tmp_path):
+    """Hold verbatim through the grace window, then fade linearly to fully-neutral."""
+    fake = TofFakeMsp()
+    clk = Clock()
+    _, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=5.0,
+                        tof_blind_grace_s=0.2, tof_blind_fade_s=0.3)
+    assert ctrl._blind_fade(clk.t) == 1.0          # no reading yet -> nothing to disbelieve
+
+    ctrl.t_last_tof = 100.0
+    assert ctrl._blind_fade(100.00) == 1.0         # fresh
+    assert ctrl._blind_fade(100.10) == 1.0         # inside grace: ordinary 25 Hz jitter
+    assert ctrl._blind_fade(100.20) == pytest.approx(1.0)   # exactly at the grace edge
+    assert ctrl._blind_fade(100.35) == pytest.approx(0.5)   # halfway through the fade
+    assert ctrl._blind_fade(100.50) == 0.0         # fully blind -> the error reads "at target"
+    assert ctrl._blind_fade(101.00) == 0.0         # and stays there (the 1 s abort backstops)
+
+
+def test_blind_fade_neutralises_the_held_error_and_it_is_what_gets_logged(tmp_path):
+    """The observed channel — and CSV col 26 — fade together, so replay stays exact."""
+    rows: list[list] = []
+    fake = TofFakeMsp()
+    clk = Clock()
+    fake.tof_mm = 500                              # 0.5 m under a 1.4 m target -> err +0.9
+    pol = Policy(str(_weights(tmp_path, "hover_tof")))
+    params = FlightParams(launch=True, hold_seconds=0.1, seconds=30.0, target_height_m=1.4,
+                          tof_blind_grace_s=0.2, tof_blind_fade_s=0.3)
+    ctrl = FlightController(fake, pol, params, start_mode="software", clock=clk,
+                            sleep=lambda s: setattr(clk, "t", clk.t + s), on_log=rows.append)
+    ctrl.setup()
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    assert ctrl.h_err_obs == pytest.approx(0.9, abs=1e-3)   # fresh: held error, unfaded
+
+    fake.tof_answer = False                        # sensor goes dark, exactly like leaving range
+    t_blind = clk.t
+    logged = []
+    while clk.t - t_blind < 0.62 and not ctrl.done:
+        clk.t += 0.02
+        ctrl.step()
+        logged.append((clk.t - t_blind, ctrl.h_err_obs,
+                       float(rows[-1][LOG_COLUMNS.index("h_err")])))
+
+    # h_est itself is untouched — the hold semantics are intact; only belief in it decays.
+    assert ctrl.h_est == pytest.approx(0.5, rel=1e-3)
+    for _, fed, logged_val in logged:
+        assert logged_val == pytest.approx(fed, abs=1e-3)   # logged == observed, always
+    early = [fed for dt, fed, _ in logged if dt < 0.15]
+    late = [fed for dt, fed, _ in logged if dt > 0.55]
+    assert early and all(v == pytest.approx(0.9, abs=1e-3) for v in early)  # grace: verbatim
+    assert late and all(v == 0.0 for v in late)   # blind: neutral, i.e. "hover", not "dive"
+    assert not ctrl.done                          # still inside the 1 s sensor-lost abort
+
+
+def test_legacy_hold_forever_is_still_reachable(tmp_path):
+    """A huge grace window restores the pre-2026-07-31 hold-the-stale-error-indefinitely path."""
+    fake = TofFakeMsp()
+    clk = Clock()
+    fake.tof_mm = 500
+    _, ctrl = _make_tof(tmp_path, fake, clk, launch=True, hold_seconds=0.1, seconds=30.0,
+                        target_height_m=1.4, tof_blind_grace_s=1e9)
+    _start(ctrl, clk, fake)
+    assert _run_until(ctrl, clk, lambda c: c.phase is Phase.HOVER)
+    fake.tof_answer = False
+    for _ in range(30):                            # 0.6 s blind
+        clk.t += 0.02
+        ctrl.step()
+        if ctrl.done:
+            break
+    assert ctrl.h_err_obs == pytest.approx(0.9, abs=1e-3)

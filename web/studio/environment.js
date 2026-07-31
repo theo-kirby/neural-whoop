@@ -3,7 +3,9 @@
 // Simulation player/editor and the Real bench) build one over their `view` so the light/dark toggle
 // and the per-course room sizing go through one seam.
 //
-// `createEnvironment(view)` -> { setTheme(theme), setSize({footprint,height,floorZ}), dispose() }:
+// `createEnvironment(view, { labels })` -> { setTheme, setSize({footprint,height,floorZ}), dispose }.
+// `labels: false` builds the room without the baked "1 METER" / "PROTOTYPE" text (the metre grid
+// still carries the scale) — a clean backdrop for the capture page's product shot.
 //   - setTheme repaints the room texture from the active palette and swaps scene.background / fog /
 //     ground tint / light intensities (a cheap rebuild — new CanvasTextures);
 //   - setSize disposes the old room mesh and builds a new one at a new footprint/height (call on
@@ -37,7 +39,7 @@ export const THEME_PALETTES = {
 
 function paletteFor(theme) { return THEME_PALETTES[theme] || THEME_PALETTES.light; }
 
-export function createEnvironment(view) {
+export function createEnvironment(view, { labels = true } = {}) {
   let theme = "light";
   let size = { footprint: 10, height: 10, floorZ: 0 };
   let room = null;
@@ -61,7 +63,8 @@ export function createEnvironment(view) {
   function rebuildRoom() {
     disposeObj(room);
     room = buildRoom(view.world, {
-      size: size.footprint, height: size.height, floorZ: size.floorZ, palette: paletteFor(theme).tile,
+      size: size.footprint, height: size.height, floorZ: size.floorZ,
+      palette: paletteFor(theme).tile, labels,
     });
   }
 

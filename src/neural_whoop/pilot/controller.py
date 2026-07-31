@@ -114,8 +114,21 @@ class FlightParams:
     # policy sees a channel with different semantics than the one it trained against.
     tof_max_m: float = 1.3            # trusted slant range (short mode); beyond -> hold
     tof_tilt_limit_deg: float = 45.0  # past this tilt the ray misses the spot below -> hold
+    # Blind-fade window (2026-07-31). The sim holds the last valid reading indefinitely and so did
+    # this pilot — but on the real Air65 the climb overshoots the setpoint straight past the
+    # VL53L1X's ~1.3 m ceiling, and holding there means holding a maximally-NEGATIVE error, i.e.
+    # commanding motors-off open-loop all the way to the floor. Past the grace window the observed
+    # error fades to 0 ("at target" -> hover), which is the right thing to believe when blind.
+    # Set tof_blind_grace_s high (or fade_s 0 with a high grace) for the legacy hold-forever.
+    tof_blind_grace_s: float = 0.20   # hold verbatim this long — covers ordinary 25 Hz jitter
+    tof_blind_fade_s: float = 0.30    # then fade the held error to 0 over this window
     min_us: int = 1000
     max_us: int = 1600
+    # Free-flight throttle floor, as a fraction of the LEARNED hover thrust (0 = disabled, the
+    # legacy behaviour). act-v2 thrust -1.0 maps to min_us = 1000 = motors off, which on this
+    # airframe is free fall AND a loss of rate authority (no AIRMODE at idle). The policy's only
+    # brake should be "less thrust", never "no thrust". 0.25 still gives -0.75 g of braking.
+    min_thrust_frac: float = 0.25
     ramp_s: float = RAMP_DOWN_S   # end-of-flight thrust ramp-down window (s)
     # Acro FLIP maneuver (an optional bounded window inserted at HOVER; only active with an
     # acro_policy). flip_at_s auto-triggers N s into free flight (headless/CLI/fake-bridge);
@@ -214,6 +227,7 @@ class FlightController:
         # t_tof_used is the sample stamp h_est was built from, so a re-served range never
         # re-corrects. att_hist buys the ~200 ms of attitude the correction pairs against.
         self.h_est: float | None = None
+        self.h_err_obs: float | None = None  # the faded error the policy actually saw (CSV col 26)
         self.t_last_tof: float | None = None
         self.t_tof_used: float = 0.0
         self.att_hist: deque = deque(maxlen=24)  # (t, roll, pitch), ~0.5 s at 50 Hz
@@ -592,6 +606,7 @@ class FlightController:
         o = [o[0] - self.lvl[0] - self.trim_roll_rad,
              o[1] - self.lvl[1] - self.trim_pitch_rad, o[2], o[3], o[4]]
 
+        self.h_err_obs = None  # set below iff a ToF policy actually observed an error this tick
         if self.flipping:
             # The acro policy owns the maneuver. Advance the maneuver clock by integrating the
             # maneuver-axis gyro (mirrors tasks/acro_flip.py's phi accumulation), then feed the
@@ -618,6 +633,8 @@ class FlightController:
                 # error, NOT target - 0 — a dead sensor must not read as "climb". Matches the
                 # blank h_err CSV cell, so the offline sim_vs_real replay stays exact.
                 err = p.target_height_m - self.h_est if self.h_est is not None else 0.0
+                err *= self._blind_fade(now)  # blind and confidently wrong is worse than neutral
+                self.h_err_obs = err
                 frame = o + [err]
             elif self.pol.uses_vz:
                 frame = o + [self.vz]
@@ -637,7 +654,14 @@ class FlightController:
         elif self.v_liftoff and self.vfilt:
             comp = max(0.97, min(1.12, self.v_liftoff / self.vfilt))
         hover_eff = int(1000 + (base_hover - 1000) * comp)
-        us = action_to_us(act, hover_eff, p.min_us, p.max_us, p.trim_thrust + self.thr_trim)
+        # Free-flight throttle floor (FlightParams.min_thrust_frac). Expressed in hover-thrust
+        # units and resolved against THIS pack's learned hover, so it means the same thing on a
+        # fresh pack as on a sagging one. The staged/idle branches below overwrite us[2] with
+        # p.min_us outright, so the floor is genuinely free-flight-only and never spins props up
+        # while the drone sits armed on the floor waiting for the switch.
+        thr_floor_us = max(p.min_us, int(1000 + (hover_eff - 1000) * math.sqrt(p.min_thrust_frac))) \
+            if p.min_thrust_frac > 0.0 else p.min_us
+        us = action_to_us(act, hover_eff, thr_floor_us, p.max_us, p.trim_thrust + self.thr_trim)
         if p.yaw == "center":
             us[3] = 1500  # zero-rate setpoint: the FC damps yaw itself (sign unverified)
         if self.staged and self.t_start is None:
@@ -697,11 +721,14 @@ class FlightController:
         if (self.rpm_hover and rpm_now and self.t_start is not None and not self.flipping
                 and t_fl >= self.hold_s + self.ramp_in_s):
             a0c = max(-1.0, min(1.0, act[0] + p.trim_thrust + self.thr_trim))
-            t_des = (a0c + 1.0) * 0.5 * MAX_THRUST_NORMED
+            # Floor t_des to match the throttle floor: otherwise, every tick the floor is active
+            # the governor sees "measured thrust > commanded" and integrates us_corr down against
+            # a clamp it can never win, winding up to -RPM_CORR_CAP and biasing the recovery.
+            t_des = max(p.min_thrust_frac, (a0c + 1.0) * 0.5 * MAX_THRUST_NORMED)
             rpm_err = (rpm_now / self.rpm_hover) ** 2 - t_des
             self.us_corr = max(-RPM_CORR_CAP,
                                min(RPM_CORR_CAP, self.us_corr - RPM_KI_US * rpm_err * dt_tick))
-            us[2] = int(max(p.min_us, min(p.max_us, us[2] + self.us_corr)))
+            us[2] = int(max(thr_floor_us, min(p.max_us, us[2] + self.us_corr)))
 
         # Stream RC — but while WAITING with override OFF, send NOTHING (the FC ignores MSP RC when
         # override is off anyway; not streaming is strictly safer). Idle RC resumes the moment the
@@ -719,7 +746,11 @@ class FlightController:
                       f"{self.vz:.3f}", f"{self.thr_trim:+.4f}", *self.tel.imu["acc_raw"],
                       f"{rpm_now:.0f}" if rpm_now else "", f"{self.us_corr:+.0f}",
                       f"{tof_m:.3f}" if tof_m is not None else "",
-                      f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else "",
+                      # h_err: the value the POLICY OBSERVED, i.e. after the blind fade — not the
+                      # raw held error — so sim_vs_real's offline replay stays byte-exact. Falls
+                      # back to the raw error on ticks no ToF policy ran (e.g. mid-flip).
+                      f"{self.h_err_obs:.4f}" if self.h_err_obs is not None else
+                      (f"{p.target_height_m - self.h_est:.4f}" if self.h_est is not None else ""),
                       # The bridge's own worst loop() in its current 5 s window. obs_age_ms (col 2)
                       # is the symptom of a bridge stall; this is the cause, self-reported. Empty
                       # on pre-2026-07-30 firmware, which sends a 6-byte ToF reply.
@@ -728,6 +759,38 @@ class FlightController:
         return self._make_frame()
 
     # ------------------------------------------------------------------ helpers
+
+    def _blind_fade(self, now: float) -> float:
+        """Confidence in the held ToF error, 1.0 (fresh) -> 0.0 (blind long enough to disbelieve).
+
+        ``tasks/hover_tof.py`` zero-order-holds the last valid reading for as long as the sensor is
+        stale, and this pilot mirrored that exactly. On the bench that is right; in the air it has
+        a failure mode the sim never sees, because in the sim the drone does not routinely leave
+        the sensor's range. Measured 2026-07-31 (flights 1785493302/323/376): the climb overshoots
+        the 1.0 m setpoint at 1.2-1.9 m/s, sails past the VL53L1X's ~1.3 m ceiling, and the hold
+        then pins h_err at roughly -0.29 m for 0.4-0.5 s — i.e. the policy is told "you are far
+        above target" by a dead sensor and commands motors-off, open loop, until it falls back
+        into range with ~2 m/s of descent. Every dropout in the set began at 1.25-1.37 m, and the
+        one flight that stayed in range (1785493353, peak 1.10 m, 99.2% valid) recovered.
+
+        So: hold verbatim through ``tof_blind_grace_s`` (ordinary 25 Hz refresh jitter), then fade
+        linearly to 0 over ``tof_blind_fade_s``. Zero error reads as "at target", so a fully blind
+        policy settles toward hover instead of toward either extreme. The 1 s sensor-lost abort is
+        unchanged and still backstops a genuinely dead sensor.
+
+        This is a deliberate DEPLOY-SIDE DEVIATION from the trained obs contract — the honest fix
+        is to fly a setpoint whose overshoot stays inside the sensor band (and to train against
+        the real 25 Hz refresh). The faded value is what gets logged, so replay stays exact.
+        """
+        p = self.params
+        if self.t_last_tof is None or p.tof_blind_grace_s < 0.0:
+            return 1.0
+        stale = now - self.t_last_tof - p.tof_blind_grace_s
+        if stale <= 0.0:
+            return 1.0
+        if p.tof_blind_fade_s <= 0.0:
+            return 0.0
+        return max(0.0, 1.0 - stale / p.tof_blind_fade_s)
     def _att_at(self, t: float) -> tuple[float, float]:
         """(roll, pitch) nearest in time to ``t`` from the recent attitude history.
 

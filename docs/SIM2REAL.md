@@ -480,6 +480,51 @@ tumble garbage, not altitude.
 - **Next uses:** height ground-truth for vz_est error characterization → flow×height velocity
   fusion when the PMW3901 lands (ROADMAP #9).
 
+#### The 1.0 m setpoint was the wrong side of the sensor ceiling (2026-07-31)
+
+Four ESP-NOW flights (`runs/pilot/flight_17854933{02,23,53,76}.csv`) with the link finally healthy
+(`obs_age_ms` p99 134–214 → 48–69 ms, ticks >100 ms 0.90% → **0.00%**) flew **exactly the same
+failure as the eight WiFi flights before them** — peak height 1.36–1.37 m against a 1.0 m target,
+then motors off and a drop. That refutes the ESP-NOW plan's stated premise that the link explained
+the flight failures: it did not, and the two faults are now cleanly separated.
+
+The measured mechanism, in order:
+
+1. The climb crosses the setpoint at **1.2–1.9 m/s** (the policy commands 2.1–2.8× hover the whole
+   way up), and the brake is ~0.13 s late through the ToF→obs→RC→spool chain.
+2. `act[0] = −1.0` maps to `min_us` = **1000 = motors off** — free fall *and*, at idle throttle
+   with no AIRMODE, a loss of rate authority.
+3. The overshoot exits the VL53L1X's ~1.3 m trusted band. **Every dropout in the set began at
+   1.25–1.37 m.**
+4. `h_est` was then **held indefinitely**, so `h_err` pinned at ≈ −0.29 m — a dead sensor telling
+   the policy "you are far above target" — and it commanded motors-off open-loop for 0.4–0.5 s,
+   inside the 1 s `tof_lost` abort, which never fired.
+5. Ground contact at ~2 m/s: battery ejection or prop bind, then a tumble.
+
+The natural control: `flight_1785493353`'s liftoff calibration landed 180 us low, so it climbed
+gentler, peaked at **1.10 m**, kept **99.2%** ToF validity — and recovered. One flight of four
+stayed inside the sensor band, and it is the one that did not crash.
+
+The task already models saturation-and-hold correctly (`tof_max_m` 1.3), and its own docstring says
+*"configs should keep the setpoint z band inside the sensor's valid band."* The config trains
+`z_min 0.5 / z_max 1.1`. **We then deployed at 1.0 m — the top of that band — so the overshoot
+landed entirely outside it.** Three deploy-side changes followed (all defaulted ON, all reversible):
+
+| | knob | default | why |
+|---|---|---|---|
+| Lower the setpoint | `--target-height` / `--flight-target-height` | unchanged 1.0, **fly 0.7** | 0.7 + a 0.37 m overshoot ≈ 1.07 m, inside both the sensor band and the trained band |
+| Throttle floor | `--min-thrust-frac` | **0.25** | free-flight only; "brake" becomes −0.75 g with props still spinning, never motors-off. The staged/idle branches still stream `min_us`, so nothing spins up while armed on the floor |
+| Blind fade | `--tof-blind-grace` / `--tof-blind-fade` | **0.20 / 0.30 s** | hold verbatim through ordinary 25 Hz jitter, then fade the held error to 0 (= "at target" = hover). Blind and confidently wrong is worse than blind and neutral |
+
+The blind fade is a **deliberate deviation from the trained obs contract** — the sim holds forever
+because in the sim the drone does not routinely leave sensor range. The faded value is what is fed
+*and* what is logged (CSV col 26), so `sim_vs_real.py` replay stays byte-exact. A large
+`--tof-blind-grace` restores the legacy hold-forever path.
+
+Still open, and not addressed by any of the above: `tof_rate_hz: 40.0` in the training config vs
+the bridge's real **25 Hz** — hold windows are 1.6× longer in the air than in training. The `_r25`
+eval twins exist (`84e254e`); no r25-trained run does yet.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 

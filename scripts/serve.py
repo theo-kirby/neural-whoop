@@ -29,6 +29,11 @@ def main() -> int:
     p.add_argument("--flight-weights", default=os.environ.get("NW_FLIGHT_WEIGHTS",
                    "runs/hover_blind_air65_d50var_s8/policy_weights.json"),
                    help="Deploy policy_weights.json the Bench dashboard flies.")
+    p.add_argument("--flight-target-height", type=float,
+                   default=float(os.environ.get("NW_FLIGHT_TARGET_HEIGHT", "1.0")), metavar="M",
+                   help="Height the Bench dashboard asks a hover_tof policy to hold (m). Keep "
+                        "target + overshoot inside the ToF's 1.3 m ceiling — the measured climb "
+                        "overshoots by ~0.37 m, so 1.0 puts the peak outside the sensor band.")
     p.add_argument("--flight-acro-weights", default=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS",
                    "runs/acro_flip/policy_weights.json"),
                    help="Acro-flip policy_weights.json the Bench Flip button drives (obs-7). "
@@ -50,6 +55,7 @@ def main() -> int:
             os.environ["NW_BRIDGE"] = args.bridge
         os.environ["NW_FLIGHT_WEIGHTS"] = args.flight_weights
         os.environ["NW_FLIGHT_ACRO_WEIGHTS"] = args.flight_acro_weights
+        os.environ["NW_FLIGHT_TARGET_HEIGHT"] = str(args.flight_target_height)
         src_dir = Path(__file__).resolve().parents[1] / "src"
         uvicorn.run(
             "neural_whoop.studio.server:app_factory", factory=True,
@@ -60,7 +66,8 @@ def main() -> int:
 
         uvicorn.run(create_app(device=args.device, bridge=args.bridge or None,
                                flight_weights=args.flight_weights,
-                               flight_acro_weights=args.flight_acro_weights),
+                               flight_acro_weights=args.flight_acro_weights,
+                               flight_target_height=args.flight_target_height),
                     host=args.host, port=args.port)
     return 0
 

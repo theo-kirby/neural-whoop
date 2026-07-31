@@ -292,6 +292,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
         vz_gain=args.vz_gain, trim_roll_deg=args.trim_roll_deg, trim_pitch_deg=args.trim_pitch_deg,
         aux=args.aux, hover_us=args.hover_us, vbat_ref=args.vbat_ref, trim_thrust=args.trim_thrust,
         min_us=args.min_us, max_us=args.max_us, target_height_m=args.target_height,
+        min_thrust_frac=args.min_thrust_frac, tof_blind_grace_s=args.tof_blind_grace,
+        tof_blind_fade_s=args.tof_blind_fade,
         flip_at_s=args.flip_at, acro_axis=args.axis, acro_n_rotations=args.n_rotations,
     )
     period = 1.0 / args.hz
@@ -394,7 +396,20 @@ def main() -> int:
     fly.add_argument("--hold-seconds", type=float, default=3.0)
     fly.add_argument("--target-height", type=float, default=1.0, metavar="M",
                      help="hover_tof policies: height to hold (m); the obs channel is "
-                          "target - measured (tilt-corrected bridge ToF, last-valid-held)")
+                          "target - measured (tilt-corrected bridge ToF, last-valid-held). "
+                          "Keep target + overshoot inside tof_max_m (1.3): the climb has "
+                          "overshot by ~0.37 m, so 1.0 puts the peak OUTSIDE the sensor band")
+    fly.add_argument("--min-thrust-frac", type=float, default=0.25, metavar="F",
+                     help="free-flight throttle floor as a fraction of learned hover thrust "
+                          "(0 = disabled/legacy). Stops act[0]=-1 meaning motors-off, which is "
+                          "free fall plus a loss of rate authority; 0.25 still brakes at -0.75 g")
+    fly.add_argument("--tof-blind-grace", type=float, default=0.20, metavar="S",
+                     help="hold the last valid ToF error verbatim this long once the sensor goes "
+                          "stale (covers ordinary 25 Hz refresh jitter)")
+    fly.add_argument("--tof-blind-fade", type=float, default=0.30, metavar="S",
+                     help="after the grace window, fade the held error to 0 (= hover) over this "
+                          "window rather than holding a stale error open-loop. 0 = drop to 0 at "
+                          "once; a huge --tof-blind-grace restores the legacy hold-forever")
     fly.add_argument("--vz-gain", type=float, default=0.15,
                      help="climb damper gain (act[0] per m/s of RPM-anchored climb rate for a "
                           "blind policy; vz-consuming policies own damping and ignore it); "

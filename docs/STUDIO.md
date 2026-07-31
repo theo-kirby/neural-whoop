@@ -205,22 +205,46 @@ uv run python scripts/capture_video.py --replay ... --out out.png --stills 120,2
 ```
 
 Flags: `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`, `--theme light|dark`,
-`--room-size`, `--cam-dir/--cam-dist/--fov`, `--track/--drone-frac`, `--scale` (drone footprint, m),
-`--prop-rate`, `--title/--title-frames` (`0` disables the cards).
+`--room-size`, `--cam-dir/--cam-dist/--fov`, `--track/--drone-frac/--cam-above/--track-smooth/
+--track-amount`, `--scale` (drone footprint, m), `--prop-rate`, `--title/--title-frames`
+(`0` disables the cards).
 
 **Two camera modes, both with a fixed position.** The default is a **wide** shot: an exact box fit
 of the whole flight (not `cameras.js`'s bounding-sphere fit — this flight is tall and thin, and a
-sphere fit sits ~25% further back than it needs to). `--track` is a **tripod** shot: the position
-still never moves, but the camera pans/tilts to follow the drone, and the distance comes from
-`--drone-frac` (how much of the frame height the airframe should fill) instead of the flight
-extent. That decoupling is the whole point — at true scale, a fixed frame containing all 1.56 m of
-the flight caps an 82 mm airframe at **~5% of the frame height**, i.e. a speck. The trade is that
-you no longer see the whole trajectory at once. The concept video uses:
+sphere fit sits ~25% further back than it needs to). `--frame-height` overrides that with an
+explicit framing: how many metres of world the frame spans vertically, so the airframe is exactly
+`--scale / --frame-height` of the picture. That is the direct "how big is the drone" control, and
+it is the knob that matters, because the fitted framing is arithmetically stuck: holding a whole
+1.1 m flight in a fixed square frame caps an 82 mm airframe at **~7% of the frame height**. Going
+tighter means the drone rises into frame and sinks out of it — a locked-off shot.
+
+`--aim x,y,z` (default: the **median** hero position, not the bbox centre — a bbox centre is dragged
+around by wherever the flight reached its extremes) picks what the shot is centred on. `--cam-dir`
+with a zero vertical component gives a dead straight-on, level camera.
+
+`--track` is the third option, a **tripod** shot: the position still never moves, but the camera
+pans/tilts to follow the drone, so `--drone-frac` sets the size and the flight extent stops
+mattering. `--cam-above` parks it over the flight's highest point so it never tilts up, and
+`--track-smooth` (symmetric half-window, frames) calms the pan.
+
+The room is built **after** the camera and is never smaller than it needs to be to contain it: the
+walls are a `BackSide` box, so a camera outside would cull the near wall and cut a hard diagonal
+seam across the frame. A too-small `--room-size` is raised to fit. `--no-room-labels` drops the
+baked "1 METER" / "PROTOTYPE" text for a clean backdrop (the metre grid still carries the scale).
+
+Every render prints a **framing check**: the page projects the airframe (padded by its own angular
+radius) through the camera it will actually be drawn with, for every frame, and reports the largest
+`|NDC|` on each axis — `1.0` is the frame edge. Above 1.0 it warns that the drone leaves frame. Use
+it; a tight locked-off shot of a climbing drone can measure **2.5** and you will not notice from a
+still.
+
+The concept video uses:
 
 ```bash
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
     --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
-    --width 1080 --height 1080 --theme dark --title-frames 0 --track
+    --width 1080 --height 1080 --theme dark --title-frames 0 --room-size 2.6 --no-room-labels \
+    --track --drone-frac 0.22 --cam-above 0.15 --track-smooth 12
 ```
 
 With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which runs the

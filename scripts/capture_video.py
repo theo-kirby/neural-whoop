@@ -130,7 +130,14 @@ def render(
     cam_dist: float = 1.15,
     fov: float = 40.0,
     track: bool = False,
-    drone_frac: float = 0.14,
+    drone_frac: float = 0.22,
+    cam_above: float = 0.30,
+    track_smooth: int = 25,
+    track_amount: float = 1.0,
+    frame_height: float | None = None,
+    aim: tuple[float, float, float] | None = None,
+    aim_z: float | None = None,
+    room_labels: bool = True,
     scale: float | None = None,
     prop_rate: float = 0.8,
     title: str = "neural-whoop",
@@ -155,8 +162,24 @@ def render(
             drone. The only way to get genuinely close at true scale: with the whole flight in a
             fixed frame, an 82 mm airframe can occupy at most ~5% of the frame height. The cost
             is that you no longer see the whole trajectory at once.
-        drone_frac: With ``track``, the fraction of the frame height the airframe should fill —
-            this, not the flight extent, is what sets the camera distance.
+        drone_frac: With ``track``, the fraction of the frame height the airframe should fill at
+            the top of the flight — this, not the flight extent, is what sets the camera distance.
+        cam_above: With ``track``, metres the camera is parked above the flight's highest point.
+            This is what guarantees the shot never tilts upward: level or looking down, always.
+        track_smooth: With ``track``, the symmetric smoothing half-window (frames) applied to the
+            aim track. Bigger = a calmer, laggier pan.
+        frame_height: Fixed-camera framing: how many metres of world the frame spans vertically.
+            The airframe is then exactly ``scale / frame_height`` of the picture — the direct
+            "how big is the drone" control. Ignored when ``track`` is on.
+        aim: Fixed-camera aim point, sim ``(x, y, z)`` in metres; ``None`` -> the flight's own
+            bbox centre. With a level ``cam_dir`` the camera sits at the aim's height, i.e. dead
+            straight-on. Worth setting explicitly: the bbox centre is not where the drone spends
+            its time when the flight drifts.
+        aim_z: Aim height only (sim z, m), when ``aim`` is not given.
+        room_labels: Bake the "1 METER" / "PROTOTYPE" text into the greybox tiles.
+        track_amount: With ``track``, 1.0 locks the drone dead centre; below 1.0 the camera stays
+            partly parked on the flight's centre and swings less (at a close framing the drone
+            leaves frame quickly, so prefer ``track_smooth``).
         scale: Drone tip-to-tip footprint (m); ``None`` -> the true 82 mm airframe.
         prop_rate: Stylized prop spin, radians per frame at hover thrust.
         title/title_frames: Opening/closing card text and how long each is held (frames).
@@ -181,6 +204,9 @@ def render(
         "episode": episode, "theme": theme, "camDir": list(cam_dir), "camDist": cam_dist,
         "propRate": prop_rate, "title": title, "titleFrames": title_frames,
         "fov": fov, "track": track, "droneFrac": drone_frac,
+        "camAbove": cam_above, "trackSmooth": track_smooth, "trackAmount": track_amount,
+        "frameHeight": frame_height, "aimZ": aim_z, "roomLabels": room_labels,
+        "aim": list(aim) if aim else None,
     }
     if room_size is not None:
         page_opts["roomSize"] = room_size
@@ -203,6 +229,15 @@ def render(
             page.wait_for_function("window.NW_CAPTURE_READY === true", timeout=120_000)
 
             n = int(page.evaluate("window.NW_CAPTURE.frameCount"))
+            fit = page.evaluate("window.NW_CAPTURE.framing")
+            worst = max(fit["x"], fit["y"])
+            if worst >= 1.0:
+                print(f"[capture] WARNING: the drone leaves frame (worst |NDC| {worst:.2f} > 1.0; "
+                      f"x {fit['x']:.2f}, y {fit['y']:.2f}). Widen --frame-height / lower "
+                      "--drone-frac, or use --track.", file=sys.stderr)
+            elif not quiet:
+                print(f"[capture] framing: worst |NDC| {worst:.2f} "
+                      f"(x {fit['x']:.2f}, y {fit['y']:.2f}) — 1.0 is the frame edge")
             app = page.locator("#app")
             indices = list(range(0, n, max(1, stride)))
 
@@ -264,8 +299,26 @@ def main() -> int:
     p.add_argument("--track", action="store_true",
                    help="tripod shot: fixed camera position, panning/tilting to follow the drone "
                         "(lets the shot get close; you lose the whole-trajectory framing)")
-    p.add_argument("--drone-frac", type=float, default=0.14,
-                   help="with --track, fraction of the frame height the airframe fills")
+    p.add_argument("--drone-frac", type=float, default=0.22,
+                   help="with --track, fraction of the frame height the airframe fills at the top "
+                        "of the flight")
+    p.add_argument("--cam-above", type=float, default=0.30,
+                   help="with --track, metres the camera sits above the flight's highest point "
+                        "(this is what keeps the shot from ever tilting upward)")
+    p.add_argument("--track-smooth", type=int, default=25,
+                   help="with --track, aim smoothing half-window in frames (bigger = calmer pan)")
+    p.add_argument("--frame-height", type=float, default=None,
+                   help="fixed camera: metres of world the frame spans vertically (drone size = "
+                        "--scale / --frame-height). Smaller = bigger drone, less flight in frame")
+    p.add_argument("--aim", default=None,
+                   help="fixed camera: aim point as sim x,y,z (m) — default the flight bbox centre")
+    p.add_argument("--aim-z", type=float, default=None,
+                   help="fixed camera: sim-z the shot is centred on (default: the flight's centre)")
+    p.add_argument("--no-room-labels", dest="room_labels", action="store_false",
+                   help="drop the baked '1 METER' / 'PROTOTYPE' text from the greybox tiles")
+    p.add_argument("--track-amount", type=float, default=1.0,
+                   help="with --track, 1.0 locks the drone centre; lower keeps the camera nearer "
+                        "the flight centre and swinging less")
     p.add_argument("--scale", type=float, default=None,
                    help="drone footprint in m (default: the true 0.082 m airframe)")
     p.add_argument("--prop-rate", type=float, default=0.8,
@@ -282,7 +335,10 @@ def main() -> int:
         width=a.width, height=a.height, fps=a.fps, crf=a.crf, stride=a.stride,
         episode=a.episode, theme=a.theme, room_size=a.room_size,
         cam_dir=tuple(float(v) for v in a.cam_dir.split(",")), cam_dist=a.cam_dist, fov=a.fov,
-        track=a.track, drone_frac=a.drone_frac,
+        track=a.track, drone_frac=a.drone_frac, cam_above=a.cam_above,
+        track_smooth=a.track_smooth, track_amount=a.track_amount,
+        frame_height=a.frame_height, aim_z=a.aim_z, room_labels=a.room_labels,
+        aim=tuple(float(v) for v in a.aim.split(",")) if a.aim else None,
         scale=a.scale, prop_rate=a.prop_rate, title=a.title, title_frames=a.title_frames,
         stills=[int(v) for v in a.stills.split(",")] if a.stills else None,
         quiet=a.quiet,

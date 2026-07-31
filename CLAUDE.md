@@ -252,14 +252,16 @@ events → no curves; no `--baseline` → no comparison).
 uv pip install -e '.[capture]'
 uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
-# The take-off -> hover -> flip -> land concept sequence (trained acro_flip owns the flip window).
-# --track is the close "tripod" shot: fixed camera position, panning/tilting to follow the drone —
-# the only way to read an 82 mm airframe at true scale (a fixed frame holding the whole 1.56 m
-# flight caps the drone at ~5% of frame height).
+# The take-off -> hover -> flip -> land concept sequence. BOTH halves are shipped policies: the
+# deployed 1.0 m hover_tof policy owns take-off/hover/land, trained acro_flip owns the flip.
+# --track is a tripod shot (fixed camera POSITION, pans/tilts to follow) — the only way to have the
+# airframe read big AND stay in frame: a locked-off frame holding the whole flight caps an 82 mm
+# drone at ~7% of frame height. Every render prints a framing check (worst |NDC|, 1.0 = frame edge).
 uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
     --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
-    --width 1080 --height 1080 --theme dark --title-frames 0 --track
+    --width 1080 --height 1080 --theme dark --title-frames 0 --room-size 2.6 --no-room-labels \
+    --track --drone-frac 0.22 --cam-above 0.15 --track-smooth 12
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn
@@ -284,6 +286,14 @@ python3 scripts/bench.py --port /dev/cu.usbmodemXXX latency --n 500   # THE GATE
 python3 scripts/pilot.py --serial /dev/cu.usbmodemXXX fly --takeoff --ack-props-on
 uv run python scripts/serve.py --bridge /dev/cu.usbmodemXXX          # Studio Real tab
 ```
+
+**Deploy height safety (2026-07-31, `docs/SIM2REAL.md`).** The measured climb overshoots its
+setpoint by **~0.37 m**, so a 1.0 m target puts the peak past the VL53L1X's 1.3 m ceiling — the
+held `h_err` then pins negative and the policy commands motors-off open-loop until it falls back
+into range. **Fly `--target-height 0.7`** (`--flight-target-height` for the Studio). Two guards
+now default ON: `--min-thrust-frac 0.25` (free-flight throttle floor — `act[0] = -1` no longer
+means motors off) and `--tof-blind-grace 0.2 --tof-blind-fade 0.3` (a stale ToF error fades to
+"at target" rather than being held forever). Set `--min-thrust-frac 0` / a huge grace for legacy.
 
 **Course geometry knobs.** `gate_race`/`swarm_race` configs now surface `step_min`/`step_max`
 (inter-gate hop, m) + `max_turn_deg` alongside `arena_radius`/`z_*`/`bound_*`. Defaults (1.5/2.8 m)

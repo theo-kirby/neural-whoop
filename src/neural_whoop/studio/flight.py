@@ -58,7 +58,8 @@ LOG_COLUMNS = [
 
 #: Fields a browser ``params`` message may override on the WAITING controller.
 _PARAM_FIELDS = ("seconds", "hz", "hover_us", "min_us", "max_us", "hold_seconds", "vz_gain",
-                 "trim_roll_deg", "trim_pitch_deg", "trim_thrust", "yaw", "target_height_m")
+                 "trim_roll_deg", "trim_pitch_deg", "trim_thrust", "yaw", "target_height_m",
+                 "min_thrust_frac", "tof_blind_grace_s", "tof_blind_fade_s")
 
 
 def is_serial_bridge(bridge: str) -> bool:

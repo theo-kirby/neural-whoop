@@ -96,6 +96,7 @@ def create_app(
     bridge: str | None = None,
     flight_weights: str = _DEFAULT_FLIGHT_WEIGHTS,
     flight_acro_weights: str | None = _DEFAULT_FLIGHT_ACRO_WEIGHTS,
+    flight_target_height: float = 1.0,
     flight_manager=None,
 ) -> FastAPI:
     """Build the Studio FastAPI app. Dirs default to the repo layout; override for tests.
@@ -327,6 +328,7 @@ def create_app(
             return
         if not _flight_enabled:
             return
+        from neural_whoop.pilot import FlightParams
         from neural_whoop.studio.flight import FlightManager
 
         def _on_done(csv_path, released):
@@ -343,6 +345,7 @@ def create_app(
             bridge or "fake", weights=weights_abs,
             acro_weights=str(acro_abs) if acro_abs and acro_abs.is_file() else None,
             runs_dir=runs_dir / "pilot", on_flight_done=_on_done,
+            params=FlightParams(takeoff=True, target_height_m=flight_target_height),
         )
         mgr.start()
         app.state.flight = mgr
@@ -423,6 +426,7 @@ def app_factory() -> FastAPI:
         bridge=os.environ.get("NW_BRIDGE") or None,
         flight_weights=os.environ.get("NW_FLIGHT_WEIGHTS", _DEFAULT_FLIGHT_WEIGHTS),
         flight_acro_weights=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS", _DEFAULT_FLIGHT_ACRO_WEIGHTS),
+        flight_target_height=float(os.environ.get("NW_FLIGHT_TARGET_HEIGHT", "1.0")),
     )
 
 

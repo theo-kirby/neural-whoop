@@ -2,11 +2,19 @@
 """Render a hero replay of the full blind take-off -> flip -> land sequence.
 
 The pilot/fake-bridge path produces only a vertical-only ``pos`` stub, so for a real 3D hero
-shot we reproduce the SAME system-level sequence in DiffAero (real positions + attitudes): a
-simple altitude+attitude PD owns take-off / hover / land (standing in for the pilot's open-loop
-state machine) and the **trained acro_flip policy** owns the flip window (exactly the deploy
-split). We drive ``WhoopDynamics`` directly, record every control step into the versioned replay
-schema, and hand the result to the headless capturer for the concept MP4.
+shot we reproduce the SAME system-level sequence in DiffAero (real positions + attitudes). **Both
+halves are the shipped policies**, exactly the deploy split: the deployed 1.0 m ``hover_tof``
+policy (``runs/hover_tof_air65_w128u15``, the same weights ``scripts/pilot.py`` and the Studio
+Bench tab fly on the real Air65 II) owns take-off / hover / recover / land against a moving
+setpoint, and the trained ``acro_flip`` policy owns the flip window. Pass ``--hover-weights pd``
+for the old hand-written altitude/attitude PD. We drive ``WhoopDynamics`` directly, record every
+control step into the versioned replay schema, and hand the result to the headless capturer.
+
+The harness closes exactly one loop neither policy can: **heading**. obs-v4 drops yaw (not
+observable without a magnetometer), so the hover policy has no yaw reference and settles on a
+small constant yaw-rate bias — benign in a hover, fatal at the flip handoff, because DiffAero's
+rate loop is not yaw-invariant (see ``FLIP_YAW_LIMIT_DEG``). The harness holds heading on the
+gyro-integrated yaw the real pilot already forwards from ``MSP_ATTITUDE``.
 
 The drone starts and ends **resting on the floor** (``pos.z == WHOOP_REST_Z_M``, the true-scale
 airframe half-height) and each frame carries a numeric ``scene.phase`` code whose labels live in
@@ -21,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import math
+from collections import deque
 from pathlib import Path
 
 import torch
@@ -29,6 +38,7 @@ import neural_whoop  # noqa: F401 - makes third_party/diffaero importable
 from neural_whoop.contract import WHOOP_REST_Z_M, ActionLimits, action_to_diffaero, world_to_body
 from neural_whoop.dynamics.whoop import WhoopDynamics, WhoopParams
 from neural_whoop.pilot import Policy
+from neural_whoop.pilot.policy import stack_frames
 from neural_whoop.viz.replay import (
     ACTION_LAYOUT,
     COORDINATE_FRAME,
@@ -38,6 +48,13 @@ from neural_whoop.viz.replay import (
 )
 
 _AXIS_IDX = {"roll": 0, "pitch": 1}
+
+#: The shipped 1.0 m hover policy (★ studio-baseline) — the same weights scripts/pilot.py and the
+#: Studio Bench tab fly on the real Air65 II. It owns climb / hover / recover / land here.
+DEFAULT_HOVER_WEIGHTS = "runs/hover_tof_air65_w128u15/policy_weights.json"
+#: The bridge ToF's range ceiling (configs/hover_tof_air65_w128u15.yaml, tof_max_m) —
+#: the policy never sees a height above this, so neither do we.
+TOF_MAX_M = 1.3
 
 #: Caption labels for the numeric ``scene.phase`` channel, index == code. The recorder coerces
 #: every ``scene`` value through ``_vec()``, so the per-frame channel has to be a NUMBER; the
@@ -62,8 +79,13 @@ def main() -> int:
     ap.add_argument("--n-rotations", type=float, default=1.0)
     ap.add_argument("--out", default="runs/acro_flip/hero_seq", help="output dir for replay.json.gz")
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--z-hover", type=float, default=1.6,
-                    help="hover/flip altitude (m) — a real indoor room, not a gym")
+    ap.add_argument("--hover-weights", default=DEFAULT_HOVER_WEIGHTS,
+                    help="deployed hover policy (obs-6 hover_tof) that owns climb/hover/land; "
+                         "pass 'pd' to fall back to the old altitude/attitude PD")
+    ap.add_argument("--z-hover", type=float, default=1.0,
+                    help="hover/flip altitude (m). The deployed hover policy was trained on a "
+                         "0.5-1.1 m setpoint band with a 1.3 m ToF ceiling — going above that is "
+                         "out of distribution for it, and unmeasurable on the real bridge.")
     ap.add_argument("--z-ground", type=float, default=WHOOP_REST_Z_M,
                     help="rest altitude (m): the airframe's half-height, i.e. sitting on the floor")
     args = ap.parse_args()
@@ -74,6 +96,18 @@ def main() -> int:
         else "runs/acro_flip_pitch/policy_weights.json")
     pol = Policy(weights)
     assert pol.base_obs_dim == 7, f"expected obs-7 acro policy, got {pol.base_obs_dim}"
+
+    # The hover half of the sequence: the SHIPPED policy, not a hand-written PD. Same weights the
+    # Bench dashboard and scripts/pilot.py fly on the real Air65 II, run through the same pure-Python
+    # actor — so both halves of this video are trained policies, which is the whole point of showing
+    # the sequence at all.
+    hov = None if args.hover_weights == "pd" else Policy(args.hover_weights)
+    if hov is not None:
+        assert hov.uses_tof and hov.base_obs_dim == 6, (
+            f"expected the obs-6 hover_tof deploy policy, got task={hov.task!r} "
+            f"base_obs_dim={hov.base_obs_dim}")
+        print(f"hover: {args.hover_weights} (hover_tof, obs-6 x {hov.obs_stack} stacked)")
+        print(f"flip:  {weights} (acro_flip, obs-7)")
 
     dev = torch.device(args.device)
     lim = ActionLimits()
@@ -98,7 +132,9 @@ def main() -> int:
     # --- meta (hand-built: no live env; mirrors viz.replay.build_meta) ---
     meta = {
         "config": f"takeoff_flip_land_{args.axis}",
-        "policy": f"acro_flip ({args.axis}) + PD take-off/land — blind system sequence",
+        "policy": (f"acro_flip ({args.axis}) flip + "
+                   + ("hover_tof deploy policy" if hov is not None else "PD")
+                   + " take-off/hover/land — the real deploy split"),
         "task": "acro_flip",
         "obs_version": "obs-v4", "action_version": "act-v2", "substrate": "diffaero",
         "control_hz": int(round(1.0 / dt)), "sim_hz": int(round(1.0 / dt)) * params.n_substeps,
@@ -125,9 +161,22 @@ def main() -> int:
     FLIP_MAX = 1.5
     LAND_RATE = 0.55               # descent-ramp speed (m/s) — a pilot walking it down, not a drop
 
-    # PD gains.
+    # PD gains (the --hover-weights pd fallback only).
     KP_Z, KD_Z = 1.6, 1.1          # altitude -> thrust
     KP_ATT, KD_ATT, KD_YAW = 9.0, 0.9, 1.2   # attitude -> body rates
+
+    #: Heading hold for the hover-policy path (see hover_ctbr): yaw error -> yaw rate.
+    KP_YAW = 2.0
+    #: Hand off to the acro policy only when the airframe is level AND pointed where it started.
+    #: The 6 deg bound is measured, not guessed — swept in this harness, the flip completes cleanly
+    #: (phi/Phi 1.02, ~0.4 m of altitude lost) up to |yaw| ~6 deg and then falls apart hard
+    #: (phi/Phi > 5, >3.8 m lost). Root cause is NOT either policy: DiffAero's RateController
+    #: measures the rate error as `desired_body - R_i2b @ w` while our wrapper (and the whole
+    #: obs contract) treats `_state[10:13]` as ALREADY body-frame, so the loop is only correct at
+    #: R == I. Open loop, the same constant CTBR command gives 12 rad/s at yaw 0 and a saturated
+    #: 40/40/16 rad/s tumble at yaw -22 deg. Fixing that means retraining every policy in the repo,
+    #: so it is recorded, not patched here — and the sequence simply keeps its nose straight.
+    FLIP_YAW_LIMIT_DEG = 4.0
 
     def ground_contact() -> None:
         """Minimal ground plane: DiffAero has no contact model, so stop the drone at the floor.
@@ -144,7 +193,10 @@ def main() -> int:
                 st[0, 9] = torch.clamp(st[0, 9], min=0.0)   # vz: no sinking through the floor
 
     def pd_ctbr(z_target: float) -> torch.Tensor:
-        """Altitude+attitude PD -> DiffAero CTBR (level-hold, thrust to hold z_target)."""
+        """Altitude+attitude PD -> DiffAero CTBR (level-hold, thrust to hold z_target).
+
+        The ``--hover-weights pd`` fallback only; the default path flies the shipped policy.
+        """
         z = dyn.pos[0, 2].item()
         vz = dyn.vel_world[0, 2].item()
         roll, pitch, _ = dyn.rpy[0].tolist()
@@ -155,6 +207,35 @@ def main() -> int:
         wy = max(-8.0, min(8.0, -KP_ATT * pitch - KD_ATT * q))
         wz = max(-6.0, min(6.0, -KD_YAW * r))
         return torch.tensor([[thrust, wx, wy, wz]], device=dev)
+
+    # The deployed hover policy's frame history (obs_stack frames, oldest->newest), seeded on the
+    # first call exactly like the env's reset and the pilot's — see pilot.policy.stack_frames.
+    hov_hist: deque = deque(maxlen=hov.obs_stack if hov else 1)
+
+    def hover_ctbr(z_target: float) -> torch.Tensor:
+        """The SHIPPED hover policy -> DiffAero CTBR, tracking ``z_target``.
+
+        obs-6 ``[roll, pitch, p, q, r, height_err]`` exactly as ``tasks/hover_tof.py`` builds it,
+        with the measured height clamped into the bridge ToF's band (``h_meas``); no sensor DR, so
+        this is the clean-eval reading. Moving ``z_target`` is how the sequence climbs and lands —
+        the same setpoint the pilot feeds on the real drone, walked up and down.
+        """
+        roll, pitch, _ = dyn.rpy[0].tolist()
+        p, q, r = dyn.ang_vel_body[0].tolist()
+        h_meas = min(max(dyn.pos[0, 2].item(), 0.0), TOF_MAX_M)
+        frame = [roll, pitch, p, q, r, z_target - h_meas]
+        act = hov(stack_frames(hov_hist, frame, hov.obs_stack))
+        # Close the ONE loop the hover policy deliberately doesn't: heading. obs-v4 drops yaw
+        # ("not observable without a magnetometer"), so the policy has no yaw reference and settles
+        # on a small constant yaw-rate bias (~-5.8 deg/s here) — harmless for hovering, and exactly
+        # what the real bridge sees. It is NOT harmless for the flip handoff (see the FLIP_YAW_LIMIT
+        # note below), so the harness holds heading on the gyro-integrated yaw the pilot already
+        # forwards from MSP_ATTITUDE. This overrides only the yaw channel; thrust/roll/pitch stay
+        # the policy's.
+        yaw = dyn.rpy[0, 2].item()
+        act = list(act)
+        act[3] = max(-1.0, min(1.0, -KP_YAW * yaw / lim.max_body_rate_yaw_rps))
+        return action_to_diffaero(torch.tensor([act], device=dev), lim), act
 
     phi = 0.0
     t = 0.0
@@ -173,9 +254,10 @@ def main() -> int:
         # --- decide the control action for this step ---
         rot_rem = 1.0
         if not flip_started and t >= T_SETTLE0 + T_CLIMB + T_HOVER:
-            # Trigger the flip once settled at hover & near-level.
+            # Trigger the flip once settled at hover: level, and nose-aligned (FLIP_YAW_LIMIT_DEG).
             tilt = math.hypot(*dyn.rpy[0, :2].tolist())
-            if math.degrees(tilt) < 8.0:
+            yaw_off = abs(math.degrees(dyn.rpy[0, 2].item()))
+            if math.degrees(tilt) < 8.0 and yaw_off < FLIP_YAW_LIMIT_DEG:
                 flipping, flip_started, flip_t0 = True, True, t
                 phi = 0.0
 
@@ -213,8 +295,11 @@ def main() -> int:
                     land_t0, z_land0 = t, dyn.pos[0, 2].item()
                 phase = "land"
                 z_tgt = z_land0 - LAND_RATE * (t - land_t0)
-            ctbr = pd_ctbr(z_tgt)
-            act_v2 = _act_v2_from_ctbr(ctbr[0], lim)
+            if hov is not None:
+                ctbr, act_v2 = hover_ctbr(z_tgt)
+            else:
+                ctbr = pd_ctbr(z_tgt)
+                act_v2 = _act_v2_from_ctbr(ctbr[0], lim)
 
         # --- step + record ---
         dyn.step(ctbr)

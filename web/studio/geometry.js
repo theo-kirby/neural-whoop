@@ -107,7 +107,7 @@ const FALLBACK_TILE = {
 // lines. `palette` (tileA/tileB/line/dot/label) themes it; `repeatX`/`repeatY` tile it to cover a
 // face at 1 m/square (per-axis so walls stay square when height != footprint). Returns a
 // THREE.CanvasTexture (RepeatWrapping, sRGB).
-function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1) {
+function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, labels = true) {
   const S = 512, M = S / 2;                  // 512 px = 2 m  ->  256 px per metre
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
@@ -132,12 +132,15 @@ function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1) {
   for (const a of marks) for (const b of halves) { dotAt(a, b); dotAt(b, a); }
 
   // Labels along the lines (faint), repeated every 2 m like the reference. Read correctly (not
-  // mirrored) on the floor, which is built as a front-facing plane below.
+  // mirrored) on the floor, which is built as a front-facing plane below. `labels: false` drops
+  // them for a clean product shot — the metre grid still carries the scale.
+  if (labels) {
   ctx.fillStyle = label;
   ctx.font = "bold 34px system-ui, -apple-system, sans-serif";
   ctx.textBaseline = "alphabetic";
   ctx.save(); ctx.translate(24, M - 16); ctx.fillText("1 METER", 0, 0); ctx.restore();
   ctx.save(); ctx.translate(M - 16, S - 24); ctx.rotate(-Math.PI / 2); ctx.fillText("PROTOTYPE", 0, 0); ctx.restore();
+  }
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
@@ -156,7 +159,8 @@ function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1) {
 //     (hovering inside) as you orbit. Per-face texture repeats keep every square 1 m even when the
 //     height differs from the footprint. Dispose the whole group (geometry + per-face textures) to
 //     tear it down.
-export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette = FALLBACK_TILE } = {}) {
+export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette = FALLBACK_TILE,
+                                   labels = true } = {}) {
   const group = new THREE.Group();
   const rH = size / 2, rV = height / 2;      // texture block is 2 m -> repeat = metres / 2
 
@@ -165,7 +169,7 @@ export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
     new THREE.MeshStandardMaterial(
-      { map: greyboxTexture(palette, rH, rH), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+      { map: greyboxTexture(palette, rH, rH, labels), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
   floor.position.set(0, 0, floorZ + 0.003);
   floor.receiveShadow = true;
   group.add(floor);
@@ -174,7 +178,7 @@ export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette
   // [+X,-X,+Y,-Y,+Z,-Z]; ±X/±Y are walls (repeat height×footprint / footprint×height), ±Z the
   // ceiling/floor faces (footprint×footprint). The -Z face is hidden under the floor plane above.
   const wall = (rx, ry) => new THREE.MeshStandardMaterial(
-    { map: greyboxTexture(palette, rx, ry), roughness: 1, metalness: 0, side: THREE.BackSide });
+    { map: greyboxTexture(palette, rx, ry, labels), roughness: 1, metalness: 0, side: THREE.BackSide });
   const mats = [wall(rV, rH), wall(rV, rH), wall(rH, rV), wall(rH, rV), wall(rH, rH), wall(rH, rH)];
   const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, height), mats);
   box.position.set(0, 0, floorZ + height / 2);
