@@ -194,7 +194,7 @@ def test_flip_command_as_starter_takes_off_flips_then_hovers(tmp_path):
     mgr = FlightManager(
         "fake", weights=_synth_weights(tmp_path), acro_weights=_synth_acro_weights(tmp_path),
         params=FlightParams(launch=True, hold_seconds=0.1, seconds=8.0, ramp_s=0.1,
-                            acro_flip_max_s=1.0),
+                            maneuver_len_s=0.8, acro_flip_max_s=1.0),
         runs_dir=tmp_path / "pilot", client_factory=lambda *_a, **_k: fake)
     app = _app_with(tmp_path, mgr)
     with TestClient(app) as client:

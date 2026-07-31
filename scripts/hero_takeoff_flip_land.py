@@ -50,6 +50,14 @@ from neural_whoop.viz.replay import (
 
 _AXIS_IDX = {"roll": 0, "pitch": 1}
 
+#: The obs-8 maneuver clock's window (s) — must match the trained task's ``maneuver_len_s``
+#: (configs/acro_flip_v2.yaml) and the pilot's ``FlightParams.maneuver_len_s``, or the policy sees a
+#: differently-scaled clock than it learned on. The flip starts when the hover half has settled,
+#: which is the same handoff the real pilot's trigger is.
+MANEUVER_LEN_S = 1.2
+#: The pilot's free-flight throttle floor (``FlightParams.min_thrust_frac``), in normed thrust units.
+MIN_THRUST_NORMED = 0.25
+
 #: The shipped 1.0 m hover policy (★ studio-baseline) — the same weights scripts/pilot.py and the
 #: Studio Bench tab fly on the real Air65 II. It owns climb / hover / recover / land here.
 DEFAULT_HOVER_WEIGHTS = "runs/hover_tof_air65_w128u15/policy_weights.json"
@@ -96,7 +104,10 @@ def main() -> int:
         "runs/acro_flip/policy_weights.json" if args.axis == "roll"
         else "runs/acro_flip_pitch/policy_weights.json")
     pol = Policy(weights)
-    assert pol.base_obs_dim == 7, f"expected obs-7 acro policy, got {pol.base_obs_dim}"
+    assert pol.base_obs_dim == 8, (
+        f"expected the obs-8 acro policy [gravity_body(3), p, q, r, rotation_remaining, "
+        f"maneuver_phase], got base_obs_dim {pol.base_obs_dim}. An obs-7 (v1) file cannot be fed "
+        f"here — the clock is a real input, not padding. Retrain with configs/acro_flip_v2.yaml.")
 
     # The hover half of the sequence: the SHIPPED policy, not a hand-written PD. Same weights the
     # Bench dashboard and scripts/pilot.py fly on the real Air65 II, run through the same pure-Python
@@ -111,7 +122,10 @@ def main() -> int:
         print(f"flip:  {weights} (acro_flip, obs-7)")
 
     dev = torch.device(args.device)
-    lim = ActionLimits()
+    # The deploy throttle floor, exactly as configs/acro_flip_v2.yaml trains against and
+    # pilot/controller.py clamps at (FlightParams.min_thrust_frac). The v2 flip is a COAST, so the
+    # floor is load-bearing here: rendering without it would show a maneuver the real drone can't fly.
+    lim = ActionLimits(min_thrust_normed=MIN_THRUST_NORMED)
     dt = 0.02
     # Fixed airframe (no DR) for a clean, repeatable hero shot.
     params = WhoopParams(randomize_airframe=False, dt=dt)
@@ -269,7 +283,12 @@ def main() -> int:
             rate_axis = p if axis == 0 else q
             phi += rate_axis * dt
             rot_rem = (phi_target - min(max(phi, 0.0), phi_target)) / phi_target
-            obs = [grav[0].item(), grav[1].item(), grav[2].item(), p, q, r, rot_rem]
+            # The maneuver clock, running 1->0 across MANEUVER_LEN_S from the handoff (flip_t0) —
+            # the same t_trigger the task assumes and the pilot supplies. Paired with rot_rem, which
+            # is the gyro integral: the clock lets the policy plan the pop, the integral keeps it
+            # honest if the roll runs long.
+            man_phase = min(1.0, max(0.0, 1.0 - (t - flip_t0) / MANEUVER_LEN_S))
+            obs = [grav[0].item(), grav[1].item(), grav[2].item(), p, q, r, rot_rem, man_phase]
             act = pol(obs)                                    # act-v2 [-1,1]
             ctbr = action_to_diffaero(torch.tensor([act], device=dev), lim)
             act_v2 = act

@@ -11,12 +11,19 @@ task:
   axis: pitch
   n_rotations: 1.0
   episode_len: 200
+  maneuver_len_s: 1.2
   rot_scale: 1.0
   completion_bonus: 10.0
   upright_scale: 0.4
   upright_sigma: 0.5
   spin_penalty: 0.01
-  alt_scale: 0.1
+  # v1 reward, expressed in the v2 knobs (see configs/acro_flip.yaml's header): symmetric altitude
+  # at 0.1, no station-keeping. The pitch axis follows the roll axis to v2 only once v2 lands.
+  lat_scale: 0.0
+  sink_scale: 0.1
+  rise_scale: 0.1
+  pop_allow: 0.0
+  settle_scale: 0.0
   alive_bonus: 0.1
   smoothness_penalty: 0.001
   crash_penalty: 10.0
@@ -39,9 +46,9 @@ dr:
   rate_gain_frac: 0.15
   thrust_scale_frac: 0.05
   obs_noise_std: 0.0
-  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem]
-  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0]
-  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0]
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem, phase]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,     0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,     0.0]
   action_latency_steps: 2
 
 whoop:

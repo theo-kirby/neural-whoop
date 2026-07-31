@@ -100,12 +100,21 @@ class ActionLimits:
         hover_thrust_normed: Thrust that cancels gravity (DiffAero convention, ==1.0).
         max_body_rate_rp_rps: Max |roll/pitch rate| commanded (rad/s).
         max_body_rate_yaw_rps: Max |yaw rate| commanded (rad/s).
+        min_thrust_normed: **Free-flight throttle FLOOR** in the same normed units — the sim-side
+            mirror of the pilot's ``FlightParams.min_thrust_frac`` clamp
+            (``pilot/controller.py``: ``t_des = max(p.min_thrust_frac, …)``, default 0.25).
+            Without it the sim lets a policy learn a near-zero-throttle profile that the deploy
+            path then silently rewrites — and worse, one the airframe cannot fly: at idle throttle
+            without Betaflight AIRMODE the whoop loses rate authority (the recorded flip-stall
+            failure, ``docs/SIM2REAL.md``). Any task that rewards a *coast* (``acro_flip``) must
+            set this to the deploy value. Default ``0.0`` = no floor, bit-identical to before.
     """
 
     max_thrust_normed: float = 4.0
     hover_thrust_normed: float = 1.0
     max_body_rate_rp_rps: float = 12.0   # ~690 deg/s — aggressive acro for a whoop
     max_body_rate_yaw_rps: float = 6.0   # ~340 deg/s yaw
+    min_thrust_normed: float = 0.0       # 0 = no floor (legacy); acro sets the deploy's 0.25
 
 
 def action_to_diffaero(action: Tensor, limits: ActionLimits | None = None) -> Tensor:
@@ -113,8 +122,10 @@ def action_to_diffaero(action: Tensor, limits: ActionLimits | None = None) -> Te
 
     Returns ``[normed_thrust, roll_rate, pitch_rate, yaw_rate]`` where ``normed_thrust`` is in
     DiffAero units (1.0 == hover) and the rates are rad/s. The thrust channel maps the input
-    ``[-1, 1]`` affinely onto ``[0, max_thrust_normed]``; rates map linearly onto their limits.
-    Inputs are clipped to ``[-1, 1]`` first (defensive — policy output should already be tanh'd).
+    ``[-1, 1]`` affinely onto ``[0, max_thrust_normed]``, then takes the
+    ``limits.min_thrust_normed`` floor (default ``0.0`` -> a no-op); rates map linearly onto their
+    limits. Inputs are clipped to ``[-1, 1]`` first (defensive — policy output should already be
+    tanh'd).
 
     Args:
         action: Normalized action, shape ``(..., 4)``.
@@ -126,6 +137,11 @@ def action_to_diffaero(action: Tensor, limits: ActionLimits | None = None) -> Te
     limits = limits or ActionLimits()
     a = action.clamp(-1.0, 1.0)
     thrust = (a[..., 0:1] + 1.0) * 0.5 * limits.max_thrust_normed
+    # The deploy path's free-flight throttle floor, modeled here so a policy cannot learn a profile
+    # the pilot will silently rewrite (see ActionLimits.min_thrust_normed). Applied AFTER the affine
+    # map, in the same units the pilot's clamp uses, so the two mean exactly the same thing.
+    if limits.min_thrust_normed > 0.0:
+        thrust = thrust.clamp_min(limits.min_thrust_normed)
     wx = a[..., 1:2] * limits.max_body_rate_rp_rps
     wy = a[..., 2:3] * limits.max_body_rate_rp_rps
     wz = a[..., 3:4] * limits.max_body_rate_yaw_rps

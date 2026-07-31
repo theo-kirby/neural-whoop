@@ -1,8 +1,15 @@
-# acro_flip: learned single-axis barrel ROLL — the first agility (acro) task. Pure IMU + the
-# existing act-v2 CTBR contract (no new hardware). The policy spins about the roll axis (body-rate
-# p) until an accumulated 360° is reached, then recovers to level flight. Reward-shaped discovery,
-# no reference trajectory. First run: a smaller step budget than the 3.2B hover flagship to get a
-# fast read on whether the trick emerges; scale up once GREEN. Metric: flip_success_rate.
+# acro_flip v1 — the ORIGINAL learned barrel ROLL, kept as the A/B baseline for acro_flip_v2.
+# Pure IMU + the existing act-v2 CTBR contract (no new hardware). The policy spins about the roll
+# axis (body-rate p) until an accumulated 360° is reached, then recovers to level flight.
+# Reward-shaped discovery, no reference trajectory. Result: GREEN, flip_success_rate 0.845 — but a
+# WIDE, loopy roll (~0.4 m of altitude shed, a long sideways drift), because the reward had no
+# lateral term at all and a symmetric altitude term that punished the pop a tight flip needs.
+#
+# This file is the v1 reward expressed in the v2 task's knobs, so the baseline stays exactly
+# reproducible under the current code: sink_scale == rise_scale with pop_allow 0 IS the old
+# symmetric `alt_scale·|z − z0|` at 0.1, and lat_scale/settle_scale 0 is "no station-keeping".
+# NOTE it is NOT a like-for-like rerun of runs/acro_flip's checkpoint: that policy is obs-7 and
+# the task is now obs-8 (the maneuver clock). See configs/acro_flip_v2.yaml for the retrain.
 
 run:
   name: acro_flip
@@ -12,12 +19,17 @@ task:
   axis: roll
   n_rotations: 1.0
   episode_len: 200
+  maneuver_len_s: 1.2
   rot_scale: 1.0
   completion_bonus: 10.0
   upright_scale: 0.4
   upright_sigma: 0.5
   spin_penalty: 0.01
-  alt_scale: 0.1
+  lat_scale: 0.0          # v1: no lateral term whatsoever — the reason the roll went wide
+  sink_scale: 0.1         # v1's alt_scale ...
+  rise_scale: 0.1         # ... symmetric, because sink == rise ...
+  pop_allow: 0.0          # ... with no free headroom -> exactly -0.1·|z − z0|
+  settle_scale: 0.0       # v1: no return-and-stop term
   alive_bonus: 0.1
   smoothness_penalty: 0.001
   crash_penalty: 10.0
@@ -40,13 +52,14 @@ dr:
   rate_gain_frac: 0.15
   thrust_scale_frac: 0.05       # tight: deployment calibrates hover throttle on the bench
   obs_noise_std: 0.0            # superseded by the per-channel list below
-  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem]
-  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0]
-  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0]
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem, phase]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,     0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,     0.0]
   action_latency_steps: 2
   # The key acro sim2real risk: the attitude estimate degrades mid-flip (fast rotation confuses the
   # complementary/Mahony filter) — modeled by noise+bias on the gravity_body channels above. Gyro
-  # stays low-noise (reliable through acro rates); rotation_remaining is a clean pilot-clock signal.
+  # stays low-noise (reliable through acro rates); rotation_remaining and the maneuver-phase clock
+  # are both noise-free — they are the pilot's own signals, not measurements.
 
 # Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band (from d50var_s8).
 whoop:

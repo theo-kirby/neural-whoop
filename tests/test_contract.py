@@ -52,3 +52,38 @@ def test_action_clipping():
     lim = ActionLimits()
     assert torch.isclose(out[0, 0], torch.tensor(lim.max_thrust_normed))  # +5 clipped to +1
     assert torch.isclose(out[0, 1], torch.tensor(-lim.max_body_rate_rp_rps))
+
+
+# --- the deploy throttle floor (min_thrust_normed) ---
+
+
+def test_min_thrust_normed_default_is_a_no_op():
+    """Default 0.0 must be BIT-identical to the pre-floor mapping, for every existing task."""
+    a = torch.rand(64, ACT_DIM) * 2 - 1
+    assert ActionLimits().min_thrust_normed == 0.0
+    assert torch.equal(
+        action_to_diffaero(a, ActionLimits()),
+        action_to_diffaero(a, ActionLimits(min_thrust_normed=0.0)),
+    )
+    # act[0] == -1 still means motors off when no floor is configured.
+    assert torch.isclose(action_to_diffaero(torch.tensor([[-1.0, 0, 0, 0]]))[0, 0],
+                         torch.tensor(0.0))
+
+
+def test_min_thrust_normed_floors_the_thrust_channel_only():
+    """The sim-side mirror of pilot/controller.py's `t_des = max(min_thrust_frac, ...)` clamp.
+
+    Without it a policy rewarded for coasting (acro_flip v2) learns a near-zero-throttle profile
+    that the deploy path silently rewrites — and that the airframe cannot fly at all without
+    AIRMODE (the recorded flip-stall failure).
+    """
+    lim = ActionLimits(min_thrust_normed=0.25)
+    a = torch.tensor([[-1.0, 0.5, -0.5, 0.25], [-0.9, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+    out = action_to_diffaero(a, lim)
+    # Below the floor -> clamped up to it (motors-off is no longer reachable).
+    assert torch.isclose(out[0, 0], torch.tensor(0.25))
+    assert torch.isclose(out[1, 0], torch.tensor(0.25))   # 0.05*4 = 0.2 < 0.25
+    # Above the floor -> untouched (0 -> mid-scale 2.0 hover units).
+    assert torch.isclose(out[2, 0], torch.tensor(0.5 * lim.max_thrust_normed))
+    # Rate channels are never touched by the floor.
+    assert torch.allclose(out[:, 1:], action_to_diffaero(a, ActionLimits())[:, 1:])

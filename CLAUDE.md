@@ -203,7 +203,11 @@ See `docs/CONTRACT.md` for the full spec. In short:
 - **obs-v4** (length 11, body-frame, heading-invariant): `[target_rel(3), vel_body(3), roll, pitch,
   p, q, r]`. `gate_race` appends a 3-vector next-gate lookahead → obs_dim 14.
 - **act-v2** (length 4, CTBR, normalized `[-1,1]`): `[collective_thrust, roll_rate, pitch_rate,
-  yaw_rate]`. `action_to_diffaero()` maps it to DiffAero's controller (thrust `1.0` == hover).
+  yaw_rate]`. `action_to_diffaero()` maps it to DiffAero's controller (thrust `1.0` == hover), then
+  applies `ActionLimits.min_thrust_normed` — a **free-flight throttle floor** mirroring the pilot's
+  `min_thrust_frac` clamp, so a task that rewards a coast can't learn a profile deploy rewrites.
+  Default `0.0` = no floor; set per-config via an `act:` section (`experiment.py::make_act_limits`).
+  `acro_flip` sets `0.25`, the deploy value.
 - The env applies **domain randomization** on top: airframe (mass/inertia/drag, inside DiffAero) +
   seam (wind, rate-gain, thrust scale, action latency, obs noise). Training across these is what
   makes a tiny policy transferable.

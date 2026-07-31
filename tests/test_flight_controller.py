@@ -316,8 +316,10 @@ def test_acro_flip_bounded_window_exits_even_if_never_relevels(weights, acro_wei
     crash detector re-arms (a real tumble after a failed flip must still cut)."""
     fake = FakeMsp()
     clk = Clock()
+    # A deliberately SHORT backstop, so the maneuver window shrinks with it: FlightParams enforces
+    # acro_flip_max_s >= maneuver_len_s (the window has to contain the trained maneuver).
     params = FlightParams(takeoff=False, launch=False, seconds=10.0, flip_at_s=0.1,
-                          acro_axis="roll", acro_flip_max_s=0.5)
+                          acro_axis="roll", maneuver_len_s=0.4, acro_flip_max_s=0.5)
     ctrl = FlightController(fake, Policy(str(weights)), params,
                             acro_policy=Policy(str(acro_weights)), start_mode="software",
                             clock=clk, sleep=lambda _s: None)

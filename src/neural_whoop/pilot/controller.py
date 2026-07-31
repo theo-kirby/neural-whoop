@@ -37,6 +37,7 @@ from neural_whoop.bench.msp import (
 from .config import (
     ACRO_AXIS,
     ACRO_FLIP_MAX_S,
+    ACRO_MANEUVER_LEN_S,
     ACRO_N_ROTATIONS,
     ACRO_SETTLE_TILT_DEG,
     ACRO_START_SETTLE_S,
@@ -136,6 +137,8 @@ class FlightParams:
     flip_at_s: float | None = None
     acro_axis: str = ACRO_AXIS
     acro_n_rotations: float = ACRO_N_ROTATIONS
+    #: The obs-8 maneuver clock's window — must match the trained task's ``maneuver_len_s``.
+    maneuver_len_s: float = ACRO_MANEUVER_LEN_S
     acro_flip_max_s: float = ACRO_FLIP_MAX_S
     acro_settle_tilt_deg: float = ACRO_SETTLE_TILT_DEG
 
@@ -144,6 +147,15 @@ class FlightParams:
             raise ValueError("pick one of takeoff / launch")
         if self.acro_axis not in ("roll", "pitch"):
             raise ValueError(f"acro_axis must be 'roll' or 'pitch', got {self.acro_axis!r}")
+        if self.maneuver_len_s <= 0.0:
+            raise ValueError(f"maneuver_len_s must be > 0, got {self.maneuver_len_s}")
+        # The safety backstop has to CONTAIN the maneuver the policy was trained to fly, or the
+        # window closes mid-catch and hands back a still-tumbling airframe.
+        if self.acro_flip_max_s < self.maneuver_len_s:
+            raise ValueError(
+                f"acro_flip_max_s ({self.acro_flip_max_s}) must be >= maneuver_len_s "
+                f"({self.maneuver_len_s}): the bounded FLIP window has to contain the whole "
+                "trained maneuver (pop -> rotate -> catch)")
 
 
 class FlightController:
@@ -242,6 +254,12 @@ class FlightController:
         self.t_flip_start: float | None = None
         self.phi_flip = 0.0            # signed accumulated rotation about the maneuver axis (rad)
         self.rot_rem = 1.0            # rotation_remaining ∈ [1->0], the acro policy's phase signal
+        # maneuver_phase ∈ [1->0]: the TIME clock across the flip window, obs-8's 8th channel. Where
+        # rot_rem is a gyro integral (how much ANGLE is left), this is how much TIME is left, and the
+        # v2 policy needs it to time the pop -> rotate -> catch beats at all (with obs-7 the pre-roll
+        # pop is invisible: a level, at-rest airframe is a fixed point). Costs no hardware — the
+        # pilot owns the clock. Zero for an obs-7 (v1) policy, which never sees this channel.
+        self.man_phase = 1.0
         self.flipping = False
         self.flip_triggered = False   # a flip was requested this flight (gates the auto-trigger)
         self.flip_pending = False     # flip-as-starter: fire once free HOVER settles (request_flip
@@ -377,6 +395,7 @@ class FlightController:
         self.t_flip_start = self._clock()
         self.phi_flip = 0.0
         self.rot_rem = 1.0
+        self.man_phase = 1.0   # the clock starts at the trigger — same t_trigger the task assumes
         self.flipping = True
         self.flip_triggered = True
         self.flip_pending = False
@@ -615,7 +634,15 @@ class FlightController:
             self.phi_flip += rate_axis * self.direction * dt_tick
             self.rot_rem = (self.phi_target - min(max(self.phi_flip, 0.0), self.phi_target)) \
                 / self.phi_target
-            act = self.acro_pol(obs_from_msp_acro(self.tel.att, self.tel.imu, self.rot_rem))
+            # The obs-8 time clock, alongside the rotation integral. T = maneuver_len_s (the window
+            # the policy trained on), NOT acro_flip_max_s (the safety backstop, which is >= it).
+            t_in_flip = (now - self.t_flip_start) if self.t_flip_start is not None else 0.0
+            self.man_phase = min(1.0, max(0.0, 1.0 - t_in_flip / p.maneuver_len_s))
+            # obs-8 policies take the clock; obs-7 (v1) files must NOT — passing None keeps the
+            # 7-dim frame byte-identical to what they trained on.
+            phase_ch = self.man_phase if self.acro_pol.base_obs_dim >= 8 else None
+            act = self.acro_pol(
+                obs_from_msp_acro(self.tel.att, self.tel.imu, self.rot_rem, phase_ch))
             # Exit -> HOVER when the rotation completed AND we re-leveled, or when the bounded
             # window elapses (the safety backstop that re-arms the crash detector).
             tilt = math.hypot(self.roll, self.pitch)
@@ -625,6 +652,7 @@ class FlightController:
                     or elapsed >= p.acro_flip_max_s:
                 self.flipping = False
                 self.rot_rem = 0.0
+                self.man_phase = 0.0
                 self._log(f"\nFLIP done (rot {self.phi_flip / self.phi_target:.2f}·Φ, "
                           f"tilt {math.degrees(tilt):.0f}°, {elapsed:.2f}s) -> HOVER")
         else:
@@ -860,7 +888,8 @@ class FlightController:
                 "tilt_deg": tilt_deg, "vz_est": self.vz, "thrust_norm": self._thrust_norm,
                 "hover_eff": self.hover_eff, "trim": self.thr_trim, "us_corr": self.us_corr,
                 "link_age_ms": age_ms, "battery_v": self.tel.vbat,
-                "rotation_remaining": self.rot_rem, "flipping": self.flipping,
+                "rotation_remaining": self.rot_rem, "maneuver_phase": self.man_phase,
+                "flipping": self.flipping,
             },
             "status": {
                 "armed": self.armed_seen, "override_on": self.override_on,

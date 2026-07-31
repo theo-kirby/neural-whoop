@@ -246,27 +246,53 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
 
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,
-  with `mean_altitude_loss` (max `z0 − z`) + `mean_completion_time` + `post_recovery_tilt_deg`
-  characterizing the maneuver and `crash_rate_per_step` the guardrail.
-- **Obs/oracle:** **[gravity_body(3), p, q, r, rotation_remaining]** (7), deploy-honest / IMU-only.
-  `gravity_body` (`Rᵀ·[0,0,-1]`) is unambiguous through a full inversion where euler roll/pitch
-  wrap/gimbal-lock; `rotation_remaining` ∈ [1→0] is the maneuver-phase signal (tracked internally in
-  sim; supplied by the pilot's maneuver clock at deploy). No altitude channel — altitude is open-loop
-  for the brief maneuver (RPM thrust anchor defends it) and used only in the *reward* (privileged).
-- **Status:** implemented (`tasks/acro_flip.py`, `configs/acro_flip.yaml` barrel roll +
-  `configs/acro_flip_pitch.yaml` axis variant; tiny `[64,64]` net, obs 7). Reward-shaped discovery,
-  **no reference trajectory**: a monotone/saturating rotation-progress term toward Φ (`reward.rotation_progress`)
-  + one-time completion bonus + a recover term (upright bell − spin, gated after completion) +
-  privileged altitude-keep − smoothness − crash. Spawn = level hover at rest (the flip is the learned
-  behaviour). Config-selectable `axis` (roll→`p` / pitch→`q`) and `n_rotations`. No env/contract/dynamics
-  changes — the rate envelope (`ActionLimits.max_body_rate_rp_rps = 12` rad/s ≈ 690°/s) is already
-  acro-capable. Awaiting the first 5090 training run + Studio visual verdict.
+  with the **shape** metrics next to it: `mean_altitude_loss` (max `z0 − z`), `max_lateral_drift`,
+  `peak_climb` (the pop — this one *should* be nonzero), `settle_pos_error`, `mean_completion_time`,
+  `post_recovery_tilt_deg`, and `crash_rate_per_step` as the guardrail.
+- **Obs/oracle:** **[gravity_body(3), p, q, r, rotation_remaining, maneuver_phase]** (8),
+  deploy-honest / IMU-only **plus the pilot's own clock — no new sensor**. `gravity_body`
+  (`Rᵀ·[0,0,-1]`) is unambiguous through a full inversion where euler roll/pitch wrap/gimbal-lock.
+  The two phase channels are complementary and that is the point: `rotation_remaining` ∈ [1→0] is a
+  **gyro integral** (how much *angle* is left) and `maneuver_phase` ∈ [1→0] a **time clock** over
+  `maneuver_len_s` (how much of the window is left). The clock lets the policy *plan* the
+  pop → rotate → catch beats; the rotation signal keeps it honest when DR makes the roll run long or
+  short (a clock alone would run out mid-inversion under a low rate-gain draw). Both are tracked
+  internally in sim and supplied by the pilot's maneuver clock at deploy. **v2 added the clock
+  because the pop is otherwise unlearnable, not merely unrewarded:** with obs-7 a level, at-rest
+  drone is a *fixed point* — `gravity_body` is pure attitude and carries no specific force — so a
+  vertical thrust burst is invisible and the policy cannot tell "just spawned" from "0.2 s into a
+  pop". No altitude channel: altitude is open-loop for the brief maneuver (RPM thrust anchor defends
+  it) and used only in the *reward* (privileged). The downward VL53L1X is deliberately **not** used —
+  it points sideways then up mid-flip, i.e. it is garbage exactly when the maneuver needs it.
+- **Status:** implemented (`tasks/acro_flip.py`; `configs/acro_flip_v2.yaml` is the current roll
+  config, `configs/acro_flip.yaml` the v1 baseline expressed in the v2 knobs,
+  `configs/acro_flip_pitch.yaml` the axis variant; tiny `[64,64]` net, obs 8). Reward-shaped
+  discovery, **no reference trajectory**. v1 (GREEN, `flip_success_rate` 0.845) threw a **wide,
+  loopy barrel roll** — ~0.4 m of altitude shed and a long sideways drift — because its reward had
+  **no lateral term at all** and a *symmetric* altitude term that punished the very pop a tight flip
+  needs. v2 makes it a **point-in-space** flip: rotation-progress toward Φ
+  (`reward.rotation_progress`) + one-time completion bonus + a recover term (upright bell − spin,
+  gated after completion) − lateral station-keeping ‖xy − xy₀‖ throughout − an **asymmetric**
+  altitude penalty (heavy `sink_scale`, light `rise_scale`, past `pop_allow` metres of free
+  headroom) − a recover-gated settle/return term − smoothness − crash, with `alive_bonus` cut
+  0.1 → 0.02 so shaping is not swamped. The asymmetry is what *licenses* the pop, and the physics
+  says that shape is the reward's optimum: a 2π roll at the 12 rad/s envelope takes ≥ 0.52 s and a
+  zero-thrust coast that long falls ~1 m, so entering at `v_up ≈ 2.4 m/s` puts the apex mid-flip and
+  returns to `z₀` at −2.4 m/s (arrested by ~3 g in 0.08 s / 0.10 m) — net ~+0.3 m up, ~−0.1 m down,
+  ~zero lateral, because a coast applies no lateral force at all. Spawn = level hover at rest (the
+  flip is the learned behaviour). Config-selectable `axis` (roll→`p` / pitch→`q`) and `n_rotations`.
+  Scope this round is **roll only**, A/B'd against the v1 roll baseline; pitch follows if it lands.
 - **Sim2real basis:** pure IMU + the existing act-v2 CTBR contract → **zero new hardware** (the
   productive agility milestone while the XIAO Sense camera module ships). The acro sim2real risk —
   the attitude estimate degrading mid-flip — is modeled by per-channel obs noise/bias on the
-  `gravity_body` channels (config only). Real acro *flight* (a `scripts/pilot.py` deploy change:
-  `obs_from_msp_acro` + a relaxed `check_policy_family` + a maneuver trigger) is a later milestone;
-  sim train + eval + Studio need none of it.
+  `gravity_body` channels (config only); both phase channels are noise-free, being the pilot's own
+  signals rather than measurements. **v2 adds the one contract change the task family has needed:**
+  `ActionLimits.min_thrust_normed` (config `act.min_thrust_normed: 0.25`), the sim-side mirror of
+  the pilot's free-flight throttle floor. Rewarding a *coast* means rewarding near-zero throttle
+  mid-flip, which the deploy path clamps — so without modeling it the policy learns a profile the
+  pilot silently rewrites. Default `0.0` leaves every other task bit-identical. See
+  `docs/SIM2REAL.md` for the AIRMODE prerequisite that the floor is insurance against, not a
+  guarantee of.
 
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.

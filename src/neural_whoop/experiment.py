@@ -2,8 +2,8 @@
 
 Centralizes the "build the pieces from a config dict" logic so ``scripts/train.py``,
 ``scripts/eval.py``, and the autonomous agent all construct experiments the same way. A config
-is a plain dict (loaded from YAML) with optional sections ``task``, ``env``, ``dr``, ``whoop``,
-``ppo``, ``run``; unknown keys in a section raise (typo guard).
+is a plain dict (loaded from YAML) with optional sections ``task``, ``env``, ``act``, ``dr``,
+``whoop``, ``ppo``, ``run``; unknown keys in a section raise (typo guard).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from pathlib import Path
 import torch
 import yaml
 
+from neural_whoop.contract import ActionLimits
 from neural_whoop.dynamics.whoop import WhoopParams
 from neural_whoop.envs.base import MultiAgentDroneEnv
 from neural_whoop.envs.registry import make_task
@@ -47,6 +48,16 @@ def make_dr(cfg: dict) -> DomainRandomizationConfig:
 
 def make_whoop(cfg: dict) -> WhoopParams:
     return _filtered(WhoopParams, cfg.get("whoop"))
+
+
+def make_act_limits(cfg: dict) -> ActionLimits:
+    """Build the :class:`ActionLimits` from the optional ``act:`` section (absent -> defaults).
+
+    The act-v2 envelope was previously always the dataclass defaults; a task that has to model a
+    deploy-side action clamp (``acro_flip``'s ``min_thrust_normed``, mirroring the pilot's
+    free-flight throttle floor) needs it per-config. Omitting ``act:`` is bit-identical to before.
+    """
+    return _filtered(ActionLimits, cfg.get("act"))
 
 
 def make_ppo(cfg: dict) -> PPOConfig:
@@ -89,6 +100,7 @@ def build_env(
         seed=seed if seed is not None else int(env_cfg.get("seed", 0)),
         dr_cfg=dr,
         whoop_params=whoop,
+        action_limits=make_act_limits(cfg),
         obs_stack=int(env_cfg.get("obs_stack", 1)),
         append_prev_action=bool(env_cfg.get("append_prev_action", False)),
     )

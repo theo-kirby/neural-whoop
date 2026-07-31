@@ -79,8 +79,16 @@ RAMP_DOWN_S = 1.5
 # The task side fixes Φ = 2π·n_rotations and the 15° recovered-tilt success gate; these mirror it.
 ACRO_AXIS = "roll"            # "roll" (drives gyro p) or "pitch" (drives gyro q) — matches acro_flip
 ACRO_N_ROTATIONS = 1.0        # Φ = 2π·n_rotations (1 = a single barrel roll / loop)
-ACRO_FLIP_MAX_S = 1.0         # HARD bounded window: exit FLIP no later than this (safety — a failed
-#                              flip must hand the crash detector back before a real tumble persists)
+ACRO_MANEUVER_LEN_S = 1.2     # the obs-8 maneuver CLOCK's window: maneuver_phase runs 1->0 across
+#                              pop -> rotate -> catch. MUST equal the trained task's
+#                              maneuver_len_s (configs/acro_flip_v2.yaml) or the policy sees a
+#                              differently-scaled clock than it learned on. Unused by obs-7 (v1).
+ACRO_FLIP_MAX_S = 1.4         # HARD bounded window: exit FLIP no later than this (safety — a failed
+#                              flip must hand the crash detector back before a real tumble persists).
+#                              Raised 1.0 -> 1.4 for obs-8: the backstop has to CONTAIN the trained
+#                              maneuver (1.2 s) with a beat of grace for the catch under a slow
+#                              rate-gain draw, or it would cut the catch off mid-recovery. The cost
+#                              is 0.4 s more tumble before the crash detector re-arms on a failure.
 ACRO_SETTLE_TILT_DEG = 15.0   # a completed flip counts as recovered (-> HOVER) when tilt < this
 #                              (= acro_flip's success_tilt_deg)
 ACRO_START_SETTLE_S = 1.0     # flip-as-starter: free-hover time before the pending flip fires (the

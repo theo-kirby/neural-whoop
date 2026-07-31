@@ -345,18 +345,28 @@ the **system-level** split: the learned policy owns only the *flip*; the pilot's
 pilot(open-loop) + policy(learned flip), for both axes (roll `acro_flip`, pitch `acro_flip_pitch`,
 each trained GREEN — flip_success_rate 0.845 / 0.840, crash 0.000).
 
-- **Deploy obs (`pilot.obs_from_msp_acro`, obs-7):** `[gravity_body(3), p, q, r, rotation_remaining]`.
-  `gravity_body` (`-R[2,:]`) is a pure-stdlib port of the sim's euler→quat→matrix, **byte-parity
-  with `tasks/acro_flip.py` (< 1e-6, `test_pilot_acro_obs.py`)** — the make-or-break gate, since a
-  mismatch feeds the policy an obs it never trained on. It is yaw-invariant, so deploy passes yaw=0.
+- **Deploy obs (`pilot.obs_from_msp_acro`):** obs-7 `[gravity_body(3), p, q, r, rotation_remaining]`
+  (v1) or **obs-8** `[…, rotation_remaining, maneuver_phase]` (v2 — see the point-in-space entry
+  below). `gravity_body` (`-R[2,:]`) is a pure-stdlib port of the sim's euler→quat→matrix,
+  **byte-parity with `tasks/acro_flip.py` (< 1e-6, `test_pilot_acro_obs.py`)** — the make-or-break
+  gate, since a mismatch feeds the policy an obs it never trained on. It is yaw-invariant, so deploy
+  passes yaw=0. `check_policy_family_acro` accepts 7 **or** 8 and checks the dim *exactly*: the dim
+  is the version gate, so an obs-7 file loaded where obs-8 is expected fails loudly rather than
+  being fed a truncated obs. `maneuver_phase` needs **no new sensor** — the pilot already owns the
+  maneuver clock, exactly as it owns `rotation_remaining`.
 - **FLIP window (`pilot/controller.py`):** a bounded maneuver inserted at HOVER. `request_flip()`
   (Bench **Flip** button / `fly --flip-at` / auto `flip_at_s`) is gated to HOVER + fresh link +
   near-level; pressed while still WAITING it doubles as the software Start (same ARMED+override
   gate), arming a pending flip that auto-fires `ACRO_START_SETTLE_S` into free hover — one button
   for take-off → flip → keep hovering.
-  A maneuver clock integrates the axis gyro toward Φ=2π·n (`rotation_remaining` 1→0);
+  A maneuver clock integrates the axis gyro toward Φ=2π·n (`rotation_remaining` 1→0) and, for obs-8
+  policies, runs a **time** clock alongside it (`maneuver_phase` 1→0 over `maneuver_len_s`);
   the acro policy drives the rates; FLIP exits → HOVER on rotation-complete + re-level or the hard
   `acro_flip_max_s` backstop, then the hover policy re-stabilizes before the normal LAND.
+  `FlightParams` enforces `acro_flip_max_s ≥ maneuver_len_s` — the safety window has to *contain*
+  the trained maneuver, or it closes mid-catch and hands back a still-tumbling airframe. That is
+  why the backstop moved 1.0 → 1.4 s for the 1.2 s obs-8 window; the cost is 0.4 s more tumble
+  before the crash detector re-arms on a failure.
 - **Safety-critical:** the crash detector (a real flip legitimately passes |roll| > 110°), the RPM
   governor, and the climb damper are **suspended only inside the window** and re-arm the instant it
   closes — the bounded window + re-level exit guarantee a *failed* flip that tumbles still cuts.
@@ -366,6 +376,50 @@ each trained GREEN — flip_success_rate 0.845 / 0.840, crash 0.000).
   **real-drone flip is NOT validated here (hardware-gated).** Blind-flip altitude is open-loop
   through the inversion (vz freezes > 25° tilt); the flip is sub-second so drift is bounded, but a
   real flight must keep generous ceiling headroom.
+
+### Point-in-space flip — the throttle floor is the sim2real trap (2026-07-31)
+
+The hero video showed the v1 flip honestly, and what it showed was a real weakness: a **wide, loopy
+barrel roll**. Measured off that very replay (`runs/acro_flip/hero_seq/replay.json.gz`, over the
+FLIP+RECOVER window, referenced to the position at the trigger):
+
+| | v1 baseline (measured) | v2 target |
+|---|---|---|
+| `max_lateral_drift` | **0.672 m** | < 0.20 m |
+| `altitude_loss` | **0.410 m** | < 0.15 m |
+| `peak_climb` | **0.000 m** | 0.2–0.4 m (the pop — *should* rise) |
+| `settle_pos_error` | **0.764 m** | — |
+| `flip_success_rate` | 0.845 | ≥ 0.845 (do not regress) |
+
+`peak_climb` is exactly zero: v1 never pops, it only ever falls. That is not a rendering artifact,
+it is the reward. v1 had **no lateral term at all** and a *symmetric*
+`alt_scale·|z − z0|`; "maximise rotation, ignore translation" is exactly what a wide loop looks
+like. `acro_flip` v2 (`configs/acro_flip_v2.yaml`) asks for the pilot's shape instead — pop, coast
+around the rotation, catch it level at roughly the same point in space — via obs-8's maneuver clock
+plus lateral station-keeping and an **asymmetric** altitude penalty (see `docs/TASK_CATALOG.md`).
+
+**The sim2real item that decides whether it transfers is the throttle floor.** The v2 reward's
+optimum is a *coast*, i.e. near-zero throttle mid-flip, and the real drone will not do that:
+
+1. `pilot/controller.py` clamps `t_des = max(p.min_thrust_frac, …)` with `min_thrust_frac = 0.25`
+   in free flight. Sim had **no such floor**, so a policy trained without it learns a profile the
+   pilot silently rewrites — the policy's plan and the drone's behaviour diverge exactly where the
+   maneuver is most sensitive.
+2. Worse, the floor exists for a *reason* recorded above: at idle throttle **with no AIRMODE** the
+   airframe loses **rate authority**. A coast-based flip walks straight into the known flip-stall
+   failure.
+
+Fix: `contract.ActionLimits.min_thrust_normed`, applied in `action_to_diffaero`, wired through an
+`act:` config section by `experiment.py::build_env`, and set to `0.25` in `configs/acro_flip_v2.yaml`
+— the same number, in the same normed units, as the deploy clamp. Default `0.0` keeps every other
+task bit-identical. `scripts/hero_takeoff_flip_land.py` uses the same floor, so the rendered
+sequence cannot show a maneuver the drone cannot fly.
+
+> **Deploy prerequisite, flagged not fixed: enable Betaflight AIRMODE before the first real v2
+> flip.** The sim cannot model loss of rate authority, so the floor is *insurance, not a guarantee*.
+> Consider raising `min_thrust_frac` to **0.30** for the first real attempt. (See the `AIRMODE flip
+> stall` finding: the v1 flip already stalled on the bench for want of rate authority at idle
+> throttle.)
 
 ### Measured height — VL53L1X on the bridge (hardware, 2026-07-13)
 

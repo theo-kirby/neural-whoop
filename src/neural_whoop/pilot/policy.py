@@ -114,14 +114,24 @@ def check_policy_family(pol: Policy) -> None:
 
 
 def check_policy_family_acro(pol: Policy) -> None:
-    """The acro-flip family: obs-7 ``[gravity_body(3), p, q, r, rotation_remaining]`` (IMU-only).
+    """The acro-flip family: obs-7/obs-8 IMU-only (+ the pilot's own maneuver clock).
+
+        obs-7 (v1): [gravity_body(3), p, q, r, rotation_remaining]
+        obs-8 (v2): [gravity_body(3), p, q, r, rotation_remaining, maneuver_phase]
+
+    ``maneuver_phase`` is a TIME clock (1->0 over the window) where ``rotation_remaining`` is a gyro
+    integral; v2 carries both so the policy can plan the pop/rotate/catch beats while staying honest
+    when the roll runs long or short. Neither is a sensor — the pilot supplies both — so obs-8 needs
+    no new hardware. The dim is the version gate: it is checked EXACTLY, so an obs-7 file loaded
+    where obs-8 is expected fails loudly here instead of being fed a truncated obs.
 
     Used ONLY for the acro policy that drives the bounded FLIP window (the primary hover policy
     still goes through :func:`check_policy_family`'s 5/6-dim guard). Single-frame — no stacking.
     """
-    if pol.base_obs_dim != 7:
+    if pol.base_obs_dim not in (7, 8):
         sys.exit(f"unsupported acro policy: base_obs_dim {pol.base_obs_dim} (the acro-flip pilot "
-                 "feeds the 7-dim [gravity_body(3), p, q, r, rotation_remaining] obs only)")
+                 "feeds the 7-dim [gravity_body(3), p, q, r, rotation_remaining] or 8-dim "
+                 "[... , maneuver_phase] obs layouts only)")
     if pol.obs_stack > 1:
         sys.exit(f"unsupported acro policy: obs_stack {pol.obs_stack} (the acro-flip family is "
                  "single-frame; stacking is a hover-family feature)")
@@ -177,12 +187,19 @@ def _gravity_body(roll: float, pitch: float, yaw: float = 0.0) -> list[float]:
     return [-r20, -r21, -r22]
 
 
-def obs_from_msp_acro(att: dict, imu: dict, rotation_remaining: float) -> list[float]:
-    """acro obs-7 ``[gravity_body(3), p, q, r, rotation_remaining]`` from MSP attitude + gyro.
+def obs_from_msp_acro(att: dict, imu: dict, rotation_remaining: float,
+                      maneuver_phase: float | None = None) -> list[float]:
+    """acro obs-7/obs-8 from MSP attitude + gyro (+ the pilot's own maneuver clock).
 
-    Deploy-honest, IMU-only (no altitude/position). ``gravity_body`` is byte-parity with the sim
-    task (:func:`_gravity_body`); ``p,q,r`` reuse the empirically-verified gyro signs from
-    :func:`obs_from_msp`; ``rotation_remaining`` ∈ [1→0] is the pilot's maneuver-clock phase.
+        obs-7 (v1, ``maneuver_phase=None``): [gravity_body(3), p, q, r, rotation_remaining]
+        obs-8 (v2):                          [ ... , rotation_remaining, maneuver_phase]
+
+    Deploy-honest, IMU-only (no altitude/position — and deliberately NOT the downward ToF, which
+    points sideways then up mid-flip). ``gravity_body`` is byte-parity with the sim task
+    (:func:`_gravity_body`); ``p,q,r`` reuse the empirically-verified gyro signs from
+    :func:`obs_from_msp`; ``rotation_remaining`` ∈ [1→0] is the gyro-integrated rotation phase and
+    ``maneuver_phase`` ∈ [1→0] the TIME phase across the flip window — both the pilot's own signals,
+    which is why obs-8 costs no hardware. Pass ``None`` (the default) for a v1 obs-7 policy.
     """
     roll = math.radians(att["roll_deg"])           # + = roll right (sim convention)
     pitch = math.radians(att["pitch_deg"])         # + = nose down on this board (sim convention)
@@ -191,7 +208,10 @@ def obs_from_msp_acro(att: dict, imu: dict, rotation_remaining: float) -> list[f
     p = math.radians(gx)                           # + = roll-right rate
     q = math.radians(gy)                           # + = nose-down rate
     r = math.radians(gz)                           # + = CCW-from-above rate
-    return grav_b + [p, q, r, rotation_remaining]
+    obs = grav_b + [p, q, r, rotation_remaining]
+    if maneuver_phase is not None:
+        obs.append(maneuver_phase)
+    return obs
 
 
 def action_to_us(act: list[float], hover_us: int, min_us: int, max_us: int,

@@ -1,0 +1,126 @@
+# acro_flip_v2: the POINT-IN-SPACE flip. Same maneuver, the pilot's shape instead of a barrel roll:
+# lift off, a burst of thrust with a nudge of off-centredness at the end of it, coast around the
+# rotation, catch it level at roughly the same point in space.
+#
+# The v1 baseline, MEASURED off its own hero replay (runs/acro_flip/hero_seq/replay.json.gz, over
+# the FLIP+RECOVER window, referenced to the position at the trigger) — this is the shape to beat:
+#
+#     max_lateral_drift 0.672 m | altitude_loss 0.410 m | peak_climb 0.000 m | settle_err 0.764 m
+#
+# peak_climb is exactly 0.000: v1 never pops, it only ever falls. Targets here: keep
+# flip_success_rate >= 0.845, altitude_loss < 0.15 m, max_lateral_drift < 0.20 m, and peak_climb
+# 0.2-0.4 m (a RISE is the goal, not a regression).
+#
+# vs configs/acro_flip.yaml (v1, GREEN at flip_success_rate 0.845 but a wide loopy roll), FOUR
+# changes, and they are coupled:
+#
+#   1. obs-7 -> obs-8: a maneuver_phase CLOCK. Without it the pop is unlearnable, not just
+#      unrewarded — with obs-7 a level, at-rest drone is a fixed point (gravity_body is pure
+#      attitude and carries no specific force), so a vertical thrust burst is INVISIBLE and the
+#      policy cannot tell "just spawned" from "0.2 s into a pop". No new sensor: the clock is the
+#      pilot's own, the same class of signal as rotation_remaining. The downward ToF is
+#      deliberately unused (it points sideways then up mid-flip).
+#   2. lat_scale 1.0: a lateral station-keeping term. v1 had NO lateral term at all, which is why
+#      the roll went wide — "maximise rotation, ignore translation" IS a barrel roll.
+#   3. ASYMMETRIC altitude replacing the symmetric 0.1·|z − z0|: heavy on sinking (1.0), light on
+#      rising (0.2) past 0.4 m of free headroom. This is the term that LICENSES the pop while
+#      forbidding the sink, and it is the single most important change. A 2π roll at the 12 rad/s
+#      envelope takes >= 0.52 s and a zero-thrust coast that long falls ~1 m; entering at
+#      v_up ~ g·t/2 ~ 2.4 m/s puts the apex mid-flip and returns to z0 at -2.4 m/s, which ~3 g of
+#      net thrust arrests in 0.08 s / 0.10 m. Net ~+0.3 m up, ~-0.1 m down, ~zero lateral — a coast
+#      applies no lateral force at all. That shape is the OPTIMUM of this reward.
+#   4. alive_bonus 0.1 -> 0.02: at 0.1 x 200 steps it was 20, the largest term in the episode, and
+#      it diluted every shaping term above while carrying no gradient of its own.
+#
+# And the sim2real item that decides whether any of it transfers (`act:` below): we are rewarding a
+# COAST, i.e. near-zero throttle mid-flip, and the real drone will not do that — pilot/controller.py
+# clamps t_des to min_thrust_frac 0.25. Modeled here so the policy cannot learn a profile the pilot
+# silently rewrites. DEPLOY PREREQUISITE, flagged not fixed: enable Betaflight AIRMODE before the
+# real flip — at idle throttle without it the airframe loses rate authority (the recorded flip-stall
+# failure), and the sim cannot model that. Consider min_thrust_frac 0.30 for the first attempt.
+#
+# Metrics: flip_success_rate (do not regress below 0.845) + max_lateral_drift / peak_climb /
+# mean_altitude_loss / settle_pos_error (the new shape numbers).
+
+run:
+  name: acro_flip_v2
+
+task:
+  name: acro_flip
+  axis: roll
+  n_rotations: 1.0
+  episode_len: 200
+  maneuver_len_s: 1.2     # pop -> rotate -> catch; <= the deploy window (acro_flip_max_s 1.5 s)
+  rot_scale: 1.0
+  completion_bonus: 10.0
+  upright_scale: 0.4
+  upright_sigma: 0.5
+  spin_penalty: 0.01
+  lat_scale: 1.0          # NEW: -k·‖xy − xy0‖ throughout
+  sink_scale: 1.0         # heavy: falling out of the flip is the failure mode
+  rise_scale: 0.2         # light, and only past pop_allow
+  pop_allow: 0.4          # m of FREE climb above z0 — this is what licenses the pop
+  settle_scale: 0.2       # recover-gated: come back AND stop
+  alive_bonus: 0.02
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+  success_tilt_deg: 15.0
+  arena_radius: 1.0
+  z_min: 1.2
+  z_max: 2.2
+  bound_xy: 6.0
+  bound_z_min: 0.15
+  bound_z_max: 4.0
+
+# act-v2 envelope. The ONLY non-default is the throttle floor — the sim-side mirror of the pilot's
+# free-flight clamp (pilot/controller.py, FlightParams.min_thrust_frac = 0.25), in the same normed
+# units (1.0 == hover). Every other task omits this section and keeps the bit-identical defaults.
+act:
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  wind_accel_mps2: 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05       # tight: deployment calibrates hover throttle on the bench
+  obs_noise_std: 0.0            # superseded by the per-channel list below
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    rot_rem, phase]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,     0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,     0.0]
+  action_latency_steps: 2
+  # The key acro sim2real risk: the attitude estimate degrades mid-flip (fast rotation confuses the
+  # complementary/Mahony filter) — modeled by noise+bias on the gravity_body channels above. Gyro
+  # stays low-noise (reliable through acro rates); rotation_remaining and the maneuver-phase clock
+  # are both noise-free — they are the pilot's own signals, not measurements. rate_gain_frac is what
+  # makes the clock/rotation PAIR earn its keep: a low draw makes the roll run long, and a policy
+  # flying the clock alone would run out mid-inversion.
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band (from d50var_s8).
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 400_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800
