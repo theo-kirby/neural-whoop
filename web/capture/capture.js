@@ -141,12 +141,15 @@ playback.setTrailVisible(false);   // cinematic: the airframe, not the analysis 
 //     The subject is not welded to the centre: the camera anchor is the Hann-smoothed track, so the
 //     drone leads it through fast transients (a symmetric window is zero-phase — it rounds corners,
 //     it does not lag a steady climb) and settles back. `--max-drift` softly caps how far that goes.
-//     NOTE (measured, 34/40/46°): at a fixed `--drone-frac` the standoff scales as 1/tan(fov/2), so
+//     NOTE (measured): at a fixed `--drone-frac` the standoff scales as 1/tan(fov/2), so
 //     `tan(fov/2)·dist` — the metres of world one NDC unit spans at the subject — is CONSTANT. A
-//     wider FOV therefore buys exactly ZERO framing room (worst |NDC| 0.64 -> 0.68 -> 0.73; it very
-//     slightly worsens, from the shorter standoff's stronger perspective). `--drone-frac` is the
-//     only lever on room. Likewise `--track-smooth` is not free calm: 14 -> 28 blew worst |NDC| to
-//     0.91 and the apparent-size spread to 19-40%, because more smoothing means more lead.
+//     wider FOV therefore buys exactly ZERO framing room; it very slightly WORSENS it, from the
+//     shorter standoff's stronger perspective. Worst |NDC| across 34/40/46°: 0.64 -> 0.68 -> 0.73
+//     under the old box+hard-clamp filter, 0.54 -> 0.56 -> 0.58 under this one — same trend, and
+//     the sign is what matters. `--drone-frac` is the only lever on room; fov buys perspective.
+//     Likewise `--track-smooth` is not free calm: more smoothing means more lead means more
+//     excursion. 14 -> 28 (at drone-frac 0.26) cost worst |NDC| 0.64 -> 0.91 with a 19-40% size
+//     spread under the box window, and 0.54 -> 0.68 with 20.4-30.7% under Hann — tamed, not free.
 view.world.updateMatrixWorld();
 const flight = new THREE.Box3();
 const cam = view.camera;
