@@ -72,8 +72,14 @@ PRESETS: dict[str, dict[str, Any]] = {
     "none": {},
     "hero": {
         "shot": "follow", "backdrop": "floor", "theme": "dark",
-        "drone_frac": 0.26, "fov": 34.0, "cam_dir": "0.85,0.30,1.0",
-        "track_smooth": 14, "subject_y": -0.06, "max_drift": 0.26,
+        # drone_frac is the ONLY lever on framing room (measured): at fixed drone_frac the standoff
+        # is 1/tan(fov/2), so tan(fov/2)*dist — the world-metres one NDC unit spans at the subject —
+        # is constant and a wider FOV buys nothing (worst |NDC| 0.64 -> 0.68 -> 0.73 across
+        # 34/40/46 deg). So the room comes from 0.26 -> 0.22 (a slight zoom-out); fov 34 -> 40 is
+        # bought purely for the flatter, less telephoto perspective, and track_smooth 14 -> 20 for a
+        # calmer rig — modest, because smoothing is what SPENDS the room (14 -> 28 hit |NDC| 0.91).
+        "drone_frac": 0.22, "fov": 40.0, "cam_dir": "0.85,0.30,1.0",
+        "track_smooth": 20, "subject_y": -0.06, "max_drift": 0.26,
         "key_dir": "0.22,1.0,0.15", "exposure": 0.95, "title_frames": 0,
     },
 }

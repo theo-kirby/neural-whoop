@@ -138,9 +138,15 @@ playback.setTrailVisible(false);   // cinematic: the airframe, not the analysis 
 //         across a hover, a flip, a gate lap and a real flight log without per-clip tuning.
 //       * the camera's ORIENTATION never changes (position and target translate together), so the
 //         horizon is nailed to one place in the frame. Only the ground parallaxes past.
-//     The subject is not welded to the centre: the camera anchor is the box-smoothed track, so the
-//     drone leads it through fast transients (a box filter is zero-phase — it rounds corners, it
-//     does not lag a steady climb) and settles back. `--max-drift` caps how far that goes.
+//     The subject is not welded to the centre: the camera anchor is the Hann-smoothed track, so the
+//     drone leads it through fast transients (a symmetric window is zero-phase — it rounds corners,
+//     it does not lag a steady climb) and settles back. `--max-drift` softly caps how far that goes.
+//     NOTE (measured, 34/40/46°): at a fixed `--drone-frac` the standoff scales as 1/tan(fov/2), so
+//     `tan(fov/2)·dist` — the metres of world one NDC unit spans at the subject — is CONSTANT. A
+//     wider FOV therefore buys exactly ZERO framing room (worst |NDC| 0.64 -> 0.68 -> 0.73; it very
+//     slightly worsens, from the shorter standoff's stronger perspective). `--drone-frac` is the
+//     only lever on room. Likewise `--track-smooth` is not free calm: 14 -> 28 blew worst |NDC| to
+//     0.91 and the apparent-size spread to 19-40%, because more smoothing means more lead.
 view.world.updateMatrixWorld();
 const flight = new THREE.Box3();
 const cam = view.camera;
@@ -167,17 +173,35 @@ function medianHeroPos() {
   return new THREE.Vector3(at(0), at(1), at(2));
 }
 
-// The hero's three-world track, and a symmetric box smoothing of it. Symmetric (not a causal EMA)
+// The hero's three-world track, and a symmetric smoothing of it. Symmetric (not a causal EMA)
 // keeps renderFrame(i) independent of having rendered i-1, and has zero phase lag.
+//
+// The window is a HANN (raised cosine), not a box. Both are zero-phase; the difference is what the
+// camera path's SECOND derivative looks like, which is what the eye reads as "calm". A box filter's
+// weights jump from w to 0 at the window edge, so every time a track sample enters or leaves the
+// window the smoothed velocity takes a step — over a whip like the flip's roll that is a visible
+// tick. Hann's weights taper to zero at the edges, so samples fade in and out and the acceleration
+// stays continuous. It buys that at the SAME drift budget: a Hann window of half-width W has an
+// effective width ~W/2, so it is if anything gentler on the lead/lag excursion than the box it
+// replaces. Measured on the take-off/flip/land replay at the OLD hero settings (fov 34,
+// drone-frac 0.26, track-smooth 14), Hann + the soft limiter below moved worst |NDC| 0.64 -> 0.54
+// and the apparent-size spread 20.4-28.9% -> 21.3-25.6% — calmer AND better framed, same budget.
 const heroTrack = playback.heroFrames.map((f) =>
   new THREE.Vector3(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld));
-function boxSmooth(track, halfWindow) {
+function smoothTrack(track, halfWindow) {
   const W = Math.max(0, Math.round(halfWindow));
+  if (W === 0) return track.map((p) => p.clone());
   return track.map((_, i) => {
     const acc = new THREE.Vector3();
-    let n = 0;
-    for (let k = Math.max(0, i - W); k <= Math.min(track.length - 1, i + W); k++, n++) acc.add(track[k]);
-    return acc.multiplyScalar(1 / Math.max(1, n));
+    let wsum = 0;
+    for (let k = Math.max(0, i - W); k <= Math.min(track.length - 1, i + W); k++) {
+      // Hann: 0 at |k-i| == W+1, 1 at the centre. Never exactly zero inside the window, so the
+      // support is the full 2W+1 taps and a truncated (near-edge) window still normalizes cleanly.
+      const w = 0.5 * (1 + Math.cos((Math.PI * (k - i)) / (W + 1)));
+      acc.addScaledVector(track[k], w);
+      wsum += w;
+    }
+    return acc.multiplyScalar(1 / Math.max(1e-9, wsum));
   });
 }
 
@@ -202,21 +226,31 @@ let camDist;                       // the shot's nominal subject distance (drive
     // touching the orientation. Negative = the drone rests low with headroom above it.
     const rig = dir.clone().multiplyScalar(camDist)
       .addScaledVector(up, -opts.subjectY * tanV * camDist);
-    const anchors = boxSmooth(heroTrack, opts.trackSmooth);
+    const anchors = smoothTrack(heroTrack, opts.trackSmooth);
     // Never let the rig sink into the floor: clamping the ANCHOR (not the camera) keeps position
     // and target moving together, so the orientation stays exactly constant.
     const minAnchorY = 0.06 - rig.y;
     // Cap the drift: past `maxDrift` NDC the anchor is pulled back toward the true position, so a
     // whip like the flip's 360 deg/s roll can never carry the airframe out of frame.
+    //
+    // SOFT limiter, not a hard clamp. `min(|d|, lim)` is only C0: its derivative steps from 1 to 0
+    // the instant the drift saturates, so the anchor's velocity (and therefore the camera's) has a
+    // kink exactly during the fastest part of the shot — the caveat recorded on Flywheel node
+    // hidden-field-0837. `lim·tanh(d/lim)` has the same two properties we actually wanted — it is
+    // the identity for small drift (tanh(x) = x - x³/3 + …, so ordinary lead/lag is untouched) and
+    // it asymptotes to `lim` — while being smooth everywhere, so the camera eases into the limit
+    // instead of hitting it. It also never quite reaches `lim`, making the cap a true bound.
+    const soft = (d, l) => l * Math.tanh(d / l);
     const lim = opts.maxDrift * tanV * camDist;
+    const limX = lim * tanH / tanV;
     pose = anchors.map((a, i) => {
       const anchor = a.clone();
       const off = heroTrack[i].clone().sub(anchor);
       const dy = off.dot(up), dx = off.dot(right);
-      if (Math.abs(dy) > lim) anchor.addScaledVector(up, dy - Math.sign(dy) * lim);
-      if (Math.abs(dx) > lim * tanH / tanV) {
-        anchor.addScaledVector(right, dx - Math.sign(dx) * lim * tanH / tanV);
-      }
+      // Move the anchor by (actual drift − allowed drift) so the RESIDUAL offset is the soft-limited
+      // one; d − lim·tanh(d/lim) is ~0 near the origin and grows to absorb everything beyond it.
+      anchor.addScaledVector(up, dy - soft(dy, lim));
+      anchor.addScaledVector(right, dx - soft(dx, limX));
       anchor.y = Math.max(anchor.y, minAnchorY);
       return { position: anchor.clone().add(rig), target: anchor };
     });
@@ -234,7 +268,7 @@ let camDist;                       // the shot's nominal subject distance (drive
     const centre = heroTrack.length
       ? heroTrack.reduce((a, p) => a.add(p.clone()), new THREE.Vector3()).multiplyScalar(1 / heroTrack.length)
       : target;
-    const aims = boxSmooth(heroTrack, opts.trackSmooth);
+    const aims = smoothTrack(heroTrack, opts.trackSmooth);
     pose = (aims.length ? aims : [target]).map((aim) => {
       const t = aim.clone().lerpVectors(centre, aim, opts.trackAmount);
       t.y = Math.min(t.y, camY);   // belt and braces on "never upwards"
