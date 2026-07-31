@@ -27,7 +27,7 @@ checkerboard tiles, metre gridlines, half-metre dots, baked **"PROTOTYPE"** / **
 that gives the drone a fixed metric backdrop instead of an infinite void. It is **sized per course**:
 the Simulation room grows/shrinks to the footprint of the loaded course (gates + flown paths), and to
 the arena preset while editing; the Real tab uses a fixed 10 m room. The room's floor is a
-front-facing plane so its labels read correctly (the walls/ceiling are a `BackSide` box so near walls
+front-facing plane and carries the only labels (the walls/ceiling are a `BackSide` box so near walls
 cull and never occlude the drone as you orbit).
 
 A **☾/☀ toggle** in the sidebar's top corner switches **light ⇄ dark** — theming the DOM sidebar
@@ -188,9 +188,9 @@ Video capture lives **in this repo** now: `scripts/capture_video.py` + `web/capt
 page is not a second renderer — it *imports the Studio's own* `scene.js` / `environment.js` /
 `geometry.js` / `drone-model.js` / `playback.js`, so the exported clip is the same chassis CAD and
 the same greybox room you're looking at, and the look cannot drift. What it changes is the
-presentation: clean full frame (no PiP cells, no HUD chrome), a **fixed** camera fitted to the
-flight's own bounding box, **true-scale** drone (the real 82 mm airframe, not the Studio's ~7×
-hero glyph), spinning props, and title/phase captions.
+presentation: clean full frame (no PiP cells, no HUD chrome), a precomputed camera track (three
+shots — see below), **true-scale** drone (the real 82 mm airframe, not the Studio's ~7× hero
+glyph), spinning props, and title/phase captions.
 
 The driver is four small pieces: read the replay in Python, serve `web/` on an ephemeral loopback
 port, drive headless Chromium (SwiftShader) with `renderFrame(i)` → screenshot — the frame index is
@@ -204,47 +204,98 @@ uv run python scripts/capture_video.py --replay ... --out ... --stride 40 --widt
 uv run python scripts/capture_video.py --replay ... --out out.png --stills 120,250   # PNG frames
 ```
 
-Flags: `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`, `--theme light|dark`,
-`--room-size`, `--cam-dir/--cam-dist/--fov`, `--track/--drone-frac/--cam-above/--track-smooth/
---track-amount`, `--scale` (drone footprint, m), `--prop-rate`, `--title/--title-frames`
-(`0` disables the cards).
+Flags: `--preset none|hero`, `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`,
+`--theme light|dark`, `--shot fit|tripod|follow`, `--backdrop room|floor`, `--room-size`,
+`--cam-dir/--cam-dist/--fov`, `--drone-frac/--subject-y/--max-drift/--track-smooth`,
+`--cam-above/--track-amount` (tripod), `--frame-height/--aim/--aim-z` (fit),
+`--grid-pitch/--grid-minor`, `--fog`, `--key-dir`, `--exposure`, `--scale` (drone footprint, m),
+`--prop-rate`, `--title/--title-frames` (`0` disables the cards).
 
-**Two camera modes, both with a fixed position.** The default is a **wide** shot: an exact box fit
-of the whole flight (not `cameras.js`'s bounding-sphere fit — this flight is tall and thin, and a
-sphere fit sits ~25% further back than it needs to). `--frame-height` overrides that with an
-explicit framing: how many metres of world the frame spans vertically, so the airframe is exactly
-`--scale / --frame-height` of the picture. That is the direct "how big is the drone" control, and
-it is the knob that matters, because the fitted framing is arithmetically stuck: holding a whole
-1.1 m flight in a fixed square frame caps an 82 mm airframe at **~7% of the frame height**. Going
-tighter means the drone rises into frame and sinks out of it — a locked-off shot.
+### `--preset hero` — the standardized concept shot
 
-`--aim x,y,z` (default: the **median** hero position, not the bbox centre — a bbox centre is dragged
-around by wherever the flight reached its extremes) picks what the shot is centred on. `--cam-dir`
-with a zero vertical component gives a dead straight-on, level camera.
+Reach for this first. It is a bundle of the flags below, and the point of it is that the **same
+invocation gives the same picture on any replay** — a hover, a flip, a gate lap, a real flight log —
+because everything that would otherwise be tuned per clip is derived instead. One line:
 
-`--track` is the third option, a **tripod** shot: the position still never moves, but the camera
-pans/tilts to follow the drone, so `--drone-frac` sets the size and the flight extent stops
-mattering. `--cam-above` parks it over the flight's highest point so it never tilts up, and
-`--track-smooth` (symmetric half-window, frames) calms the pan.
+```bash
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz \
+    --out runs/<run>/hero.mp4 --preset hero --width 1080 --height 1080
+```
 
-The room is built **after** the camera and is never smaller than it needs to be to contain it: the
-walls are a `BackSide` box, so a camera outside would cull the near wall and cut a hard diagonal
-seam across the frame. A too-small `--room-size` is raised to fit. `--no-room-labels` drops the
-baked "1 METER" / "PROTOTYPE" text for a clean backdrop (the metre grid still carries the scale).
+It selects `--shot follow --backdrop floor --theme dark --drone-frac 0.26 --fov 34
+--cam-dir 0.85,0.30,1.0 --track-smooth 14 --subject-y -0.06 --max-drift 0.26
+--key-dir 0.22,1.0,0.15 --exposure 0.95 --title-frames 0`. Anything you pass explicitly still wins.
+
+### Three camera shots
+
+**`fit`** (the default) is locked off: an exact box fit of the whole flight — not `cameras.js`'s
+bounding-sphere fit, since a tall thin flight would sit ~25% further back than it needs to.
+`--frame-height` overrides the fit with an explicit framing: how many metres of world the frame
+spans vertically, so the airframe is exactly `--scale / --frame-height` of the picture. That is the
+direct "how big is the drone" control, and it matters because the fitted framing is arithmetically
+stuck: holding a whole 1.1 m flight in a fixed square frame caps an 82 mm airframe at **~7% of the
+frame height**. `--aim x,y,z` (default: the **median** hero position, not the bbox centre — a bbox
+centre is dragged around by wherever the flight reached its extremes) picks what the shot is
+centred on; a `--cam-dir` with no vertical component gives a dead straight-on, level camera.
+
+**`tripod`** keeps the position fixed and pans/tilts to follow, so `--drone-frac` sets the size and
+the flight extent stops mattering. `--cam-above` parks it over the flight's highest point so it
+never tilts up, `--track-smooth` (symmetric half-window, frames) calms the pan. It gets close, but
+the price is why it is no longer the hero shot: with the camera parked while the subject crosses the
+room, apparent size swings with range (**6.7 → 20.8%** of frame height over this 1.1 m climb, a 3×
+balloon) and the whole background — horizon, room corner, ceiling seam — sweeps across the frame. It
+reads as a security camera.
+
+**`follow`** is the standardized rig. The camera holds a constant offset from a box-smoothed subject
+track, so apparent size is fixed *by construction* (`--drone-frac` of the frame height, every frame,
+every clip — measured **20.4 → 28.9%** on the same sequence, and that residual is only depth along
+the view axis), and because position and target translate together the camera's **orientation never
+changes**: the horizon is nailed to one place and only the ground parallaxes past. The subject is
+not welded to centre — the anchor is the smoothed track, so the drone leads it through fast
+transients and settles back (a box filter is zero-phase: it rounds corners, it does not lag a steady
+climb). `--subject-y` sets its resting NDC height (negative = below centre, headroom above),
+`--max-drift` caps the lead so a 360°/s flip can never carry it out of frame.
+
+### The backdrop
+
+`--backdrop room` is the walled greybox. It is built **after** the camera and is never smaller than
+it needs to be to contain it: the walls are a `BackSide` box, so a camera outside would cull the
+near wall and cut a hard diagonal seam across the frame. A too-small `--room-size` is raised to fit.
+
+`--backdrop floor` is a **cyclorama**: the floor alone, run out past the shot, fading into the
+background under fog (`--fog near,far`), with a subtle sky gradient above the horizon so the empty
+upper half reads as space rather than as an unfinished render. No walls and no ceiling means no
+corner and no seam can sweep through a moving frame — the single biggest thing that made a travelling
+shot look wrong — while the ground and its contact shadow are still there.
+
+**The grid scales to the shot.** The pitch stays an honest **1 m** (that label *is* the scale
+reference), but it gains a finer mesh sized to the framing: an 82 mm airframe on a bare metre grid is
+1/12 of a tile with nothing nearby to measure it against, and subdivided at ~10 cm it sits on a mesh
+you can read it against while the metre lines still say how big a metre is. A wide arena shot
+resolves the subdivision to "coarser than the tile", i.e. none, and looks exactly as it did.
+`--grid-pitch` / `--grid-minor` override (`--grid-minor 0` disables). `--no-room-labels` drops the
+baked "1 METER" / "PROTOTYPE" text entirely. Walls are never labelled — seen from inside, a
+`BackSide` face flips U, so half of them used to render the text in mirror writing.
+
+`--key-dir` re-aims the sun. The Studio's rig sits 0.68 of the altitude sideways, which at 1.5 m up
+throws the shadow a full metre clear of the drone so it reads as a second object; a steep key keeps
+it underneath. `--exposure` turns on ACES tone mapping — the light rig is tuned for the wide Studio
+view, and close up its near-white gridlines clip to flat white without it. Unset means no tone
+mapping at all, so an existing render is untouched.
 
 Every render prints a **framing check**: the page projects the airframe (padded by its own angular
 radius) through the camera it will actually be drawn with, for every frame, and reports the largest
-`|NDC|` on each axis — `1.0` is the frame edge. Above 1.0 it warns that the drone leaves frame. Use
-it; a tight locked-off shot of a climbing drone can measure **2.5** and you will not notice from a
-still.
+`|NDC|` on each axis (`1.0` is the frame edge) plus the spread of apparent size. Above 1.0 it warns
+that the drone leaves frame. Use both; a tight locked-off shot of a climbing drone can measure
+**2.5** and you will not notice from a still, and a flat size spread is what tells you the rig is
+holding its framing rather than letting the subject balloon.
 
-The concept video uses:
+The take-off → hover → flip → land concept video uses:
 
 ```bash
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
     --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
-    --width 1080 --height 1080 --theme dark --title-frames 0 --room-size 2.6 --no-room-labels \
-    --track --drone-frac 0.22 --cam-above 0.15 --track-smooth 12
+    --preset hero --width 1080 --height 1080
 ```
 
 With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which runs the

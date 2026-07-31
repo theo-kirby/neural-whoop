@@ -47,6 +47,37 @@ CDN_CACHE = REPO_ROOT / ".cache" / "three"
 #: The only external host the page touches (the importmap in web/*/index.html).
 CDN_HOST = "cdn.jsdelivr.net"
 
+#: The plain (preset-free) look — every flag that a preset is allowed to fill in. These match the
+#: ``render()`` signature defaults; they live here so ``--preset`` can override a flag you did not
+#: pass while an explicit flag still wins (see ``main``).
+LOOK_DEFAULTS: dict[str, Any] = {
+    "theme": "light", "shot": "fit", "cam_dir": "0.9,0.35,1.0", "cam_dist": 1.15, "fov": 40.0,
+    "drone_frac": 0.22, "cam_above": 0.30, "track_smooth": 25, "track_amount": 1.0,
+    "subject_y": -0.08, "max_drift": 0.30, "backdrop": "room", "grid_pitch": None,
+    "grid_minor": None, "fog": None, "key_dir": None, "exposure": None, "room_labels": True,
+    "title_frames": 40,
+}
+
+#: Named looks. ``hero`` is the standardized concept/product shot — the point of it is that the
+#: SAME flags give the same picture on any replay (hover, flip, gate lap, real flight log), because
+#: every quantity that would otherwise be tuned per clip is derived instead:
+#:   * ``follow`` holds the airframe at a fixed fraction of the frame height and never re-orients,
+#:     so apparent size and the horizon are constant by construction;
+#:   * ``floor`` drops the walls and ceiling for a fogged cyclorama, so nothing in the background
+#:     can sweep through frame as the camera travels;
+#:   * the grid pitch is chosen from the framing, so the drone reads as ~one tile rather than 1/12
+#:     of a metre square, and the tile is labelled with what it actually is;
+#:   * a steep key puts the cast shadow under the airframe, which is what sells ground contact.
+PRESETS: dict[str, dict[str, Any]] = {
+    "none": {},
+    "hero": {
+        "shot": "follow", "backdrop": "floor", "theme": "dark",
+        "drone_frac": 0.26, "fov": 34.0, "cam_dir": "0.85,0.30,1.0",
+        "track_smooth": 14, "subject_y": -0.06, "max_drift": 0.26,
+        "key_dir": "0.22,1.0,0.15", "exposure": 0.95, "title_frames": 0,
+    },
+}
+
 #: SwiftShader — this bench Mac has no CUDA and headless Chromium has no GPU; ANGLE's software
 #: rasterizer is the only path that gives the page a WebGL2 context.
 CHROME_ARGS = [
@@ -125,6 +156,7 @@ def render(
     stride: int = 1,
     episode: int = 0,
     theme: str = "light",
+    shot: str = "fit",
     room_size: float | None = None,
     cam_dir: tuple[float, float, float] = (0.9, 0.35, 1.0),
     cam_dist: float = 1.15,
@@ -134,9 +166,17 @@ def render(
     cam_above: float = 0.30,
     track_smooth: int = 25,
     track_amount: float = 1.0,
+    subject_y: float = -0.08,
+    max_drift: float = 0.30,
     frame_height: float | None = None,
     aim: tuple[float, float, float] | None = None,
     aim_z: float | None = None,
+    backdrop: str = "room",
+    grid_pitch: float | None = None,
+    grid_minor: float | None = None,
+    fog: tuple[float, float] | None = None,
+    key_dir: tuple[float, float, float] | None = None,
+    exposure: float | None = None,
     room_labels: bool = True,
     scale: float | None = None,
     prop_rate: float = 0.8,
@@ -156,30 +196,46 @@ def render(
         stride: Render every Nth frame — the fast smoke path.
         episode: Which episode of the replay to render.
         theme: ``light`` (the bright prototype-map room) or ``dark``.
+        shot: ``fit`` (locked off, whole flight in frame), ``tripod`` (fixed position, pans/tilts
+            to follow), or ``follow`` — the standardized hero rig, where the camera holds a
+            constant offset from a smoothed subject track. ``follow`` is the one to reach for on a
+            concept render: apparent size is fixed by construction (``drone_frac`` of the frame
+            height in every frame of every clip) and the camera's orientation never changes, so the
+            horizon stays put and only the ground parallaxes past.
         room_size: Greybox room footprint (m); ``None`` -> derived from the flight's own bounds.
         cam_dir/cam_dist/fov: Fixed camera direction, distance multiplier, lens.
-        track: Tripod shot — the camera position stays fixed but it pans/tilts to follow the
-            drone. The only way to get genuinely close at true scale: with the whole flight in a
-            fixed frame, an 82 mm airframe can occupy at most ~5% of the frame height. The cost
-            is that you no longer see the whole trajectory at once.
-        drone_frac: With ``track``, the fraction of the frame height the airframe should fill at
-            the top of the flight — this, not the flight extent, is what sets the camera distance.
-        cam_above: With ``track``, metres the camera is parked above the flight's highest point.
+        track: Deprecated spelling of ``shot="tripod"``.
+        drone_frac: With ``follow``/``tripod``, the fraction of the frame height the airframe
+            fills — this, not the flight extent, is what sets the camera distance.
+        cam_above: With ``tripod``, metres the camera is parked above the flight's highest point.
             This is what guarantees the shot never tilts upward: level or looking down, always.
-        track_smooth: With ``track``, the symmetric smoothing half-window (frames) applied to the
-            aim track. Bigger = a calmer, laggier pan.
-        frame_height: Fixed-camera framing: how many metres of world the frame spans vertically.
-            The airframe is then exactly ``scale / frame_height`` of the picture — the direct
-            "how big is the drone" control. Ignored when ``track`` is on.
-        aim: Fixed-camera aim point, sim ``(x, y, z)`` in metres; ``None`` -> the flight's own
-            bbox centre. With a level ``cam_dir`` the camera sits at the aim's height, i.e. dead
-            straight-on. Worth setting explicitly: the bbox centre is not where the drone spends
-            its time when the flight drifts.
+        track_smooth: Symmetric smoothing half-window (frames) applied to the subject track.
+            Bigger = a calmer camera that the drone leads further through fast moves.
+        subject_y: With ``follow``, the subject's resting NDC height. Negative sits it below
+            centre, leaving headroom for a climb; 0 is dead centre.
+        max_drift: With ``follow``, how far (NDC) the airframe may lead the smoothed camera before
+            the rig stops smoothing and pulls it back — the guarantee it never leaves frame.
+        frame_height: ``fit`` framing: how many metres of world the frame spans vertically. The
+            airframe is then exactly ``scale / frame_height`` of the picture — the direct
+            "how big is the drone" control.
+        aim: ``fit`` aim point, sim ``(x, y, z)`` in metres; ``None`` -> the median hero position.
+            With a level ``cam_dir`` the camera sits at the aim's height, i.e. dead straight-on.
         aim_z: Aim height only (sim z, m), when ``aim`` is not given.
-        room_labels: Bake the "1 METER" / "PROTOTYPE" text into the greybox tiles.
-        track_amount: With ``track``, 1.0 locks the drone dead centre; below 1.0 the camera stays
-            partly parked on the flight's centre and swings less (at a close framing the drone
-            leaves frame quickly, so prefer ``track_smooth``).
+        backdrop: ``room`` (the walled greybox) or ``floor`` — a cyclorama with the floor alone,
+            fading into the background under fog. ``floor`` is what stops a room corner or ceiling
+            seam sweeping through a moving shot, while keeping the ground and its contact shadow.
+        grid_pitch: Greybox grid pitch (m); ``None`` -> chosen from the shot's own framing, so an
+            82 mm airframe lands at roughly one tile instead of 1/12 of a metre square.
+        grid_minor: Finer subdivision (m); ``None`` -> ``grid_pitch / 5``, ``0`` -> none.
+        fog: ``(near, far)`` in m for the floor backdrop; ``None`` -> from the camera standoff.
+        key_dir: Sun direction ``(x, y, z)`` in three-frame (Y up); ``None`` -> the Studio's rig.
+            A steep key keeps the cast shadow under the airframe instead of a metre away.
+        exposure: ACES tone-mapping exposure. The scene's light rig is tuned for the wide
+            Studio view; a close shot needs the highlights rolled off or the near gridlines
+            clip to flat white. ``None`` disables tone mapping entirely (the legacy look).
+        room_labels: Bake the pitch / "PROTOTYPE" text into the greybox tiles.
+        track_amount: With ``tripod``, 1.0 locks the drone dead centre; below 1.0 the camera stays
+            partly parked on the flight's centre and swings less.
         scale: Drone tip-to-tip footprint (m); ``None`` -> the true 82 mm airframe.
         prop_rate: Stylized prop spin, radians per frame at hover thrust.
         title/title_frames: Opening/closing card text and how long each is held (frames).
@@ -203,10 +259,14 @@ def render(
     page_opts = {
         "episode": episode, "theme": theme, "camDir": list(cam_dir), "camDist": cam_dist,
         "propRate": prop_rate, "title": title, "titleFrames": title_frames,
-        "fov": fov, "track": track, "droneFrac": drone_frac,
+        "fov": fov, "shot": shot, "track": track, "droneFrac": drone_frac,
         "camAbove": cam_above, "trackSmooth": track_smooth, "trackAmount": track_amount,
+        "subjectY": subject_y, "maxDrift": max_drift,
         "frameHeight": frame_height, "aimZ": aim_z, "roomLabels": room_labels,
         "aim": list(aim) if aim else None,
+        "backdrop": backdrop, "gridPitch": grid_pitch, "gridMinor": grid_minor,
+        "fog": list(fog) if fog else None, "keyDir": list(key_dir) if key_dir else None,
+        "exposure": exposure,
     }
     if room_size is not None:
         page_opts["roomSize"] = room_size
@@ -231,13 +291,18 @@ def render(
             n = int(page.evaluate("window.NW_CAPTURE.frameCount"))
             fit = page.evaluate("window.NW_CAPTURE.framing")
             worst = max(fit["x"], fit["y"])
+            # Two measured numbers, so "is this framed right?" is never something you check by
+            # scrubbing: worst |NDC| (1.0 = the frame edge) and the spread of apparent size over
+            # the flight (a follow rig should be flat; a swing means the subject balloons/shrinks).
+            size = (f"size {100 * fit['sizeMin']:.1f}-{100 * fit['sizeMax']:.1f}% of frame height"
+                    if fit.get("sizeMax") else "")
             if worst >= 1.0:
                 print(f"[capture] WARNING: the drone leaves frame (worst |NDC| {worst:.2f} > 1.0; "
                       f"x {fit['x']:.2f}, y {fit['y']:.2f}). Widen --frame-height / lower "
-                      "--drone-frac, or use --track.", file=sys.stderr)
+                      "--drone-frac, or use --shot follow.", file=sys.stderr)
             elif not quiet:
                 print(f"[capture] framing: worst |NDC| {worst:.2f} "
-                      f"(x {fit['x']:.2f}, y {fit['y']:.2f}) — 1.0 is the frame edge")
+                      f"(x {fit['x']:.2f}, y {fit['y']:.2f}) — 1.0 is the frame edge; {size}")
             app = page.locator("#app")
             indices = list(range(0, n, max(1, stride)))
 
@@ -284,61 +349,100 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--replay", required=True, help="replay.json[.gz] to render")
     p.add_argument("--out", required=True, help="output .mp4")
+    p.add_argument("--preset", choices=sorted(PRESETS), default="none",
+                   help="a named look — a bundle of the flags below. 'hero' is the standardized "
+                        "concept/product shot (follow rig, cyclorama floor, scale-matched grid, "
+                        "steep key). Anything you pass explicitly still wins")
     p.add_argument("--width", type=int, default=1920)
     p.add_argument("--height", type=int, default=1080)
     p.add_argument("--fps", type=float, default=None, help="default: the replay's control_hz")
     p.add_argument("--crf", type=int, default=18)
     p.add_argument("--stride", type=int, default=1, help="render every Nth frame (smoke path)")
     p.add_argument("--episode", type=int, default=0)
-    p.add_argument("--theme", choices=["light", "dark"], default="light")
+    p.add_argument("--theme", choices=["light", "dark"])
+    p.add_argument("--shot", choices=["fit", "tripod", "follow"],
+                   help="fit: locked off, whole flight in frame. tripod: fixed position, pans to "
+                        "follow. follow: constant offset from a smoothed subject track — the "
+                        "standardized hero rig (fixed apparent size, fixed horizon)")
     p.add_argument("--room-size", type=float, default=None, help="greybox room footprint (m)")
-    p.add_argument("--cam-dir", default="0.9,0.35,1.0", help="fixed camera direction (three-frame)")
-    p.add_argument("--cam-dist", type=float, default=1.15,
+    p.add_argument("--cam-dir", help="fixed camera direction (three-frame)")
+    p.add_argument("--cam-dist", type=float,
                    help="pull-back on the exact box fit (1.0 = the flight touches the frame edges)")
-    p.add_argument("--fov", type=float, default=40.0, help="vertical field of view (deg)")
-    p.add_argument("--track", action="store_true",
-                   help="tripod shot: fixed camera position, panning/tilting to follow the drone "
-                        "(lets the shot get close; you lose the whole-trajectory framing)")
-    p.add_argument("--drone-frac", type=float, default=0.22,
-                   help="with --track, fraction of the frame height the airframe fills at the top "
-                        "of the flight")
-    p.add_argument("--cam-above", type=float, default=0.30,
-                   help="with --track, metres the camera sits above the flight's highest point "
-                        "(this is what keeps the shot from ever tilting upward)")
-    p.add_argument("--track-smooth", type=int, default=25,
-                   help="with --track, aim smoothing half-window in frames (bigger = calmer pan)")
+    p.add_argument("--fov", type=float, help="vertical field of view (deg)")
+    p.add_argument("--track", action="store_true", help="deprecated spelling of --shot tripod")
+    p.add_argument("--drone-frac", type=float,
+                   help="with --shot follow/tripod, fraction of the frame height the airframe fills")
+    p.add_argument("--cam-above", type=float,
+                   help="with --shot tripod, metres the camera sits above the flight's highest "
+                        "point (this is what keeps the shot from ever tilting upward)")
+    p.add_argument("--track-smooth", type=int,
+                   help="subject-track smoothing half-window in frames (bigger = calmer camera)")
+    p.add_argument("--subject-y", type=float,
+                   help="with --shot follow, the subject's resting NDC height (<0 = below centre, "
+                        "leaving headroom for the climb)")
+    p.add_argument("--max-drift", type=float,
+                   help="with --shot follow, how far (NDC) the drone may lead the smoothed camera "
+                        "before it is pulled back — the never-leaves-frame guarantee")
     p.add_argument("--frame-height", type=float, default=None,
-                   help="fixed camera: metres of world the frame spans vertically (drone size = "
+                   help="--shot fit: metres of world the frame spans vertically (drone size = "
                         "--scale / --frame-height). Smaller = bigger drone, less flight in frame")
     p.add_argument("--aim", default=None,
-                   help="fixed camera: aim point as sim x,y,z (m) — default the flight bbox centre")
+                   help="--shot fit: aim point as sim x,y,z (m) — default the median hero position")
     p.add_argument("--aim-z", type=float, default=None,
-                   help="fixed camera: sim-z the shot is centred on (default: the flight's centre)")
-    p.add_argument("--no-room-labels", dest="room_labels", action="store_false",
-                   help="drop the baked '1 METER' / 'PROTOTYPE' text from the greybox tiles")
-    p.add_argument("--track-amount", type=float, default=1.0,
-                   help="with --track, 1.0 locks the drone centre; lower keeps the camera nearer "
-                        "the flight centre and swinging less")
+                   help="--shot fit: sim-z the shot is centred on (default: the flight's centre)")
+    p.add_argument("--backdrop", choices=["room", "floor"],
+                   help="room: the walled greybox. floor: a cyclorama — floor only, fading out "
+                        "under fog, so no wall corner or ceiling seam sweeps through the shot")
+    p.add_argument("--grid-pitch", type=float,
+                   help="greybox grid pitch in m (default: chosen from the shot's own framing, so "
+                        "the airframe reads as about one tile)")
+    p.add_argument("--grid-minor", type=float,
+                   help="finer grid subdivision in m (default: pitch/5; 0 disables)")
+    p.add_argument("--fog", help="floor backdrop fade as near,far in m (default: from the standoff)")
+    p.add_argument("--key-dir", help="sun direction x,y,z in three-frame (Y up). A steep key keeps "
+                                     "the cast shadow under the airframe instead of a metre away")
+    p.add_argument("--exposure", type=float,
+                   help="ACES tone-mapping exposure (the scene's light rig is tuned for the wide "
+                        "Studio view; a close shot clips its highlights without this)")
+    p.add_argument("--no-room-labels", dest="room_labels", action="store_const", const=False,
+                   help="drop the baked pitch / 'PROTOTYPE' text from the greybox tiles")
+    p.add_argument("--track-amount", type=float,
+                   help="with --shot tripod, 1.0 locks the drone centre; lower keeps the camera "
+                        "nearer the flight centre and swinging less")
     p.add_argument("--scale", type=float, default=None,
                    help="drone footprint in m (default: the true 0.082 m airframe)")
     p.add_argument("--prop-rate", type=float, default=0.8,
                    help="stylized prop spin, rad/frame at hover thrust")
     p.add_argument("--title", default="neural-whoop")
-    p.add_argument("--title-frames", type=int, default=40, help="0 disables the title/end cards")
+    p.add_argument("--title-frames", type=int, help="0 disables the title/end cards")
     p.add_argument("--stills", default=None,
                    help="comma-separated frame indices to dump as PNGs instead of a video")
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args()
 
+    # Resolve the look: an explicit flag wins, else the preset, else the plain default. The
+    # preset-able flags all declare no argparse default, so `None` here means "you didn't say".
+    look = {**LOOK_DEFAULTS, **PRESETS[a.preset]}
+    for key, value in look.items():
+        if getattr(a, key) is None:
+            setattr(a, key, value)
+    if a.track and a.shot == "fit":
+        a.shot = "tripod"
+
+    vec = lambda s: tuple(float(v) for v in str(s).split(",")) if s else None   # noqa: E731
+
     render(
         Path(a.replay), Path(a.out),
         width=a.width, height=a.height, fps=a.fps, crf=a.crf, stride=a.stride,
-        episode=a.episode, theme=a.theme, room_size=a.room_size,
-        cam_dir=tuple(float(v) for v in a.cam_dir.split(",")), cam_dist=a.cam_dist, fov=a.fov,
+        episode=a.episode, theme=a.theme, shot=a.shot, room_size=a.room_size,
+        cam_dir=vec(a.cam_dir), cam_dist=a.cam_dist, fov=a.fov,
         track=a.track, drone_frac=a.drone_frac, cam_above=a.cam_above,
         track_smooth=a.track_smooth, track_amount=a.track_amount,
+        subject_y=a.subject_y, max_drift=a.max_drift,
         frame_height=a.frame_height, aim_z=a.aim_z, room_labels=a.room_labels,
-        aim=tuple(float(v) for v in a.aim.split(",")) if a.aim else None,
+        backdrop=a.backdrop, grid_pitch=a.grid_pitch, grid_minor=a.grid_minor,
+        fog=vec(a.fog), key_dir=vec(a.key_dir), exposure=a.exposure,
+        aim=vec(a.aim),
         scale=a.scale, prop_rate=a.prop_rate, title=a.title, title_frames=a.title_frames,
         stills=[int(v) for v in a.stills.split(",")] if a.stills else None,
         quiet=a.quiet,

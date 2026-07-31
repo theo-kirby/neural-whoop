@@ -126,9 +126,14 @@ capturer**: `web/capture/` + `scripts/capture_video.py` (the `capture` extra: pl
 imageio-ffmpeg). The capture page is *not* a second renderer — it imports the Studio's own
 `scene.js` / `environment.js` / `geometry.js` / `drone-model.js` / `playback.js`, so the video is
 the dashboard's look (CAD chassis, greybox room) and cannot drift; what it adds is the cinematic
-mode: clean full frame, a **fixed-position** camera (box-fitted wide, or `--track`'s tripod
-pan/tilt for a close shot), **true-scale** airframe (82 mm, vs the Studio's ~7× hero glyph),
-spinning props, and title/phase captions. The Python
+mode: clean full frame, a precomputed camera track (`--shot fit|tripod|follow`), **true-scale**
+airframe (82 mm, vs the Studio's ~7× hero glyph), spinning props, and title/phase captions.
+**`--preset hero` is the standardized concept shot** — the same invocation gives the same picture on
+any replay, because everything that would otherwise be tuned per clip is derived: `follow` holds a
+constant offset from a smoothed subject track (so apparent size and the horizon are fixed *by
+construction*, vs a tripod's 3× size swing), `--backdrop floor` swaps the walled box for a fogged
+cyclorama (nothing can sweep through frame), the 1 m grid gains a framing-sized fine mesh, and a
+steep key puts the shadow under the airframe. The Python
 driver serves `web/` on loopback, drives headless Chromium (SwiftShader) with `renderFrame(i)` →
 screenshot (the **frame index is the only clock**), and pipes PNGs to ffmpeg — same shape the
 sibling `../nw-viz` Node project had, which is now only a fallback. `scripts/viz.py --video` and
@@ -250,18 +255,19 @@ events → no curves; no `--baseline` → no comparison).
 # Hero / concept MP4 — the IN-REPO headless capturer (web/capture/ imports web/studio/'s scene
 # modules verbatim, so the video is the Studio's look). One-time: playwright install chromium.
 uv pip install -e '.[capture]'
-uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
+# --preset hero is the standardized concept look; run it on ANY replay and get the same picture.
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4 \
+    --preset hero --width 1080 --height 1080
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
 # The take-off -> hover -> flip -> land concept sequence. BOTH halves are shipped policies: the
 # deployed 1.0 m hover_tof policy owns take-off/hover/land, trained acro_flip owns the flip.
-# --track is a tripod shot (fixed camera POSITION, pans/tilts to follow) — the only way to have the
-# airframe read big AND stay in frame: a locked-off frame holding the whole flight caps an 82 mm
-# drone at ~7% of frame height. Every render prints a framing check (worst |NDC|, 1.0 = frame edge).
+# Why `follow` and not a locked-off or tripod camera: a fixed frame holding the whole flight caps an
+# 82 mm drone at ~7% of frame height, and a tripod that pans to follow lets it balloon 6.7 -> 20.8%
+# while the room corner sweeps past. Every render prints a framing check (worst |NDC|, 1.0 = frame
+# edge) AND the apparent-size spread, so both are measured rather than eyeballed.
 uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
-    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
-    --width 1080 --height 1080 --theme dark --title-frames 0 --room-size 2.6 --no-room-labels \
-    --track --drone-frac 0.22 --cam-above 0.15 --track-smooth 12
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --preset hero --width 1080 --height 1080
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn

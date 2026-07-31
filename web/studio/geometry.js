@@ -102,13 +102,42 @@ const FALLBACK_TILE = {
   label: "rgba(150,150,150,0.22)",
 };
 
-// A "prototype map" greybox tile texture: a 2 m x 2 m block (checkerboard of two grey squares) with
-// 1 m gridlines, half-meter intersection dots, and "1 METER" / "PROTOTYPE" labels baked along the
-// lines. `palette` (tileA/tileB/line/dot/label) themes it; `repeatX`/`repeatY` tile it to cover a
-// face at 1 m/square (per-axis so walls stay square when height != footprint). Returns a
+// Human label for a grid pitch in metres ("1 METER" / "50 CM" / "10 CM"). Baked into the tile, so
+// the grid states its own scale — which is the whole point of drawing the airframe at true size.
+export function pitchLabel(pitch) {
+  if (pitch >= 1) return pitch === 1 ? "1 METER" : `${+pitch.toFixed(2)} METERS`;
+  return `${Math.round(pitch * 100)} CM`;
+}
+
+// The set of grid pitches we snap to. A hero shot frames ~0.4 m of world, an arena shot ~30 m, and
+// the grid has to stay legible across both: pick the coarsest pitch that still puts a handful of
+// lines across the frame (see `chooseGridPitch`).
+const PITCH_LADDER = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+
+// Grid pitch (m) for a shot that spans `span` metres of world: the coarsest ladder step that still
+// draws at least `want` divisions across the frame. This is what makes the room self-scaling —
+// the same code gives a 82 mm product shot a 5 cm grid and a giant arena a 5 m grid, so "how big
+// is the drone" reads the same way at every framing.
+export function chooseGridPitch(span, want = 5) {
+  const target = Math.max(1e-4, span) / Math.max(1, want);
+  let best = PITCH_LADDER[0];
+  for (const p of PITCH_LADDER) if (p <= target) best = p;
+  return best;
+}
+
+// A "prototype map" greybox tile texture: a 2·pitch square block (checkerboard of two greys) with
+// gridlines every `pitch` metres, optional finer `minor` lines inside them, intersection dots at
+// the half-pitch, and "<pitch>" / "PROTOTYPE" labels baked along the lines. `palette`
+// (tileA/tileB/line/dot/label, optional minorLine) themes it; `repeatX`/`repeatY` tile it to cover
+// a face (per-axis so walls stay square when height != footprint). All feature sizes are fractions
+// of the block, so a 5 cm grid looks exactly like a 1 m grid, just smaller. Returns a
 // THREE.CanvasTexture (RepeatWrapping, sRGB).
-function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, labels = true) {
-  const S = 512, M = S / 2;                  // 512 px = 2 m  ->  256 px per metre
+function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, labels = true,
+                        { pitch = 1, minor = 0 } = {}) {
+  // Sub-divided grids need the extra texel budget; a plain 2-line block does not. A hero shot is
+  // close enough to the floor to magnify a block several times, so this is the difference between
+  // a crisp mesh and mush.
+  const S = minor > 0 ? 2048 : 512, M = S / 2;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = S;
   const ctx = canvas.getContext("2d");
@@ -118,28 +147,43 @@ function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, label
   ctx.fillStyle = tileA; ctx.fillRect(0, 0, S, S);
   ctx.fillStyle = tileB; ctx.fillRect(M, 0, M, M); ctx.fillRect(0, M, M, M);
 
-  // Gridlines at every metre (0/M/S; edge lines straddle the seam and complete on the tile next
-  // door, so the repeat is continuous).
-  ctx.strokeStyle = line; ctx.lineWidth = 5;
-  for (const p of [0, M, S]) {
-    ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+  const px = S / (2 * pitch);                 // px per metre in this block
+  const drawLines = (step, width, style) => {
+    ctx.strokeStyle = style; ctx.lineWidth = width;
+    for (let p = 0; p <= S + 0.5; p += step) {
+      ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, S); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, p); ctx.lineTo(S, p); ctx.stroke();
+    }
+  };
+  // Minor subdivisions first (thinner + fainter), then the pitch lines over the top. Two densities
+  // is what reads as a measured surface rather than a checkerboard: the fine mesh gives the eye a
+  // texture right under the airframe while the pitch lines still carry the number.
+  if (minor > 0 && minor < pitch) {
+    drawLines(minor * px, Math.max(1, S / 512), palette.minorLine || dot);
   }
-  // Half-metre dots on the lines (mark x half, half x mark).
-  ctx.fillStyle = dot;
-  const marks = [0, M, S], halves = [M / 2, (3 * M) / 2];
-  const dotAt = (x, y) => { ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill(); };
-  for (const a of marks) for (const b of halves) { dotAt(a, b); dotAt(b, a); }
+  // Gridlines every `pitch` (0/M/S; edge lines straddle the seam and complete on the tile next
+  // door, so the repeat is continuous).
+  drawLines(M, (5 * S) / 512, line);
+  // Half-pitch dots on the lines (mark x half, half x mark) — dropped when minor lines already
+  // subdivide the block, where they'd just be noise on top of the mesh.
+  if (!(minor > 0 && minor < pitch)) {
+    ctx.fillStyle = dot;
+    const marks = [0, M, S], halves = [M / 2, (3 * M) / 2], r = (5 * S) / 512;
+    const dotAt = (x, y) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); };
+    for (const a of marks) for (const b of halves) { dotAt(a, b); dotAt(b, a); }
+  }
 
-  // Labels along the lines (faint), repeated every 2 m like the reference. Read correctly (not
+  // Labels along the lines (faint), repeated every block like the reference. Read correctly (not
   // mirrored) on the floor, which is built as a front-facing plane below. `labels: false` drops
-  // them for a clean product shot — the metre grid still carries the scale.
+  // them for a clean product shot — the grid still carries the scale.
   if (labels) {
-  ctx.fillStyle = label;
-  ctx.font = "bold 34px system-ui, -apple-system, sans-serif";
-  ctx.textBaseline = "alphabetic";
-  ctx.save(); ctx.translate(24, M - 16); ctx.fillText("1 METER", 0, 0); ctx.restore();
-  ctx.save(); ctx.translate(M - 16, S - 24); ctx.rotate(-Math.PI / 2); ctx.fillText("PROTOTYPE", 0, 0); ctx.restore();
+    const k = S / 512;
+    ctx.fillStyle = label;
+    ctx.font = `bold ${34 * k}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = "alphabetic";
+    ctx.save(); ctx.translate(24 * k, M - 16 * k); ctx.fillText(pitchLabel(pitch), 0, 0); ctx.restore();
+    ctx.save(); ctx.translate(M - 16 * k, S - 24 * k); ctx.rotate(-Math.PI / 2);
+    ctx.fillText("PROTOTYPE", 0, 0); ctx.restore();
   }
 
   const tex = new THREE.CanvasTexture(canvas);
@@ -151,39 +195,46 @@ function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, label
 }
 
 // A bounded reference room (sim frame): a `size`×`size` footprint × `height` tall greybox resting on
-// z=floorZ, tiled into 1 m "prototype map" squares (see greyboxTexture). Returns a THREE.Group
-// (added under `world`) holding:
+// z=floorZ, tiled into "prototype map" squares at `pitch` metres (see greyboxTexture). Returns a
+// THREE.Group (added under `world`) holding:
 //   - a FRONT-facing (DoubleSide) floor plane just above z=floorZ — the surface people read, so its
-//     baked "PROTOTYPE" / "1 METER" text reads correctly (not mirrored);
+//     baked "PROTOTYPE" / pitch text reads correctly (not mirrored);
 //   - the four walls + ceiling as a BackSide box, so near walls cull and never occlude the drone
-//     (hovering inside) as you orbit. Per-face texture repeats keep every square 1 m even when the
-//     height differs from the footprint. Dispose the whole group (geometry + per-face textures) to
-//     tear it down.
+//     (hovering inside) as you orbit. Per-face texture repeats keep every square `pitch` even when
+//     the height differs from the footprint. `walls: false` builds the floor ALONE — the cyclorama
+//     backdrop the concept renders use, where scene fog fades the ground out instead of a wall, so
+//     no room corner or ceiling seam ever sweeps through a moving shot. Dispose the whole group
+//     (geometry + per-face textures) to tear it down.
 export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette = FALLBACK_TILE,
-                                   labels = true } = {}) {
+                                   labels = true, pitch = 1, minor = 0, walls = true } = {}) {
   const group = new THREE.Group();
-  const rH = size / 2, rV = height / 2;      // texture block is 2 m -> repeat = metres / 2
+  const rH = size / (2 * pitch), rV = height / (2 * pitch);   // block is 2·pitch -> repeat = m/block
+  const grid = { pitch, minor };
 
   // Floor: its own DoubleSide plane (sim XY, normal +Z), sitting a hair above the box bottom face
   // so there's no z-fight and the readable text isn't on a mirrored BackSide.
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
     new THREE.MeshStandardMaterial(
-      { map: greyboxTexture(palette, rH, rH, labels), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+      { map: greyboxTexture(palette, rH, rH, labels, grid), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
   floor.position.set(0, 0, floorZ + 0.003);
   floor.receiveShadow = true;
   group.add(floor);
 
-  // Walls + ceiling: a BackSide box. BoxGeometry(size,size,height) face order is
-  // [+X,-X,+Y,-Y,+Z,-Z]; ±X/±Y are walls (repeat height×footprint / footprint×height), ±Z the
-  // ceiling/floor faces (footprint×footprint). The -Z face is hidden under the floor plane above.
-  const wall = (rx, ry) => new THREE.MeshStandardMaterial(
-    { map: greyboxTexture(palette, rx, ry, labels), roughness: 1, metalness: 0, side: THREE.BackSide });
-  const mats = [wall(rV, rH), wall(rV, rH), wall(rH, rV), wall(rH, rV), wall(rH, rH), wall(rH, rH)];
-  const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, height), mats);
-  box.position.set(0, 0, floorZ + height / 2);
-  box.receiveShadow = true;
-  group.add(box);
+  if (walls) {
+    // Walls + ceiling: a BackSide box. BoxGeometry(size,size,height) face order is
+    // [+X,-X,+Y,-Y,+Z,-Z]; ±X/±Y are walls (repeat height×footprint / footprint×height), ±Z the
+    // ceiling/floor faces (footprint×footprint). The -Z face is hidden under the floor plane above.
+    // The walls are NEVER labelled: seen from inside, a BackSide face flips U, so half of them
+    // rendered the baked text in mirror writing. The floor is the surface that carries the scale.
+    const wall = (rx, ry) => new THREE.MeshStandardMaterial(
+      { map: greyboxTexture(palette, rx, ry, false, grid), roughness: 1, metalness: 0, side: THREE.BackSide });
+    const mats = [wall(rV, rH), wall(rV, rH), wall(rH, rV), wall(rH, rV), wall(rH, rH), wall(rH, rH)];
+    const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, height), mats);
+    box.position.set(0, 0, floorZ + height / 2);
+    box.receiveShadow = true;
+    group.add(box);
+  }
 
   world.add(group);
   return group;

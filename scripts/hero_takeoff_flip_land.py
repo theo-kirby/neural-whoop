@@ -22,7 +22,8 @@ airframe half-height) and each frame carries a numeric ``scene.phase`` code whos
 
     uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
     uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
-        --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4
+        --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
+        --preset hero --width 1080 --height 1080
 """
 
 from __future__ import annotations
