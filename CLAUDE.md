@@ -110,6 +110,7 @@ eval/pack.py     -> standard visual pack assembler (rollout -> replay -> artifac
 training/export.py -> TorchScript / ONNX deploy policy
 viz/replay.py    -> versioned self-describing replay schema + recorder (the "visual contract")
 viz/render.py    -> lazy renderer: trajectory / synthetic FPV / training curves / comparison
+reference/       -> HAND-AUTHORED reference maneuvers (pure numpy): the trajectory we WANT
 ```
 
 **Visual observability seam (`viz/`).** A versioned replay schema
@@ -189,6 +190,24 @@ single `n_drones = n_envs * n_agents` dynamics batch (DiffAero runs with `n_agen
 This sidesteps DiffAero's single-batch rate controller and keeps all multi-agent coupling
 (collisions, relative observations) in *our* env/task layer. The baseline runs `n_agents=1`; swarm
 tasks just raise it. Each drone is one PPO sample (shared-policy parameter sharing).
+
+**Reference maneuvers (`reference/`, `docs/REFERENCE_MANEUVER.md`).** Everything above renders a
+*policy rollout* — what the drone did, which we then grade. `reference/` is the other half: an
+artifact saying what it **should** do. A maneuver is authored by hand, deterministically, and every
+physical quantity (attitude, body rates, collective, and the IMU's specific force) is **derived**,
+not guessed. It is pure numpy + stdlib — no torch, no simulator — the same convention as
+`contract`/`course`/`reward`. `scripts/reference_flip.py` emits a 50 Hz `replay.json.gz` (the
+**video** artifact — `--preset hero` renders it unchanged) and a 1 kHz `reference.json` (the **data**
+artifact), plus `verify.json` and a two-chart pack. Key facts, all measured rather than asserted:
+**differential flatness** turns the powered beats into algebra (author `p(t)`, the thrust falls out
+— it is not a job for RL), but it **cannot author the flip** (through inversion it would demand
+negative thrust), so there we author the *commands* and close the boundary conditions with a damped
+Newton **shoot**; the binding constraint is the rate loop's 16 s⁻¹ bandwidth, not the 12 rad/s
+ceiling, so `ω(t)` is authored as the lag *response* and `u = ω + ω̇/K` emitted; and the replay's
+action is an **impulse-matched** hold (the step mean), without which the emitted stream drifts ~1 m
+instead of 2.2 cm. The metrics use `acro_flip`'s own names so the target is a number the RL can be
+graded against — but use the `--deployable` variant for that, since the motors-off coast has *zero*
+rate authority by construction.
 
 **Render-free perception seam.** Primary training feeds the policy the ground-truth body-frame
 target vector via `OracleEstimator`, optionally corrupted by a batched `DetectorNoise` model
@@ -272,6 +291,14 @@ uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/c
 uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
     --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --preset hero --width 1080 --height 1080
+
+# The HAND-AUTHORED reference maneuver — "this is the one we want", as data, not a rollout
+# (docs/REFERENCE_MANEUVER.md). Pure numpy: no policy, no training, no simulator in the loop.
+uv run python scripts/reference_flip.py --axis roll --omega 9.0 --out runs/reference/flip_roll
+uv run python scripts/reference_flip.py --axis roll --omega 9.0 --deployable \
+    --out runs/reference/flip_roll_deployable          # <- use THIS one as an RL/scoring target
+uv run python scripts/capture_video.py --replay runs/reference/flip_roll/replay.json.gz \
+    --out runs/reference/flip_roll/reference_flip.mp4 --preset hero --width 1080 --height 1080
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn

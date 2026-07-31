@@ -81,6 +81,9 @@ JSON schema (version 1)
               "passed": <bool>,           # a gate was passed this step
               "crashed": <bool>,          # the drone crashed this step
               "obs": [...],               # optional flat observation vector
+              "imu": [ax, ay, az],        # OPTIONAL (v2): BODY-frame specific force (m/s^2) —
+                                          # what the accelerometer reads, +1 g on body +z at rest.
+                                          # See meta.imu_info for the sign/frame convention.
               "scene": {                  # OPTIONAL (v2): per-drone world-frame markers for gateless
                 "target": [x,y,z],        # follow/formation tasks. Keys per task (target/anchor/slot
                 "command": <float>        # vectors; command scalar). See meta.scene_info + the task's
@@ -93,8 +96,15 @@ JSON schema (version 1)
 
 ``meta`` additionally carries an OPTIONAL ``scene_info`` dict (v2) — static descriptors for the
 ``scene`` markers (standoff radius, ``command_labels``, ``formation_radius``) so a consumer can
-label/scale them without hardcoding task names. Both ``scene`` and ``scene_info`` are purely
-additive, so the version stays at 2 and old readers ignore them.
+label/scale them without hardcoding task names — and an OPTIONAL ``imu_info`` dict describing the
+per-frame ``imu`` channel's units/frame/sign convention. All three are purely additive, so the
+version stays at 2 and old readers ignore them.
+
+The ``imu`` channel is what makes a **real flight** and a **hand-authored reference** land in the
+same slot: ``analysis/flight_log.py`` already carries ``acc_x``/``acc_y``/``acc_z``, so the two
+become directly comparable. It is a first-class field rather than a ``scene`` extra because
+``scene`` is documented as *world-frame markers* and specific force is body-frame — reusing it
+would have worked today and lied later.
 
 Read a file back with :func:`load_run` (gzip-transparent).
 """
@@ -157,6 +167,7 @@ def _build_frame(
     passed: bool = False,
     crashed: bool = False,
     obs: Any = None,
+    imu: Any = None,
     scene: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Coerce one control-step frame to plain JSON types (shared by single- and group-episode)."""
@@ -180,6 +191,13 @@ def _build_frame(
     }
     if obs is not None:
         frame["obs"] = _vec(obs)
+    if imu is not None:
+        # Additive `imu` channel (v2, optional): BODY-frame specific force [ax, ay, az] in m/s^2 —
+        # what the onboard accelerometer reads, NOT acceleration. +1 g on body +z at rest, the same
+        # convention the real pilot's az_ref calibration establishes. Interpretation metadata rides
+        # once in `meta.imu_info`. This is what makes a hand-authored reference and a real flight
+        # log directly comparable: analysis/flight_log.py already carries acc_x/acc_y/acc_z.
+        frame["imu"] = _vec(imu)
     if scene:
         # Additive `scene` channel (v2, optional): per-frame world-frame markers for gateless
         # follow/formation tasks. Each value is coerced with _vec; a length-1 result is unwrapped to
@@ -325,6 +343,7 @@ class RunRecorder:
         passed: bool = False,
         crashed: bool = False,
         obs: Any = None,
+        imu: Any = None,
         scene: dict[str, Any] | None = None,
     ) -> None:
         """Append one control-step frame to the current episode (see the module schema)."""
@@ -334,7 +353,7 @@ class RunRecorder:
             t=t, step=step, pos=pos, quat=quat, rpy=rpy, vel=vel, angvel=angvel,
             action=action, action_diffaero=action_diffaero, reward=reward,
             cum_reward=cum_reward, gate_idx=gate_idx, dist_to_gate=dist_to_gate,
-            laps=laps, passed=passed, crashed=crashed, obs=obs, scene=scene,
+            laps=laps, passed=passed, crashed=crashed, obs=obs, imu=imu, scene=scene,
         ))
 
     def add_group_episode(

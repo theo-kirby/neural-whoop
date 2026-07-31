@@ -571,6 +571,345 @@ def plot_hover_telemetry(log: Any, metrics: dict, out_path: str | Path) -> Path:
     return _save(fig, out_path)
 
 
+# =============================================================================================
+# Reference-maneuver charts (neural_whoop.reference — the hand-authored "one we want")
+# =============================================================================================
+#: Muted band colours per phase code, indexed like ``meta.scene_info.phase_labels``. The powered
+#: beats are warm, the coast is cold — so the shape of the maneuver reads off the background
+#: before you look at a single trace.
+_PHASE_BAND_COLORS = {
+    "CLIMB": "#9aa4b2", "HOVER": "#c9d1d9", "POP": "#f0a35e", "ROLL-IN": "#e8734a",
+    "COAST": "#6fa8dc", "CATCH": "#e8734a", "RECOVER": "#8fd19e", "LAND": "#9aa4b2",
+}
+
+
+def _replay_phases(doc: dict, ep: dict) -> tuple[np.ndarray, list[str]]:
+    """``(per-frame phase code, labels)`` from a replay's ``scene.phase`` channel."""
+    labels = list((doc.get("meta", {}).get("scene_info", {}) or {}).get("phase_labels", []))
+    codes = np.array(
+        [int(round((f.get("scene") or {}).get("phase", -1))) for f in ep["frames"]], dtype=int
+    )
+    return codes, labels
+
+
+def _replay_phase_bands(ax, doc: dict, ep: dict, *, annotate: bool = False) -> None:
+    """Shade a time axis by ``scene.phase`` run-lengths — the replay-fed ``_flight_phase_bands``.
+
+    Where the flight version reads phase windows out of a metrics dict, this one derives them from
+    the per-frame channel the scripted sequences already carry, so it works on any replay that
+    sets ``scene.phase`` (this generator and ``hero_takeoff_flip_land.py``). No-op otherwise.
+    """
+    codes, labels = _replay_phases(doc, ep)
+    if not labels or np.all(codes < 0):
+        return
+    t = np.array([f["t"] for f in ep["frames"]], dtype=np.float64)
+    edges = np.flatnonzero(np.diff(codes)) + 1
+    starts = np.concatenate([[0], edges])
+    stops = np.concatenate([edges, [len(codes)]])
+    for a, b in zip(starts, stops):
+        c = codes[a]
+        if c < 0 or c >= len(labels):
+            continue
+        name = labels[c]
+        ax.axvspan(t[a], t[min(b, len(t) - 1)], color=_PHASE_BAND_COLORS.get(name, "#9aa4b2"),
+                   alpha=0.16, lw=0)
+        if annotate and (t[min(b, len(t) - 1)] - t[a]) > 0.12:
+            ax.annotate(name, xy=(0.5 * (t[a] + t[min(b, len(t) - 1)]), 1.0),
+                        xycoords=("data", "axes fraction"), xytext=(0, 2),
+                        textcoords="offset points", ha="center", va="bottom",
+                        fontsize=7, color="#444")
+
+
+def _replay_rotation_turns(ep: dict, axis: int) -> np.ndarray:
+    """Unwrapped rotation about body ``axis``, in **turns**, from the quaternion.
+
+    Charts must never compute on ``rpy``: ``quaternion_to_euler`` (``utils/math.py:190``) is ZYX
+    with pitch clamped to ±90°, so a full 360° roll renders there as a 180° wobble. The replay
+    still *carries* ``rpy`` because the schema requires it; everything downstream uses this.
+    Unwrap the HALF angle then double — doubling first makes the flip a 4π jump, which
+    ``np.unwrap`` reads as no jump at all and silently flattens.
+    """
+    q = np.array([f["quat"] for f in ep["frames"]], dtype=np.float64)
+    return 2.0 * np.unwrap(np.arctan2(q[:, axis], q[:, 3])) / (2.0 * np.pi)
+
+
+def plot_reference_telemetry(
+    replay: str | Path | dict,
+    checks: dict,
+    out_path: str | Path,
+    *,
+    metrics: dict | None = None,
+    residual_series: dict | None = None,
+) -> Path:
+    """Six stacked shared-x panels: everything the reference asserts about itself, as traces.
+
+    Modeled on :func:`plot_hover_telemetry`, but fed by a replay rather than a flight log. The
+    panels are ordered so the maneuver reads top-down as a story — where it went, how fast, how
+    far round, what the motors were asked for, what the IMU would have felt, and whether any of it
+    is actually true:
+
+    1. altitude + lateral offset, with the entry-altitude rail
+    2. vertical / lateral velocity
+    3. unwrapped rotation (turns) + body rate, with the 12 rad/s rail
+    4. normed thrust, with the 4.0 ceiling and (when set) the throttle-floor rail
+    5. **IMU body specific force** — three components + magnitude, with the +1 g rail. This is the
+       panel that surprises people. The coast reads as a **V**, not a null and not a constant: the
+       magnitude starts near 1 g (the drone is still moving fast, and this simulator's oversized
+       drag is the only force acting), collapses to ~0.09 g at the apex where the velocity
+       genuinely passes through zero, then climbs back to ~0.7 g on the way down. Anyone expecting
+       a flat free-fall null across the whole coast will think the generator is broken.
+    6. per-frame verification residuals on a log axis, with the masked C²-break frames marked
+
+    Args:
+        replay: The reference replay document or a path to one.
+        checks: The ``verify.json`` dict from
+            :func:`neural_whoop.reference.verify.verify_reference`.
+        out_path: PNG output path.
+        metrics: Optional headline metrics for the figure title.
+        residual_series: Optional per-frame residuals from
+            :func:`neural_whoop.reference.verify.dynamics_residual_series` (at the replay rate).
+
+    Returns:
+        The output path.
+    """
+    plt = _mpl()
+    doc = _as_doc(replay)
+    ep = _best_episode(doc)
+    meta = doc.get("meta", {})
+    ref = meta.get("reference", {})
+    axis = 1 if ref.get("axis") == "pitch" else 0
+    lat_axis = 0 if axis == 1 else 1
+    z_entry = float(ref.get("z_entry_m", 0.0))
+
+    fr = ep["frames"]
+    t = np.array([f["t"] for f in fr], dtype=np.float64)
+    pos = np.array([f["pos"] for f in fr], dtype=np.float64)
+    vel = np.array([f["vel"] for f in fr], dtype=np.float64)
+    angvel = np.array([f["angvel"] for f in fr], dtype=np.float64)
+    act = np.array([f["action_diffaero"] for f in fr], dtype=np.float64)
+    has_imu = "imu" in fr[0]
+    imu = np.array([f.get("imu", [np.nan] * 3) for f in fr], dtype=np.float64)
+    turns = _replay_rotation_turns(ep, axis)
+    lat_name = "xy"[lat_axis]
+
+    fig, axes = plt.subplots(6, 1, figsize=(12, 15), sharex=True)
+
+    # 1) altitude + lateral offset
+    ax = axes[0]
+    ax.plot(t, pos[:, 2], color=_PATH_COLOR, lw=1.4, label="altitude z")
+    ax.plot(t, pos[:, lat_axis], color=_NEXT_HEX, lw=1.2, label=f"lateral {lat_name}")
+    if z_entry:
+        ax.axhline(z_entry, color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.85)
+        ax.text(t[0], z_entry, f" entry {z_entry:g} m", color=_ORACLE_COLOR, fontsize=8,
+                va="bottom")
+    ax.set_ylabel("position (m)")
+    ax.legend(loc="upper left", fontsize=8, ncol=2)
+
+    # 2) velocities
+    ax = axes[1]
+    ax.plot(t, vel[:, 2], color=_PATH_COLOR, lw=1.2, label="vz")
+    ax.plot(t, vel[:, lat_axis], color=_NEXT_HEX, lw=1.2, label=f"v{lat_name}")
+    ax.axhline(0.0, color="#888", lw=0.7)
+    ax.set_ylabel("velocity (m/s)")
+    ax.legend(loc="upper left", fontsize=8, ncol=2)
+
+    # 3) rotation + body rate
+    ax = axes[2]
+    n_turns = float(ref.get("n_rotations", 1.0) or 1.0)
+    ax.plot(t, turns, color=_PATH_COLOR, lw=1.8, label="rotation (turns)")
+    ax.axhline(n_turns, color=_PATH_COLOR, lw=1.0, ls="--", alpha=0.6)
+    ax.text(t[-1], n_turns, f"target {n_turns:g} turn ", color=_PATH_COLOR, fontsize=8,
+            ha="right", va="bottom")
+    ax.set_ylabel("rotation (turns)", color=_PATH_COLOR)
+    ax.tick_params(axis="y", labelcolor=_PATH_COLOR)
+    ax.set_ylim(-0.08, n_turns * 1.18)
+    axr = ax.twinx()
+    rate_lim = float(meta.get("action_limits", {}).get("max_body_rate_rp_rps", 12.0))
+    axr.plot(t, angvel[:, axis], color=_NEXT_HEX, lw=1.2, label="body rate ω")
+    axr.plot(t, act[:, 1 + axis], color="#6b7280", lw=1.0, ls=":",
+             label="rate command u = ω + ω̇/K")
+    for sign in (1, -1):
+        axr.axhline(sign * rate_lim, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.75)
+    axr.text(t[0], rate_lim, f" act-v2 rate limit ±{rate_lim:g}", color=_ORACLE_COLOR,
+             fontsize=8, va="top")
+    axr.set_ylim(-rate_lim * 1.14, rate_lim * 1.14)
+    axr.set_ylabel("body rate (rad/s)", color=_NEXT_HEX)
+    axr.tick_params(axis="y", labelcolor=_NEXT_HEX)
+    axr.legend(loc="lower right", fontsize=7, ncol=2)
+
+    # 4) collective, with the ceiling and (if any) the throttle floor
+    ax = axes[3]
+    lim = meta.get("action_limits", {})
+    ceil = float(lim.get("max_thrust_normed", 4.0))
+    floor = float(lim.get("min_thrust_normed", 0.0) or 0.0)
+    ax.plot(t, act[:, 0], color=_PATH_COLOR, lw=1.3)
+    ax.axhline(ceil, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.85)
+    ax.text(t[0], ceil, f" ceiling {ceil:g}", color=_ORACLE_COLOR, fontsize=8, va="top")
+    ax.axhline(1.0, color="#888", lw=0.8, ls="--")
+    ax.text(t[0], 1.0, " hover", color="#666", fontsize=8, va="bottom")
+    if floor > 0:
+        ax.axhline(floor, color=_PASSED_HEX, lw=1.2, ls=":")
+        ax.text(t[0], floor, f" deploy floor {floor:g}", color=_PASSED_HEX, fontsize=8,
+                va="bottom")
+    ax.set_ylabel("normed thrust")
+
+    # 5) IMU specific force
+    ax = axes[4]
+    if has_imu and np.isfinite(imu).any():
+        g = 9.81
+        for k, (name, color) in enumerate(
+            (("ax", _PATH_COLOR), ("ay", _NEXT_HEX), ("az", _PASSED_HEX))
+        ):
+            ax.plot(t, imu[:, k], color=color, lw=1.0, label=name)
+        ax.plot(t, np.linalg.norm(imu, axis=-1), color="#333", lw=1.3, ls="--", label="|f|")
+        ax.axhline(g, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.85)
+        ax.text(t[0], g, " +1 g (rest)", color=_ORACLE_COLOR, fontsize=8, va="bottom")
+        ax.axhline(0.0, color="#888", lw=0.7)
+        ax.legend(loc="upper left", fontsize=7, ncol=4)
+    else:
+        ax.text(0.5, 0.5, "no imu channel in this replay", transform=ax.transAxes,
+                ha="center", va="center", color="#888", fontsize=9)
+    ax.set_ylabel("IMU specific force\n(body, m/s²)")
+
+    # 6) verification residuals, per frame. Time series rather than summary bars: the aggregate
+    #    says how big, this says WHERE — and "the spikes land on the two intentional acceleration
+    #    steps and nowhere else" is the actual claim being made.
+    ax = axes[5]
+    rf = checks.get("dynamics_residual_fine", {})
+    rr = checks.get("dynamics_residual_replay", {})
+    conv = checks.get("second_order_convergence", {})
+    if residual_series:
+        floor = 1e-16
+        for name, color in (("pos", _PATH_COLOR), ("vel", _NEXT_HEX), ("quat", _PASSED_HEX)):
+            r = np.maximum(np.asarray(residual_series[name], dtype=np.float64), floor)
+            ax.plot(residual_series["t"], r, color=color, lw=0.9, label=f"|d{name}/dt − model|")
+        for i in rr.get("masked_indices", []):
+            if 0 <= i < len(t):
+                ax.axvline(t[i], color=_ORACLE_COLOR, lw=0.8, ls=":", alpha=0.6)
+        ax.set_yscale("log")
+        ax.legend(loc="upper left", fontsize=7, ncol=3)
+    else:
+        ax.text(0.5, 0.5, "no residual series supplied", transform=ax.transAxes,
+                ha="center", va="center", color="#888", fontsize=9)
+    ax.set_ylabel("dynamics residual\n(SI, log)")
+    ax.set_title(
+        f"residual at {conv.get('dt_replay_s', 0.02)*1e3:.0f} ms (shown) vs "
+        f"{conv.get('dt_fine_s', 0.001)*1e3:.0f} ms stream: vel rms "
+        f"{rr.get('vel_rms', float('nan')):.2e} vs {rf.get('vel_rms', float('nan')):.2e} = "
+        f"{conv.get('observed_vel_rms_ratio', float('nan')):.0f}x, expected ~"
+        f"{conv.get('expected_ratio', float('nan')):.0f}x for a second-order difference. "
+        f"Dotted red = the {len(rr.get('masked_indices', []))} frames masked at the two "
+        f"intentional C² breaks.",
+        fontsize=7.5, color="#555", loc="left",
+    )
+
+    for ax in axes:
+        ax.grid(True, alpha=0.2)
+        _replay_phase_bands(ax, doc, ep, annotate=(ax is axes[0]))
+    axes[5].set_xlabel("time (s)")
+
+    m = metrics or {}
+    head = (f"drift {m.get('max_lateral_drift', float('nan')):.3f} m · "
+            f"peak climb {m.get('peak_climb', float('nan')):+.3f} m · "
+            f"alt loss {m.get('altitude_loss', float('nan')):.3f} m · "
+            f"settle {m.get('settle_pos_error', float('nan')):.3f} m") if m else ""
+    fig.suptitle(
+        f"REFERENCE maneuver (hand-authored, not a rollout) · {ref.get('axis', '?')}-flip "
+        f"Ω={ref.get('omega_peak_rps', float('nan')):g} rad/s · {ref.get('variant', '')}\n{head}",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    return _save(fig, out_path)
+
+
+def plot_reference_envelope(
+    replay: str | Path | dict, out_path: str | Path, *, spec: Any = None, every: int = 2
+) -> Path:
+    """The "flip strip": the maneuver plane's path with a body-z tick every few frames.
+
+    This is the single most legible picture of the maneuver and costs almost nothing — the tick
+    direction *is* the attitude, so the rotation, the pop's lean and the catch's counter-lean are
+    all visible at a glance in one static image, which no time-series panel manages.
+    """
+    plt = _mpl()
+    doc = _as_doc(replay)
+    ep = _best_episode(doc)
+    meta = doc.get("meta", {})
+    ref = meta.get("reference", {})
+    axis = 1 if ref.get("axis") == "pitch" else 0
+    lat_axis = 0 if axis == 1 else 1
+    lat_name = "xy"[lat_axis]
+
+    fr = ep["frames"]
+    pos = np.array([f["pos"] for f in fr], dtype=np.float64)
+    q = np.array([f["quat"] for f in fr], dtype=np.float64)
+    codes, labels = _replay_phases(doc, ep)
+
+    # Body +z (the thrust axis) in world, straight from the quaternion.
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    zb = np.stack([2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)], axis=-1)
+
+    # The maneuver window (POP..RECOVER). The climb and the landing are stagecraft and, on an
+    # equal-aspect axis, a 1.2 m vertical line would squash the ~0.8 m flip into a corner — so the
+    # zoom is on the flip and the full flight stays as faint context.
+    try:
+        lo, hi = labels.index("POP"), labels.index("RECOVER")
+        win = np.flatnonzero((codes >= lo) & (codes <= hi))
+    except ValueError:
+        win = np.arange(len(pos))
+    if win.size == 0:
+        win = np.arange(len(pos))
+
+    fig, ax = plt.subplots(figsize=(9, 8))
+    ax.plot(pos[:, lat_axis], pos[:, 2], color="#dfe3ea", lw=1.0, zorder=1)
+    for c in np.unique(codes):
+        if c < 0 or c >= len(labels):
+            continue
+        m = codes == c
+        ax.plot(pos[m, lat_axis], pos[m, 2], lw=2.2, zorder=2,
+                color=_PHASE_BAND_COLORS.get(labels[c], "#9aa4b2"), label=labels[c])
+    # Attitude ticks only through the flip proper (POP..CATCH). Through RECOVER the airframe is
+    # level by construction, so 60 identical up-arrows would be noise sitting on the one part of
+    # the picture that is already busy.
+    try:
+        tw = np.flatnonzero((codes >= labels.index("POP")) & (codes <= labels.index("CATCH")))
+    except ValueError:
+        tw = win
+    tick = 0.05
+    sel = (tw if tw.size else win)[:: max(1, every)]
+    ax.quiver(pos[sel, lat_axis], pos[sel, 2], zb[sel, lat_axis], zb[sel, 2],
+              color="#33383f", width=0.0024, scale=1.0 / tick, scale_units="xy",
+              angles="xy", zorder=3, alpha=0.8)
+    z_entry = float(ref.get("z_entry_m", 0.0))
+    if z_entry:
+        ax.axhline(z_entry, color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.7)
+        ax.text(0.995, z_entry, "entry / station ", color=_ORACLE_COLOR, fontsize=8,
+                ha="right", va="bottom", transform=ax.get_yaxis_transform())
+    rest_z = float((meta.get("scene_info", {}) or {}).get("rest_z", 0.0))
+    ax.axhline(rest_z, color="#555", lw=1.4)
+
+    pad = 0.12
+    x0, x1 = pos[win, lat_axis].min(), pos[win, lat_axis].max()
+    y0, y1 = pos[win, 2].min(), pos[win, 2].max()
+    ax.set_xlim(x0 - pad - 0.08, x1 + pad + 0.08)
+    ax.set_ylim(y0 - pad, y1 + pad)
+    ax.set_xlabel(f"{lat_name} (m)   — the maneuver plane")
+    ax.set_ylabel("z (m)")
+    ax.set_aspect("equal", adjustable="box")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="lower left", fontsize=8, ncol=2)
+    ax.set_title(
+        f"reference {ref.get('axis', '?')}-flip envelope · ticks are body +z (the thrust axis), "
+        f"every {every} frames\nΩ={ref.get('omega_peak_rps', float('nan')):g} rad/s · "
+        f"{ref.get('variant', '')} · zoomed to POP..RECOVER "
+        f"(climb/land shown faint)",
+        fontsize=11,
+    )
+    del spec
+    fig.tight_layout()
+    return _save(fig, out_path)
+
+
 def plot_link_histogram(log: Any, out_path: str | Path, metrics: dict | None = None) -> Path:
     """Histogram of the flight's ``obs_age`` (uplink freshness) with the 40 ms cliff + p99 marked.
 

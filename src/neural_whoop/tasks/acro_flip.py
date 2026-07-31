@@ -51,12 +51,26 @@ free headroom) − a recover-gated settle/return term − smoothness − crash. 
 the *learned* behaviour, not an initial condition).
 
 Why asymmetric altitude is the load-bearing change: a 2π roll at the 12 rad/s rate envelope takes
-≥ 0.52 s, and a zero-thrust coast that long falls ~1 m. Entering with ``v_up ≈ g·t/2 ≈ 2.4 m/s``
-puts the apex mid-flip and returns to ``z₀`` at ``−2.4 m/s``, which ~3 g of net thrust arrests in
-0.08 s / 0.10 m. Net: ~+0.3 m up, ~−0.1 m down, ~zero lateral (a coast applies no lateral force at
-all). The symmetric v1 ``alt_scale·|z − z₀|`` punished exactly the pop that shape needs, while
-under-punishing the sink; and v1 had NO lateral term at all, so a wide loop was simply what
-"maximise rotation, ignore translation" looks like.
+≥ 0.52 s, and a zero-thrust coast that long falls a long way. Entering with enough ``v_up`` puts the
+apex mid-flip, and a few g of net thrust arrests the return. Net: up, then back, with ~zero lateral
+(a coast applies no lateral force at all). The symmetric v1 ``alt_scale·|z − z₀|`` punished exactly
+the pop that shape needs, while under-punishing the sink; and v1 had NO lateral term at all, so a
+wide loop was simply what "maximise rotation, ignore translation" looks like.
+
+**Numbers, corrected (2026-08-01).** This paragraph used to carry a worked example done *without
+drag* — "falls ~1 m", ``v_up ≈ 2.4 m/s``, "returns at −2.4 m/s", "~+0.3 m up, ~−0.1 m down". Those
+are off by 25-40% for this simulator, because ``D = 0.10`` on 32 g gives a 0.32 s drag time constant
+and a 3.14 m/s terminal velocity, so drag steals a big share of the coast — but also caps the return
+speed well below the pop speed, making the catch *easier* than the drag-free figure suggests. The
+hand-authored reference (``docs/REFERENCE_MANEUVER.md``, ``scripts/reference_flip.py``) solves the
+same maneuver exactly against this airframe and measures: pop to **+3.26 m/s**, return at
+**−2.19 m/s**, **+0.617 m** of peak climb and **0.000 m** of altitude loss, over a **0.97 s** flip
+with **0.180 m** of lateral drift. Use those, not arithmetic.
+
+Note the mismatch that leaves: the reference's ``peak_climb`` (0.617 m, or 0.680 m for the
+deployable variant) **exceeds** ``pop_allow`` below (0.4 m), so under the current reward the shape
+we say we want collects a small ``rise_scale`` penalty. Raising ``pop_allow`` to ~0.7 is a training
+decision, so it is recorded here rather than silently changed.
 
 Metrics (ground truth): ``flip_success_rate`` (reached Φ **and** recovered level, no crash),
 ``mean_completion_time``, ``mean_altitude_loss`` (max ``z₀ − z``), ``max_lateral_drift``,

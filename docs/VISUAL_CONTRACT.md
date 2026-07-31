@@ -207,3 +207,11 @@ any change here and in `CLAUDE.md`, mirroring the obs/act versioning discipline 
 - **(v2, no bump)** — added the optional `scene.phase` code + `meta.scene_info.phase_labels`
   (+ `rest_z`) for scripted flight sequences, consumed by `web/capture/` as on-screen captions.
   Same rule: additive optional fields, no bump.
+- **(v2, no bump)** — added the optional per-frame `imu` vector + `meta.imu_info`. `imu` is the
+  **body-frame specific force** `[ax, ay, az]` in m/s² — what an accelerometer reads, not
+  acceleration — with **+1 g on body +z at rest**, matching the `az_ref` calibration the real
+  pilot does (`pilot/controller.py`). It is a first-class field rather than a `scene` extra
+  because `scene` is documented as *world-frame markers*; stuffing a body-frame vector in there
+  would have worked today and lied later. Written by
+  `neural_whoop.reference` (`docs/REFERENCE_MANEUVER.md`) and readable alongside a real flight's
+  `acc_x`/`acc_y`/`acc_z` columns (`analysis/flight_log.py`), which is the point.

@@ -181,6 +181,59 @@ def test_scene_channel_round_trips(tmp_path):
     assert isinstance(fr["scene"]["command"], float)
 
 
+def test_imu_channel_round_trips(tmp_path):
+    """The optional body-frame `imu` vector + `meta.imu_info` survive save/load (additive at v2).
+
+    `imu` is specific force, not acceleration: +1 g on body +z at rest. It stays a 3-vector (it is
+    never unwrapped to a scalar the way `scene`'s command channel is) and is what lets a
+    hand-authored reference and a real flight log be compared in the same units.
+    """
+    rec = RunRecorder({**_META, "imu_info": {"units": "m/s^2", "frame": "body"}})
+    rec.begin_episode(1, [], dr=None, oracle_lap=None)
+    rec.add_frame(
+        t=0.02, step=1, pos=[0, 0, 1], quat=[0, 0, 0, 1], rpy=[0, 0, 0],
+        vel=[0, 0, 0], angvel=[0, 0, 0], action=[0, 0, 0, 0], action_diffaero=[1, 0, 0, 0],
+        reward=0.0, cum_reward=0.0, gate_idx=0, dist_to_gate=0.0, laps=0,
+        imu=np.array([0.0, 0.0, 9.81], dtype=np.float32),
+    )
+    rec.end_episode({"steps": 1})
+    doc = load_run(rec.save(tmp_path / "imu.json.gz"))
+    json.dumps(doc)  # no leaked numpy types
+    assert doc["meta"]["imu_info"]["frame"] == "body"
+    fr = doc["episodes"][0]["frames"][0]
+    assert fr["imu"] == pytest.approx([0.0, 0.0, 9.81], abs=1e-5)
+    assert doc["version"] == REPLAY_VERSION  # additive: no bump
+
+
+def test_imu_absent_still_validates(tmp_path):
+    """Back-compat: no `imu` kwarg -> no `imu` key, and the group-episode path agrees."""
+    rec = RunRecorder(_META)
+    rec.add_group_episode(1, [], [{
+        "drone": 0, "dr": None, "summary": {"steps": 1},
+        "frames": [dict(
+            t=0.02, step=1, pos=[0, 0, 1], quat=[0, 0, 0, 1], rpy=[0, 0, 0],
+            vel=[0, 0, 0], angvel=[0, 0, 0], action=[0, 0, 0, 0], action_diffaero=[1, 0, 0, 0],
+            reward=0.0, cum_reward=0.0, gate_idx=0, dist_to_gate=0.0, laps=0,
+            imu=[1.0, 2.0, 3.0],
+        )],
+    }])
+    doc = load_run(rec.save(tmp_path / "group_imu.json"))
+    # _build_frame is shared, so the group path gets the field for free.
+    assert doc["episodes"][0]["drones"][0]["frames"][0]["imu"] == [1.0, 2.0, 3.0]
+
+    rec2 = RunRecorder(_META)
+    rec2.begin_episode(1, [], dr=None, oracle_lap=None)
+    rec2.add_frame(
+        t=0.02, step=1, pos=[0, 0, 1], quat=[0, 0, 0, 1], rpy=[0, 0, 0],
+        vel=[0, 0, 0], angvel=[0, 0, 0], action=[0, 0, 0, 0], action_diffaero=[1, 0, 0, 0],
+        reward=0.0, cum_reward=0.0, gate_idx=0, dist_to_gate=0.0, laps=0,
+    )
+    rec2.end_episode({"steps": 1})
+    doc2 = load_run(rec2.save(tmp_path / "noimu.json"))
+    assert "imu" not in doc2["episodes"][0]["frames"][0]
+    assert "imu_info" not in doc2["meta"]
+
+
 def test_scene_absent_still_validates(tmp_path):
     """Back-compat: a frame with no `scene` emits no `scene` key (old readers untouched)."""
     rec = RunRecorder(_META)
