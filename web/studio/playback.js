@@ -107,10 +107,17 @@ export class Playback {
     const multi = tracks.length > 1;
     this.actors = tracks.map((t, k) => {
       const tint = multi ? DRONE_TINTS[k % DRONE_TINTS.length] : 0xffe14a;
-      const glyph = makeDrone(tint, this.droneOptions);
+      // Optional per-drone render hint from the replay (`drones[].style`). Today: `ghost`, which
+      // draws this airframe translucent so an overlay of two drones is readable — see
+      // scripts/reference_vs_policy.py. Absent on every ordinary replay.
+      const style = t.style || {};
+      const glyph = makeDrone(tint, { ...this.droneOptions, ...(style.ghost ? { ghost: style.ghost } : {}) });
       this.view.world.add(glyph);
       const frames = t.frames || [];
-      const trail = frames.length ? buildTrail(this.view.world, frames) : null;
+      const trail = frames.length
+        ? buildTrail(this.view.world, frames,
+                     style.ghost ? { plain: style.ghost.color ?? 0x9aa5b1 } : {})
+        : null;
       // One onboard camera per drone (rolls with its body) so every FPV inset is independent. 90°
       // to match nw-viz's hero FPV (cameras.js / render_fpv); aspect is set per-cell at composite.
       const fpvCamera = new THREE.PerspectiveCamera(90, 4 / 3, 0.02, 400);

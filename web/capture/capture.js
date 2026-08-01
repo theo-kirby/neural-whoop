@@ -424,29 +424,45 @@ const nFlight = playback.maxFrames;
 const nCard = Math.max(0, Math.round(opts.titleFrames));
 const frameCount = nCard + nFlight + nCard;
 
-// Worst-case framing over the WHOLE flight: project the hero (padded by the airframe's angular
+// Worst-case framing over the WHOLE flight: project each drone (padded by the airframe's angular
 // radius) through the camera it will actually be rendered with, and report the largest |NDC| in
-// each axis. >= 1 means the drone leaves frame at some point. Reported by the driver so "does it
+// each axis. >= 1 means a drone leaves frame at some point. Reported by the driver so "does it
 // stay in frame?" is a measured number, not something you check by scrubbing.
+//
+// EVERY drone counts, not just the hero. On a single-drone replay that is the same number as
+// before. On an OVERLAY (scripts/reference_vs_policy.py: a ghost reference beside the policy
+// tracking it) the camera follows the hero, so a hero-only check reports a comfortable framing
+// while the drone the clip exists to show has left the picture entirely — the check would pass on
+// a video that hides its own subject. Apparent size stays hero-only: it is what `--drone-frac`
+// asks for, and a second drone at a different depth would smear a number that is meant to prove
+// the follow rig holds the SUBJECT at a constant size.
 function framingReport() {
   const v = new THREE.Vector3();
   const rad = opts.scale * 0.5;
   let mx = 0, my = 0, sMin = Infinity, sMax = 0;
+  const tracks = playback.actors.map((a) => a.frames).filter((fr) => fr && fr.length);
   for (let i = 0; i < nFlight; i++) {
     applyPose(i);
-    const f = playback.heroFrames[Math.min(i, playback.heroFrames.length - 1)];
-    if (!f) continue;
-    v.set(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld);
-    const depth = Math.max(1e-3, v.distanceTo(cam.position));
-    const pad = rad / depth;                    // angular radius -> NDC (half-frame == tan(fov/2))
+    for (const frames of tracks) {
+      // A track that ended early (crash / early abort) holds at its last frame — the same thing
+      // the renderer draws — so the check measures the picture, not the telemetry.
+      const f = frames[Math.min(i, frames.length - 1)];
+      if (!f) continue;
+      v.set(f.pos[0], f.pos[1], f.pos[2]).applyMatrix4(view.world.matrixWorld);
+      const depth = Math.max(1e-3, v.distanceTo(cam.position));
+      const pad = rad / depth;                  // angular radius -> NDC (half-frame == tan(fov/2))
+      v.project(cam);
+      mx = Math.max(mx, Math.abs(v.x) + pad / tanH);
+      my = Math.max(my, Math.abs(v.y) + pad / tanV);
+    }
+    const h = playback.heroFrames[Math.min(i, playback.heroFrames.length - 1)];
+    if (!h) continue;
+    v.set(h.pos[0], h.pos[1], h.pos[2]).applyMatrix4(view.world.matrixWorld);
     // Apparent size as a fraction of the frame HEIGHT — the number `--drone-frac` asks for. A
     // follow rig holds it flat by construction; the spread is what tells you a locked-off or
     // tripod shot is letting the subject balloon and shrink.
-    const frac = opts.scale / (depth * 2 * tanV);
+    const frac = opts.scale / (Math.max(1e-3, v.distanceTo(cam.position)) * 2 * tanV);
     sMin = Math.min(sMin, frac); sMax = Math.max(sMax, frac);
-    v.project(cam);
-    mx = Math.max(mx, Math.abs(v.x) + pad / tanH);
-    my = Math.max(my, Math.abs(v.y) + pad / tanV);
   }
   return { x: mx, y: my, sizeMin: sMin === Infinity ? 0 : sMin, sizeMax: sMax };
 }

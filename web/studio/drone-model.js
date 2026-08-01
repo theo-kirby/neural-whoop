@@ -118,11 +118,34 @@ export function spinProps(drone, radians) {
   return true;
 }
 
+// Draw `root` translucent (and optionally re-tinted). Materials are CLONED first: the chassis
+// prototype is shared by `proto.clone(true)` across every drone instance, so mutating in place
+// would ghost the whole scene rather than one airframe.
+function applyGhost(root, { opacity = 0.32, color = null } = {}) {
+  root.traverse((o) => {
+    if (!o.isMesh || !o.material) return;
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const ghosted = mats.map((m) => {
+      const c = m.clone();
+      c.transparent = true;
+      c.opacity = Math.min(c.opacity ?? 1, opacity);
+      c.depthWrite = false;   // no self-occlusion inside a translucent shell
+      if (color !== null && c.color) c.color.setHex(color);
+      return c;
+    });
+    o.material = Array.isArray(o.material) ? ghosted : ghosted[0];
+    o.castShadow = false;     // a ghost is a reference, not a body — it should not throw shadow
+  });
+}
+
 // `opts`: { footprint } XY tip-to-tip size in metres; { axes } the RGB body-frame triad;
-// { marker } the tinted centre sphere. The defaults are the Studio's look — a headless/cinematic
-// renderer turns the two gizmos off and asks for the true-scale footprint.
+// { marker } the tinted centre sphere; { ghost } draw this airframe translucent —
+// `{opacity, color}` or `true` for the defaults — which is how two drones in one scene are told
+// apart (see scripts/reference_vs_policy.py). The other defaults are the Studio's look; a
+// headless/cinematic renderer turns the two gizmos off and asks for the true-scale footprint.
 export function makeDrone(centerColor = 0xf2f2f2, opts = {}) {
-  const { footprint = GLYPH_FOOTPRINT, axes = true, marker = true } = opts;
+  const { footprint = GLYPH_FOOTPRINT, axes = true, marker = true, ghost = null } = opts;
+  const ghostOpts = ghost === true ? {} : ghost;
   const glyphScale = footprint / GLYPH_FOOTPRINT;
   const g = new THREE.Group();
   const placeholder = new THREE.Group(); // procedural glyph, swapped for the CAD chassis on load
@@ -175,11 +198,14 @@ export function makeDrone(centerColor = 0xf2f2f2, opts = {}) {
     g.add(triad);
   }
 
+  if (ghostOpts) applyGhost(placeholder, ghostOpts);   // the procedural fallback glyph
+
   chassisPrototype().then((proto) => {
     if (!proto) return;
     g.remove(placeholder);
     const chassis = proto.clone(true); // clones share geometry + materials across drones
     chassis.scale.multiplyScalar(footprint);
+    if (ghostOpts) applyGhost(chassis, ghostOpts);
     g.add(chassis);
   });
   return g;

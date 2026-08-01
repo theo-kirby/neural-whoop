@@ -53,7 +53,11 @@ JSON schema (version 1)
           "drones": [                           # OPTIONAL (v2): swarm group sharing one course.
             {                                   # present for n_agents>1 tasks. When present, the
               "drone": <int>, "dr": {...}|null, # episode-level drone/dr/summary/frames mirror
-              "summary": {...}, "frames": [...] # drones[0] (the lead) for v1-reader compat.
+              "summary": {...}, "frames": [...],# drones[0] (the lead) for v1-reader compat.
+              "style": {                        # OPTIONAL: per-drone render hint, ignored by any
+                "ghost": {"opacity": <float>,   # consumer that doesn't understand it. `ghost`
+                          "color": <int>}       # draws the airframe translucent + optionally
+              }                                 # tinted — see below.
             }
           ],
           "summary": {                          # filled at end_episode
@@ -99,6 +103,14 @@ JSON schema (version 1)
 label/scale them without hardcoding task names — and an OPTIONAL ``imu_info`` dict describing the
 per-frame ``imu`` channel's units/frame/sign convention. All three are purely additive, so the
 version stays at 2 and old readers ignore them.
+
+A track's OPTIONAL ``style`` block is a **render hint**, never data: it says how a drone should be
+drawn, not what it did. Today the one key is ``ghost`` (``{"opacity": float, "color": int}``), which
+draws that airframe translucent so two drones in one scene are tellable apart — what
+``scripts/reference_vs_policy.py`` uses to overlay a hand-authored reference (the ghost) on the
+policy trained to track it. It lives on the track rather than in ``meta`` because which drone is the
+ghost is a per-drone fact, and it is purely additive, so the version stays at 2 and a reader that
+ignores it still gets a correct — merely monochrome — picture.
 
 The ``imu`` channel is what makes a **real flight** and a **hand-authored reference** land in the
 same slot: ``analysis/flight_log.py`` already carries ``acc_x``/``acc_y``/``acc_z``, so the two
@@ -376,20 +388,23 @@ class RunRecorder:
             index: 1-based episode number.
             gates: The shared course (same accepted forms as :meth:`begin_episode`).
             tracks: One dict per drone: ``{"drone": int, "dr": {...}|None, "summary": {...},
-                "frames": [<add_frame kwargs dict>, ...]}``.
+                "frames": [<add_frame kwargs dict>, ...]}``. An optional ``"style"`` dict is passed
+                through verbatim as a render hint (see the module docstring).
             oracle_lap: Speed-oracle target lap time (s) for the shared course.
         """
         if not tracks:
             raise ValueError("add_group_episode() requires at least one track")
-        drones = [
-            {
+        drones = []
+        for tr in tracks:
+            entry = {
                 "drone": int(tr["drone"]),
                 "dr": tr.get("dr"),
                 "summary": dict(tr.get("summary", {})),
                 "frames": [_build_frame(**fr) for fr in tr["frames"]],
             }
-            for tr in tracks
-        ]
+            if tr.get("style"):
+                entry["style"] = dict(tr["style"])
+            drones.append(entry)
         lead = drones[0]
         self._episodes.append({
             "index": int(index),

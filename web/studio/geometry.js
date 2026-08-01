@@ -243,10 +243,23 @@ export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette
 // Dim grey full path + a heat-coloured "traveled" overlay revealed via drawRange. The traveled
 // trail is turbo-mapped by speed (normalized to a fixed p95 so colours don't flicker frame to
 // frame), so you read where the drone was fast vs. slow. Returns {full, done}.
-export function buildTrail(world, frames) {
+export function buildTrail(world, frames, opts = {}) {
   const pathPts = frames.map((f) => new THREE.Vector3(f.pos[0], f.pos[1], f.pos[2]));
   const geo = new THREE.BufferGeometry().setFromPoints(pathPts);
   const full = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x3a3a3a }));
+
+  // `plain` draws the flown trail as one muted colour instead of the turbo speed ramp. Two turbo
+  // trails in one scene read as one confusing gradient, so an overlay's ghost takes this path.
+  if (opts.plain !== undefined) {
+    const doneGeoPlain = geo.clone();
+    const donePlain = new THREE.Line(
+      doneGeoPlain,
+      new THREE.LineBasicMaterial({ color: opts.plain, transparent: true, opacity: 0.55 })
+    );
+    world.add(full);
+    world.add(donePlain);
+    return { full, done: donePlain };
+  }
 
   const doneGeo = geo.clone();
   const speeds = frames.map((f) => Math.hypot(f.vel[0], f.vel[1], f.vel[2]));
