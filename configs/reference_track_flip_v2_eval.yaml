@@ -1,0 +1,124 @@
+# reference_track / FLIP v2 — GIVE THE POSITION REWARD A GRADIENT AGAIN.
+#
+# Parent: configs/reference_track_flip_eval.yaml (Flywheel calm-fog-9257), which trained to
+# pos_err_m 0.448 / att_err_deg 12.77 / tracking_ok 0.9773 and flew a visibly FLATTER flip than
+# authored: peak_climb 0.212 m against the reference's 0.680 m.
+#
+# The pre-registered hypothesis (Flywheel patient-limit-7117): that is a REWARD-GRADIENT failure,
+# not an authority one. The position term is a bell exp(-(err/0.25)^2); at the achieved 0.448 m it
+# is worth exp(-3.21) = 0.040 of a possible 1.0, and its SLOPE there is smaller still. Meanwhile
+# attitude at 12.77 deg = 0.223 rad against sigma 0.40 is worth exp(-0.31) = 0.73. So the policy is
+# collecting nearly all of the attitude reward and essentially none of the position reward, and —
+# the actual problem — the position reward is too flat out there to tell it which way to move. It
+# rotates beautifully in roughly the wrong place because rotating is the only term still paying.
+#
+# Two changes, both to the position term only:
+#   pos_sigma 0.25 -> 0.60   the bell now has real slope at 0.448 m (0.040 -> 0.573)
+#   pos_linear 0.0 -> 1.0    a constant-slope term that points home from ANYWHERE inside
+#                            fail_pos_err, so the signal cannot go flat again at a larger error
+#
+# Nothing else moves — same seed, same steps, same DR, same attitude/rate/vel terms — so the
+# comparison against the parent is clean. reference_track_flip_seed1.yaml is the control arm: the
+# PARENT config at seed 1, which measures how much of any change here is just seed variance (all
+# three of the first results were single-seed, and that variance is currently unmeasured).
+#
+# FALSIFIER: if pos_err_m does not improve and peak_climb stays near 0.21 m, the position gradient
+# was not the binding constraint and the inverted coast's missing authority is the real ceiling.
+
+run:
+  name: reference_track_flip_v2_eval
+
+task:
+  name: reference_track
+  reference: runs/reference/flip_roll_z09_deployable/reference.json
+  # Tracked window = POP, ROLL-IN, COAST, CATCH, RECOVER (2.20 s at 50 Hz -> 110 steps). CLIMB /
+  # HOVER / LAND are dropped as stagecraft: the deploy split gives take-off and landing to the
+  # hover_tof policy, and the acro policy owns only the bounded maneuver window.
+  exclude_phases: [CLIMB, HOVER, LAND]
+  settle_steps: 25          # hold the final state — "come back AND stop there"
+
+  # --- RSI: the load-bearing setting. 0.0 here reproduces acro_flip_v2's exploration barrier. ---
+  rsi_frac: 0.0        # EVAL: always start at phase 0 and fly the whole maneuver
+  rsi_max_frac: 0.9
+  rsi_pos_jitter: 0.03
+  rsi_vel_jitter: 0.05
+  rsi_omega_jitter: 0.10
+  rsi_tilt_jitter: 0.03
+
+  # --- tracking bells, exp(-(err/sigma)^2) ---
+  # Attitude leads: through a flip the attitude IS the maneuver, and it is the channel the policy
+  # can actually observe onboard (gravity_body). Position is weighted equally but its sigma is
+  # tight, because "point in space" is the whole claim being tested.
+  att_scale: 2.0
+  att_sigma: 0.40
+  rate_scale: 0.5
+  rate_sigma: 3.0
+  pos_scale: 2.0
+  pos_sigma: 0.60        # v2: was 0.25 — the bell was flat where the policy actually lived
+  pos_linear: 1.0        # v2: was 0.0 (absent) — constant slope, always points home
+  vel_scale: 0.5
+  vel_sigma: 1.0
+  alive_bonus: 0.02
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+  fail_pos_err: 1.0         # abandon a hopeless rollout rather than paying for its samples
+  station_jitter_xy: 0.0   # EVAL: fixed placement, so runs are directly comparable
+  station_jitter_z: 0.0
+  success_pos_rmse: 0.20
+
+  bound_xy: 6.0
+  bound_z_min: 0.15
+  bound_z_max: 4.0
+
+# act-v2 envelope. Matches the reference variant: --deployable solves against this exact floor, so
+# a policy trained without it would be tracking a trajectory the deploy path rewrites under it.
+act:
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  # Deliberately lighter than acro_flip_v2's. The reference is authored against the NOMINAL
+  # airframe (RefModel, randomize_airframe=False), so heavy DR asks the policy to track a
+  # trajectory that is not physically reachable on the sampled airframe — the tracking error then
+  # measures the DR draw rather than the policy. Harden after the nominal-airframe result is GREEN.
+  wind_accel_mps2: 0.5
+  rate_gain_frac: 0.10
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    phase, g_ref(3),      w_ref(3)]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  action_latency_steps: 2
+  # The reference channels carry NO noise: like maneuver_phase they are authored signals shipped
+  # with the policy, not measurements. Noising them would model a sensor that does not exist.
+
+# Air65 II + XIAO companion, the weighed/spec ~30 g AUW band (same as acro_flip_v2).
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 300_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

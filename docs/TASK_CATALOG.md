@@ -346,27 +346,71 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   (`docs/REFERENCE_MANEUVER.md`: differential flatness + a damped-Newton shoot, residuals ~1e-8), so
   the shaping problem moves out of the reward and into the authoring, where it is algebra with a
   closed form.
-- **First results (2026-08-01, RTX 4070, 300 M steps each, ~10 min/run).** DR-off eval through the
-  `_eval` twins (`rsi_frac 0`, no station jitter), quoting the **full-horizon per-step** numbers —
-  not `metrics()`'s `ep_`-prefixed accumulators, which are reset-biased by ~2.4×:
+- **Quote the MANEUVER WINDOW, not the episode.** The `_eval` twins run to the episode cap (499
+  steps), while the tracked reference window is 110 (flip) / 268 (swing) / 223 (orbit). Everything
+  after it is the trivial hold-the-final-state tail, and `eval/rollout.py`'s full-horizon per-step
+  mean averages straight over it — so a reported number is a *mixture* whose blend differs per
+  maneuver (flip 78 % tail, swing 46 %, orbit 55 %) and, worse, differs between a policy that
+  **crashed early** (all maneuver, no tail) and one that survived (mostly tail). That is what made
+  the first flip table below look better than it was. `scripts/reference_vs_policy.py` reports over
+  the window and is the number to quote. This is the same failure mode as the `ep_`-prefixed
+  accumulators, one level further out.
 
-  | maneuver | `pos_err_m` | `att_err_deg` | `tracking_ok` | crash | verdict |
-  |---|---|---|---|---|---|
-  | **swing** | 0.195 | **1.78** | **1.0000** | 0.0000 | **GREEN** |
-  | **orbit** | 0.239 | 10.49 | **1.0000** | 0.0000 | **GREEN** (first non-planar policy) |
-  | **flip**  | 0.448 | 12.77 | 0.9773 | 0.0227 | partial — see below |
+  | maneuver | reported (full episode) | **maneuver window** | direction |
+  |---|---|---|---|
+  | swing | 0.195 m / 1.78° | **0.114 m / 1.92°** | the tail made it look *worse* |
+  | orbit | 0.239 m / 10.49° | **0.172 m / 6.82°** | the tail made it look *worse* |
+  | flip (v1) | 0.448 m / 12.77° | **0.455 m / 12.73°** | ~same — it died before any tail |
+
+- **First results (2026-08-01, RTX 4070, 300 M steps each, ~10 min/run).** DR-off eval through the
+  `_eval` twins (`rsi_frac 0`, no station jitter), over the maneuver window:
+
+  | maneuver | `pos_err_m` | `att_err_deg` | flew | verdict |
+  |---|---|---|---|---|
+  | **swing** | **0.114** | **1.92** | 100 % | **GREEN** |
+  | **orbit** | **0.172** | 6.82 | 100 % | **GREEN** (first non-planar policy) |
+  | **flip**  | 0.455 | 12.73 | **38 %, crash** | **RED** — see below |
 
   The ordering is exactly what the reference package predicted from its own authoring numbers: the
   swing is fully powered, planar, 32 % rate headroom and closes at machine precision, and it is the
   one that tracks to under 2°. The orbit is fully powered but genuinely 3D and lands in between.
-  **The flip is hardest for a structural reason, not a tuning one** — through its coast the throttle
-  is floored at 0.25 and the airframe is inverted, so lateral error taken on before or during the
-  coast cannot be bought back until `CATCH`. It also under-does the pop (`peak_climb` 0.212 m vs the
-  reference's 0.680 m): it rotates correctly but flies a flatter flip than authored.
-- **Known next lever on the flip:** the position reward is a bell `exp(−(err/0.25)²)`, which at the
-  measured 0.448 m error returns ~0.04 — i.e. the gradient has essentially vanished exactly where
-  the policy actually is. Widening `pos_sigma` and/or adding a linear position term so the gradient
-  never dies is the obvious next experiment, and it is untested.
+- **The flip v1 result was worse than "partial".** It does not fly a flatter flip — it **does not
+  complete the maneuver**. Every hero episode ends identically at step 42 of 110 (0.84 s of 2.20 s),
+  falling through `bound_z_min` during `COAST`; `CATCH` and `RECOVER` are never reached. The
+  published `crash_rate_per_step` 0.0227 reads like "2 % of drones crash" and actually means
+  1/44 — *every* drone crashes, after ~44 steps — and `tracking_ok` 0.9773 is 43/44 steps alive,
+  not 98 % of drones tracking. Per-step rates need a denominator before they mean anything.
+- **The flip is UNWILLING to pop, not unable.** The reference commands 3.80 normed thrust through
+  `POP`; v1 commands 2.17 against an act-v2 ceiling of **4.0**, and `act[0]` never exceeds +0.087
+  of its +1.0 range. It has ~2× the authority it uses. Rate tracking through the roll is fine
+  (~9–10 rad/s vs the authored 9.0), so this is a thrust/credit-assignment failure, not an
+  attitude one.
+- **Flip v2 (position gradient) — the hypothesis is largely REFUTED.** Pre-registered on Flywheel
+  (`patient-limit-7117`): the position term is a bell `exp(−(err/0.25)²)` worth 0.04 at the
+  achieved error, so widen `pos_sigma` 0.25→0.60 and add a constant-slope `pos_linear` 1.0. Its own
+  falsifier — *"if `pos_err_m` does not improve and `peak_climb` stays near 0.21 m, the position
+  gradient was not the binding constraint"* — fires. Three arms, all over the maneuver window:
+
+  | arm | flew | `pos_err_m` | `att_err_deg` | peak thrust | peak climb |
+  |---|---|---|---|---|---|
+  | v1 — parent, seed 0 | 38 %, crash | 0.455 | 12.73 | 2.17 | 0.228 |
+  | **control — parent, seed 1** | **100 %** | 0.539 | 3.77 | 2.73 | 0.189 |
+  | v2 — pos gradient, seed 0 | 100 % | 0.420 | 2.44 | 2.86 | 0.290 |
+  | *reference (authored)* | 100 % | 0 | 0 | **3.80** | **0.680** |
+
+  **The control arm is the finding.** The parent config at seed 1 also survives, so v1's crash was
+  **seed variance, not the reward gradient** — and every single-seed `reference_track` result,
+  including the two GREENs above, now carries an unmeasured error bar wide enough to flip
+  crash/survive. v2 does win on both error channels, but by less than the spread between the two
+  parent seeds, so with n=1 per cell the reward change cannot be separated from seed noise.
+  What *is* solid: no arm gets near the authored 3.80 pop or the 0.680 m apex, so the position
+  gradient is not what limits the flip's shape. `configs/reference_track_flip_v2.yaml`,
+  `..._seed1.yaml`.
+- **Next lever on the flip — RSI under-samples the `POP`.** With `rsi_frac 0.8`, 80 % of episodes
+  start *placed* in the reference's own mid-maneuver state, so they never have to generate the pop
+  to get there; only the 20 % that start at phase 0 do, and the pop is ~10 of 110 steps. Phase-
+  weighted RSI (oversample the early phases) or a larger phase-0 share is the obvious next
+  experiment. **Untested.**
 - **Use `--deployable` for the flip.** Its motors-off coast has *zero* rate authority for 10 % of
   the flight (`allocation.min_margin_torqued == 0`), and a policy cannot be trained to track a
   trajectory over an interval where it has no control authority. The swing and the orbit are fully

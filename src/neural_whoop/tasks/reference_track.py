@@ -112,6 +112,13 @@ class ReferenceTrackConfig:
     rate_sigma: float = 3.0      # rad/s
     pos_scale: float = 2.0
     pos_sigma: float = 0.25      # m
+    #: Linear position penalty, ``-pos_linear * pos_err``, added to the bell. A Gaussian bell is
+    #: nearly gradient-free once the error passes ~2 sigma (at the trained flip's 0.448 m against
+    #: sigma 0.25 it is exp(-3.21) = 0.040, and its slope is smaller still), so a policy that starts
+    #: outside the bell has no signal telling it which way is better. The linear term has constant
+    #: slope everywhere, so it still points home from anywhere inside ``fail_pos_err``. Default 0.0
+    #: keeps every pre-existing config bit-identical.
+    pos_linear: float = 0.0      # reward per metre of position error
     vel_scale: float = 0.5
     vel_sigma: float = 1.0       # m/s
     alive_bonus: float = 0.02
@@ -312,6 +319,7 @@ class ReferenceTrackTask(DroneTask):
             c.att_scale * torch.exp(-((att_err / c.att_sigma) ** 2))
             + c.rate_scale * torch.exp(-((rate_err / c.rate_sigma) ** 2))
             + c.pos_scale * torch.exp(-((pos_err / c.pos_sigma) ** 2))
+            - c.pos_linear * pos_err
             + c.vel_scale * torch.exp(-((vel_err / c.vel_sigma) ** 2))
             + c.alive_bonus
         )

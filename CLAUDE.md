@@ -115,6 +115,7 @@ reference/       -> HAND-AUTHORED reference maneuvers (pure numpy): the trajecto
    ├─ video.py                -> the reference VIDEO contract: one hero invocation, pinned by a test
    └─ track.py                -> reference.json -> control-rate tracking table (the RL consumer)
 tasks/reference_track.py -> TRACK a reference instead of rediscovering it (RSI + tracking bells)
+scripts/reference_vs_policy.py -> reference + policy as ONE 2-drone replay (ghost overlay + chart)
 ```
 
 **Visual observability seam (`viz/`).** A versioned replay schema
@@ -240,6 +241,23 @@ argument (a flip spawns inverted, where the ZYX euler triple is degenerate). Win
 `CLIMB`/`HOVER`/`LAND` stagecraft, matching the deploy split where `hover_tof` owns take-off and
 landing. Eval twins (`configs/reference_track_*_eval.yaml`) set `rsi_frac: 0` — an honest rollout,
 and the only one a hero video should be rendered from, flies the whole maneuver from phase 0.
+**Quote the maneuver window, not the episode** (`docs/TASK_CATALOG.md`): the eval runs to the 499-
+step cap against a 110/268/223-step reference, so a full-horizon mean blends the maneuver with a
+hold-station tail — and blends it *differently* for a policy that crashed early than for one that
+survived. `scripts/reference_vs_policy.py` is what reports over the window.
+
+**Reference vs policy in ONE frame (`scripts/reference_vs_policy.py`).** Two hero clips side by
+side is the wrong comparison: `--preset hero`'s follow rig derives its camera from each replay's
+*own* track, so a policy that falls out of the sky is chased by its own camera and lands in frame
+looking composed. Instead the authored reference and the policy are merged into a **single replay
+with two drones** — no renderer work, since `playback.js` has drawn `episodes[].drones[]` since the
+swarm tasks — with the reference as `drones[0]` (so the camera flies the *ideal* path and deviation
+is visible) drawn as a translucent **ghost** via the new additive per-drone `style` render hint, and
+a policy that ends early simply *stopping*, because the gap where it used to be is the result. The
+overlay's framing room is **derived** from the measured worst separation rather than tuned per clip,
+and `capture.js`'s framing check now measures **every** drone: on the first overlay the old
+hero-only check reported a comfortable |NDC| 0.47 while the policy was **3.16 outside the frame** —
+it would have passed a video that hides its own subject.
 
 **Two standing findings from this package, both durable rather than filed in a commit message:**
 
@@ -376,6 +394,13 @@ uv run python scripts/reference_maneuver.py --maneuver flip --z-entry 0.9 \
 uv run python scripts/reference_flip.py --axis roll --omega 9.0 --out runs/reference/flip_roll
 uv run python scripts/reference_flip.py --axis roll --omega 9.0 --deployable \
     --out runs/reference/flip_roll_deployable          # <- use THIS one as an RL/scoring target
+
+# Did the POLICY fly what we authored? One 2-drone replay: ghost reference + solid policy, the
+# per-channel error chart, and the numbers over the MANEUVER WINDOW (not the padded episode).
+uv run python scripts/reference_vs_policy.py \
+    --policy runs/reference_track_flip/replay.json.gz \
+    --reference runs/reference/flip_roll_z09_deployable/reference.json \
+    --out runs/reference_track_flip/vs_reference --video
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn
