@@ -3,10 +3,16 @@
 The whole value of a reference trajectory is that its numbers are true, so every claim the
 :mod:`neural_whoop.reference` package makes has a test that produces a number here. Nothing in
 this file imports torch or DiffAero; the open-loop sim replay (the one check that genuinely needs
-the simulator) lives in ``tests/test_reference_flip.py``.
+the simulator) lives in ``tests/test_reference_sim.py``.
 
 The solved flip is built **once** per variant and shared, because the shoot is a real Newton
-iteration and not something to pay for in every test.
+iteration and not something to pay for in every test; the swing and the orbit are shared for the
+same reason even though neither needs a solve.
+
+Three maneuvers, three different things worth asserting, and the differences are the interesting
+part: the flip's boundary conditions are *solved* and close to ~1e-8, the swing's are *authored*
+and close to exactly 0.0, and the orbit's are authored too but the maneuver is not flyable in this
+simulator at all — see ``test_rate_loop_stability_discriminates_by_the_fixed_axis``.
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ import numpy as np
 import pytest
 
 from neural_whoop.reference import flatness as fl
-from neural_whoop.reference import verify
+from neural_whoop.reference import paths, verify
 from neural_whoop.reference.emit import decimate, maneuver_mask, reference_metrics
 from neural_whoop.reference.imu import specific_force_body
 from neural_whoop.reference.limits import (
@@ -33,11 +39,15 @@ from neural_whoop.reference.limits import (
 from neural_whoop.reference.maneuvers import (
     PHASE,
     FlipSpec,
+    ManeuverSpec,
+    RateEnvelopeError,
     assert_planar,
     build_sequence,
     hover_entry_state,
     solve_flip,
 )
+from neural_whoop.reference.maneuvers_orbit import OrbitSpec
+from neural_whoop.reference.maneuvers_swing import SwingSpec
 from neural_whoop.reference.model import AnisotropicDragError, RefModel
 from neural_whoop.reference.segments import PathSegment, RefState, Trajectory
 
@@ -274,15 +284,15 @@ def test_rotation_crosses_the_target_exactly_once(ref_motors_off):
     """
     model, spec, sol, fine = ref_motors_off
     check = verify.check_quaternion(fine, spec)
-    assert check["monotone_in_flip"]
-    assert check["min_dphi_in_flip"] >= -1e-12
+    assert check["monotone_in_window"]
+    assert check["min_dphi_in_window"] >= -1e-12
     assert check["crossings_of_target"] == 1
     assert abs(check["phi_end_error_rad"]) < 1e-6
     assert check["max_norm_error"] < 1e-9
     assert check["sign_flips"] == 0
     # The recover leans ~8.5° to translate 0.18 m back to the station; the bound is here to catch
     # "it tumbled after the flip", not to pin the lean.
-    assert check["max_post_flip_wobble_rad"] < math.radians(15.0)
+    assert check["max_post_window_wobble_rad"] < math.radians(15.0)
 
 
 def test_planarity_is_asserted_not_assumed(ref_motors_off):
@@ -419,7 +429,7 @@ def test_exactly_two_c2_breaks_and_they_are_the_motor_cuts(ref_motors_off):
     POP->ROLL-IN), because a step in the motor command *is* the maneuver.
     """
     model, spec, sol, fine = ref_motors_off
-    seams = verify.classify_breaks(fine)
+    seams = verify.classify_breaks(fine, spec)
     big = [s for s in seams if abs(s["d_acc_mps2"]) > 1.0]
     assert len(big) == 2, [(s["from_phase"], s["to_phase"], s["d_acc_mps2"]) for s in seams]
     assert (big[0]["from_phase"], big[0]["to_phase"]) == ("ROLL-IN", "COAST")
@@ -447,7 +457,7 @@ def test_decimation_preserves_the_endpoints(ref_motors_off):
 
 def test_maneuver_window_excludes_the_stagecraft(ref_motors_off):
     model, spec, sol, fine = ref_motors_off
-    m = maneuver_mask(fine)
+    m = maneuver_mask(fine, spec)
     assert PHASE["CLIMB"] not in set(fine.phase[m])
     assert PHASE["LAND"] not in set(fine.phase[m])
     assert PHASE["COAST"] in set(fine.phase[m])
@@ -464,7 +474,7 @@ def test_pitch_axis_uses_the_other_heading_construction():
     assert np.abs(fine.omega[:, 0]).max() == 0.0            # no roll rate at all
     check = verify.check_quaternion(fine, spec)
     assert check["crossings_of_target"] == 1
-    assert check["monotone_in_flip"]
+    assert check["monotone_in_window"]
 
 
 def test_drag_dominates_the_shape():
@@ -488,3 +498,430 @@ def test_drag_dominates_the_shape():
 def test_trajectory_requires_segments():
     with pytest.raises(ValueError):
         Trajectory(segments=[], start=RefState.at_rest(np.zeros(3))).sample(RefModel(), DT_FINE)
+
+
+# =============================================================================================
+# The envelope — what makes the analytic maneuvers' seams silent
+# =============================================================================================
+def test_septic_envelope_is_flat_through_the_third_derivative():
+    """Zero value AND zero first three derivatives at both ends — that is the whole requirement.
+
+    The flatness map turns jerk into body rate, so an envelope whose *third* derivative steps at
+    the seam emits a body rate that steps, visibly, on the frame the maneuver starts. A quintic
+    smoothstep (flat through the second) is not enough, which is exactly the mistake a septic
+    path segment exists to avoid.
+    """
+    for x in (0.0, 1.0):
+        assert paths.septic_smoothstep(np.array([x])) == pytest.approx(x, abs=0.0)
+        assert paths.septic_smoothstep_d(np.array([x])) == pytest.approx(0.0, abs=1e-14)
+        assert paths.septic_smoothstep_dd(np.array([x])) == pytest.approx(0.0, abs=1e-13)
+        assert paths.septic_smoothstep_ddd(np.array([x])) == pytest.approx(0.0, abs=1e-12)
+    assert paths.septic_smoothstep_int(np.array([1.0]))[0] == pytest.approx(0.5, abs=1e-15)
+
+
+def test_envelope_derivatives_match_finite_differences():
+    """Every analytic derivative agrees with a central difference to 1e-8.
+
+    The envelope's derivatives are hand-written product-rule algebra; a sign slip in any of them
+    would produce a reference that is smooth-looking and physically wrong, and nothing else in the
+    package would notice.
+    """
+    env = paths.Envelope(4.0, 0.25)
+    h = 1e-6
+    t = np.linspace(0.05, 3.95, 400)
+
+    def W(tt):
+        return env.derivatives(tt)[0]
+
+    def Wd(tt):
+        return env.derivatives(tt)[1]
+
+    def Wdd(tt):
+        return env.derivatives(tt)[2]
+
+    w, wd, wdd, wddd = env.derivatives(t)
+    assert np.abs((W(t + h) - W(t - h)) / (2 * h) - wd).max() < 1e-8
+    assert np.abs((Wd(t + h) - Wd(t - h)) / (2 * h) - wdd).max() < 1e-6
+    assert np.abs((Wdd(t + h) - Wdd(t - h)) / (2 * h) - wddd).max() < 1e-4
+    # ...and the closed-form integral, which is what fixes the orbit's revolution count exactly.
+    assert np.abs((env.integral(t + h) - env.integral(t - h)) / (2 * h) - w).max() < 1e-8
+    assert env.integral(np.array([env.duration]))[0] == pytest.approx(env.area, abs=1e-14)
+    assert env.area == pytest.approx(4.0 * 0.75, abs=1e-15)
+
+
+def test_envelope_is_continuous_across_its_seams():
+    """No step in W or its first three derivatives at the ramp/hold joins, or at ``t = 0`` / ``T``.
+
+    The clamp outside ``[0, T]`` is only C³-safe *because* the septic is flat there; this is that
+    claim, including at the two interior joins where the ramp meets the hold.
+    """
+    env = paths.Envelope(4.0, 0.25)
+    eps = 1e-9
+    for seam in (0.0, env.ramp_s, env.duration - env.ramp_s, env.duration):
+        before = np.stack(env.derivatives(np.array([seam - eps])))
+        after = np.stack(env.derivatives(np.array([seam + eps])))
+        assert np.abs(before - after).max() < 1e-4, f"envelope steps at t={seam}"
+
+
+# =============================================================================================
+# The swing: authored entirely by flatness, and it closes EXACTLY
+# =============================================================================================
+@pytest.fixture(scope="module")
+def ref_swing():
+    model = RefModel()
+    spec = SwingSpec()
+    build = spec.build(model, dt=DT_FINE)
+    return model, spec, build, build.traj.sample(model, DT_FINE)
+
+
+def test_swing_closes_exactly_with_no_shoot():
+    """``|p_end − p_start| = |v| = |a| = |j| = 0`` exactly — a real assertion, not a tolerance.
+
+    This is the complement of the flip's structural finding. Flatness cannot author a flip (through
+    inversion it would demand negative thrust), so the flip needs a damped-Newton boundary-value
+    solve and closes to ~1e-8. The swing needs no solve at all: ``sin`` vanishes at both ends
+    because ``ωT = 2π·n``, and the envelope vanishes through its second derivative there, killing
+    every ``Ẇ`` cross term. The measured residual is 0.00e+00, so the bound is exact.
+    """
+    spec = SwingSpec()
+    path = spec.path()
+    p, v, a, j = path(np.array([0.0, path.duration]))
+    assert np.abs(p[-1] - p[0]).max() == 0.0
+    assert np.abs(v).max() == 0.0
+    assert np.abs(a).max() == 0.0
+    assert np.abs(j).max() == 0.0
+    assert path.start_pos == pytest.approx(spec.station, abs=0.0)
+    # And it is not trivially zero everywhere — the beat really goes somewhere.
+    mid = path(np.linspace(0.0, path.duration, 2001))[0]
+    assert np.abs(mid[:, 1]).max() == pytest.approx(path.half_width, abs=1e-9)
+
+
+def test_swing_needs_no_solution_object(ref_swing):
+    """``build().solution is None`` — the honest encoding of "there was nothing to solve"."""
+    _, _, build, _ = ref_swing
+    assert build.solution is None
+    assert build.derived["swing_duration_s"] == pytest.approx(4.7578, abs=1e-3)
+
+
+def test_swing_planarity_is_exact(ref_swing):
+    """``ω_z`` and the off-axis quaternion components are **exactly** 0.0, like the flip's."""
+    model, spec, _, fine = ref_swing
+    p = assert_planar(fine, spec)
+    assert p["max_abs_omega_z_rps"] == 0.0
+    assert p["max_abs_off_axis_rate_rps"] == 0.0
+    assert p["max_abs_off_axis_quat"] == 0.0
+
+
+def test_swing_has_no_c2_breaks_at_all(ref_swing):
+    """**Nothing steps the motor command anywhere.** That is a claim, so it is measured.
+
+    The flip has exactly two intentional acceleration steps (the motor cut and the catch). The
+    swing has none — it is powered and smooth end to end — which is why its open-loop sim replay
+    tracks an order of magnitude better. A regression that put a seam back would fail here.
+    """
+    model, spec, _, fine = ref_swing
+    assert spec.c2_break_phases == ()
+    seams = verify.classify_breaks(fine, spec)
+    assert seams, "the sequence should have segment joins to check"
+    assert not any(s["is_c2_break"] for s in seams)
+
+    # Compared against the maneuver's OWN per-sample change rather than an absolute epsilon, which
+    # is the only threshold that means anything here. `Trajectory.sample` drops the duplicated seam
+    # row, so the two frames a seam compares are one dt apart and legitimately differ by jerk*dt —
+    # a floor that scales with the maneuver, the sample rate and the units. A real break stands out
+    # by orders of magnitude: the flip's are 37 and 26 m/s², hundreds of times its own interior
+    # step, while every seam here is at most a couple of typical samples.
+    def typical(x):
+        """p99 of the per-sample change — the maneuver's own smooth scale. Not the max: a real
+        break IS a sample, so taking the max would compare the thing to itself."""
+        return float(np.percentile(np.abs(np.diff(x, axis=0)), 99.0))
+
+    worst_acc = max(abs(s["d_acc_mps2"]) for s in seams)
+    worst_cmd = max(abs(s["d_rate_cmd_rps"]) for s in seams)
+    assert worst_acc < 2.0 * typical(fine.acc), (
+        f"seam acceleration step {worst_acc:.3e} against a typical sample "
+        f"{typical(fine.acc):.3e} m/s²"
+    )
+    assert worst_cmd < 2.0 * typical(fine.rate_cmd), (
+        f"seam rate-command step {worst_cmd:.3e} against a typical sample "
+        f"{typical(fine.rate_cmd):.3e} rad/s"
+    )
+    # The same measure applied to the flip does pick out its two real breaks by three orders of
+    # (189x measured, against 0.002x here), so the comparison above is sensitive rather
+    # than vacuously satisfied.
+    flip_spec = FlipSpec()
+    flip = build_sequence(flip_spec, model, solve_flip(
+        flip_spec, model, hover_entry_state(flip_spec), dt=DT_FINE, try_stage2=False,
+    )).sample(model, DT_FINE)
+    flip_seams = verify.classify_breaks(flip, flip_spec)
+    assert max(abs(s["d_acc_mps2"]) for s in flip_seams) > 100.0 * typical(flip.acc)
+
+
+def test_swing_resonance_is_refused(ref_swing):
+    """``freq_scale = 1.0`` must **raise**, so nobody can "simplify" the 0.8 back out.
+
+    "Thrust points along the rope, so bank equals θ" is a no-drag statement. With this simulator's
+    drag the same sizing at resonance demands ~89° of tilt and a 15.45 rad/s rate command against
+    an 11.64 ceiling — untrackable, not merely tight. Without this test the generator would happily
+    emit it and every other check in the package would still pass.
+    """
+    model, _, _, _ = ref_swing
+    with pytest.raises(RateEnvelopeError) as exc:
+        SwingSpec(freq_scale=1.0).build(model, dt=2e-3)
+    assert "outside the act-v2 envelope" in str(exc.value)
+    # The shipped 0.8 is comfortably inside, with real headroom rather than a tie.
+    lim = verify.check_limits(ref_swing[3])
+    assert lim["within_envelope"]
+    assert lim["max_abs_rate_cmd_rp_rps"] == pytest.approx(7.94, abs=0.05)
+    assert lim["rate_headroom_frac"] > 0.30
+
+
+def test_swing_peak_tilt_is_not_the_amplitude(ref_swing):
+    """Peak bank runs ~1.4× the authored swing angle, because drag leans the axis into travel."""
+    model, spec, _, fine = ref_swing
+    m = reference_metrics(fine, spec, model)
+    assert m["peak_bank_deg"] == pytest.approx(69.3, abs=0.5)
+    assert m["peak_bank_over_amplitude"] > 1.3
+    assert m["swing_half_width_m"] == pytest.approx(spec.path().half_width, abs=1e-5)
+    assert m["settle_pos_error"] < 1e-9
+    assert m["altitude_loss"] < 1e-9              # a pendulum only ever climbs from its bottom
+
+
+def test_swing_is_fully_powered(ref_swing):
+    """No coast means no zero-authority stretch — so no ``--deployable`` variant is warranted."""
+    model, spec, _, fine = ref_swing
+    alloc = verify.check_allocation(fine, model)
+    assert alloc["feasible"]
+    assert alloc["zero_authority_frac"] == 0.0
+    assert alloc["min_margin_torqued"] == pytest.approx(0.646, abs=0.02)
+    assert spec.min_thrust_normed == 0.0
+
+
+# =============================================================================================
+# The orbit: 3D, and the one that breaks psi == 0
+# =============================================================================================
+@pytest.fixture(scope="module")
+def ref_orbit():
+    model = RefModel()
+    spec = OrbitSpec()
+    build = spec.build(model, dt=DT_FINE)
+    return model, spec, build, build.traj.sample(model, DT_FINE)
+
+
+def test_orbit_axis_pointing_error_matches_its_closed_form(ref_orbit):
+    """The measured median error equals ``atan((D/m)/Ω)``, and is **unchanged across radii**.
+
+    This is the check that keeps the honest caveat honest. "The top face points at the axis" is
+    wrong by a specific, derivable amount in this simulator, and if the measurement ever stopped
+    matching the prediction, one of the two would be wrong and the artifact would be shipping a
+    number nobody could reproduce.
+    """
+    model, spec, _, fine = ref_orbit
+    m = reference_metrics(fine, spec, model)
+    predicted = math.degrees(math.atan2(model.drag_per_mass, spec.omega_orbit))
+    assert predicted == pytest.approx(24.06, abs=0.05)
+    assert m["axis_pointing_error_deg"] == pytest.approx(predicted, abs=0.5)
+    assert m["axis_pointing_error_predicted_deg"] == pytest.approx(predicted, abs=1e-9)
+
+    # Radius-independent: R*Omega^2 over (D/m)*R*Omega cancels R. Three radii, same answer.
+    errs = []
+    for radius in (0.25, 0.375, 0.5):
+        s = OrbitSpec(radius=radius)
+        f = s.build(model, dt=2e-3).traj.sample(model, 2e-3)
+        errs.append(reference_metrics(f, s, model)["axis_pointing_error_deg"])
+    assert max(errs) - min(errs) < 0.5, f"error moved with radius: {errs}"
+    assert all(e == pytest.approx(predicted, abs=0.5) for e in errs)
+
+
+def test_orbit_axis_pointing_error_collapses_without_drag(ref_orbit):
+    """Re-flying the identical authored path at zero drag must take the error to **exactly 0**.
+
+    That is what makes "this is the simulator's drag, not the maneuver" a measurement rather than
+    an assertion. The shipped ``real_est`` bracket is still *linear* drag, so it lands at ~8°, not
+    the ~2.8° a genuinely quadratic law would give — the two are quoted separately on purpose.
+    """
+    from neural_whoop.reference.emit import drag_sensitivity
+
+    model, spec, build, _ = ref_orbit
+    sens = drag_sensitivity(build.traj, spec, model, 2e-3)
+    assert sens["none"]["axis_pointing_error_deg"] == pytest.approx(0.0, abs=1e-6)
+    assert sens["sim"]["axis_pointing_error_deg"] == pytest.approx(24.06, abs=0.5)
+    assert sens["real_est"]["axis_pointing_error_deg"] == pytest.approx(8.0, abs=0.5)
+    # The geometry is identical under every model — only what the airframe must do changes.
+    assert sens["none"]["max_lateral_drift_m"] == pytest.approx(
+        sens["sim"]["max_lateral_drift_m"], abs=1e-9)
+
+
+def test_orbit_stays_inside_the_envelope_and_stays_conditioned(ref_orbit):
+    """Thrust ≤ 4.0, roll/pitch ≤ 11.64, yaw ≤ 6.0, and the heading map never goes singular.
+
+    Conditioning is the non-obvious one. The *forward* flatness map only ever multiplies by
+    ``|∂ω_z/∂ψ̇|``, so it is fine at 0.37; only ``state_to_flat`` divides by it. Asserting it stays
+    positive is what says the attitude the reference publishes is well defined at all.
+    """
+    model, spec, _, fine = ref_orbit
+    lim = verify.check_limits(fine)
+    assert lim["within_envelope"]
+    assert lim["max_normed_thrust"] == pytest.approx(2.913, abs=0.02)
+    assert lim["max_abs_rate_cmd_rp_rps"] == pytest.approx(7.044, abs=0.05)
+    assert lim["max_abs_rate_cmd_yaw_rps"] == pytest.approx(3.637, abs=0.05)
+    assert lim["max_abs_rate_cmd_yaw_rps"] <= MAX_BODY_RATE_YAW_RPS
+
+    R = fl.quat_xyzw_to_rotmat(fine.quat)
+    psi = np.array([spec.path().psi(np.array([t]))[0][0] for t in
+                    np.linspace(0.0, spec.path().duration, 200)])
+    cond = fl.heading_conditioning(R[:len(fine)], 0.0, heading=spec.heading)
+    assert float(np.min(cond)) > 0.0, "the heading construction went singular"
+    del psi
+
+
+def test_orbit_is_genuinely_3d(ref_orbit):
+    """``ω_z`` is large and the attitude reaches 180° — both are the point, not a defect."""
+    model, spec, _, fine = ref_orbit
+    assert not spec.is_planar
+    assert float(np.max(np.abs(fine.omega[:, 2]))) == pytest.approx(3.34, abs=0.1)
+    q = verify.check_quaternion(fine, spec)
+    assert q["kind"] == "heading"
+    assert q["heading_turns"] == pytest.approx(3.0, abs=1e-6)
+    assert q["monotone_heading"]
+    assert q["max_norm_error"] < 1e-9
+    assert q["sign_flips"] == 0
+    assert q["max_attitude_from_identity_deg"] > 170.0
+    # assert_planar must refuse rather than report a failure for a maneuver that never claimed it.
+    with pytest.raises(ValueError):
+        assert_planar(fine, spec)
+
+
+# =============================================================================================
+# The rate-loop finding — about the SUBSTRATE, not about any one maneuver
+# =============================================================================================
+def test_rate_loop_stability_discriminates_by_the_fixed_axis(ref_motors_off, ref_swing, ref_orbit):
+    """The 90° threshold alone is not the answer, and the flip is the proof.
+
+    A roll flip spends ~6% of its frames past 90° of attitude and tracks to 2.15 cm anyway,
+    because its ω lies on ``R``'s **fixed axis** — the eigenvector whose loop eigenvalue stays
+    ``−K`` no matter what θ is. The orbit's ω does not, and it diverges. A check that reported only
+    "attitude exceeded 90°" would call the flip unstable and be useless; this pins the mechanism.
+    """
+    model = RefModel()
+    flip = verify.check_rate_loop_stability(ref_motors_off[3], model)
+    swing = verify.check_rate_loop_stability(ref_swing[3], model)
+    orbit = verify.check_rate_loop_stability(ref_orbit[3], model)
+
+    # The flip goes right past 90 deg and is stable anyway — for a stated, measured reason.
+    assert flip["max_attitude_from_identity_deg"] > 170.0
+    assert flip["frac_above_90deg"] > 0.0
+    assert flip["min_omega_fixed_axis_alignment"] == pytest.approx(1.0, abs=1e-12)
+    assert flip["omega_on_fixed_axis"]
+    assert flip["vendored_loop_stable"]
+
+    # The swing never gets near 90 deg AND is on the fixed axis: stable twice over.
+    assert swing["max_attitude_from_identity_deg"] < 90.0
+    assert swing["vendored_loop_stable"]
+
+    # The orbit is the one that breaks it, and both conditions fail together.
+    assert not orbit["omega_on_fixed_axis"]
+    assert orbit["min_omega_fixed_axis_alignment"] < 0.05
+    assert orbit["frac_above_90deg"] > 0.1
+    assert not orbit["vendored_loop_stable"]
+    assert orbit["worst_offaxis_eigenvalue_real_part_per_s"] > 0.0
+    # The predicted onset: the eigenvalue turns positive exactly when theta crosses 90 deg.
+    # first_crossing_t_s is absolute (it includes the climb and hover stagecraft), so measure it
+    # against the frame the maneuver actually starts on.
+    fine = ref_orbit[3]
+    lo = ref_orbit[1].metric_window[0]
+    t0 = float(fine.t[int(np.flatnonzero(fine.phase >= lo)[0])])
+    assert 0.4 < orbit["first_crossing_t_s"] - t0 < 1.2
+
+
+def test_rate_loop_eigenvalue_formula_is_what_the_controller_implements():
+    """``−K·cos θ`` is not a guess about ``R_i2b @ w`` — it is the eigenvalue, computed directly.
+
+    Builds a random rotation, forms ``−K·R``, and checks that its eigenvalues really are ``−K``
+    and ``−K·e^{±iθ}``. That is the whole argument the finding rests on, so it is worth two lines
+    of linear algebra rather than a citation.
+    """
+    rng = np.random.default_rng(3)
+    for _ in range(20):
+        axis = rng.normal(size=3)
+        axis /= np.linalg.norm(axis)
+        theta = rng.uniform(0.1, np.pi - 0.1)
+        q = np.concatenate([axis * math.sin(theta / 2), [math.cos(theta / 2)]])
+        R = fl.quat_xyzw_to_rotmat(q[None])[0]
+        K = 16.0
+        eig = np.linalg.eigvals(-K * R)
+        expected = np.sort_complex(
+            np.array([-K, -K * np.exp(1j * theta), -K * np.exp(-1j * theta)]))
+        assert np.allclose(np.sort_complex(eig), expected, atol=1e-9)
+        # The real part that decides stability, and the 90 deg threshold it implies.
+        assert float(np.max(eig.real)) == pytest.approx(max(-K, -K * math.cos(theta)), abs=1e-9)
+        assert (float(np.max(eig.real)) > 0.0) == (theta > math.pi / 2 + 1e-12)
+
+
+# =============================================================================================
+# The generalized package: every spec satisfies the protocol, and the flip still behaves
+# =============================================================================================
+@pytest.mark.parametrize("spec", [FlipSpec(), SwingSpec(), OrbitSpec()],
+                         ids=["flip", "swing", "orbit"])
+def test_every_spec_satisfies_the_maneuver_protocol(spec):
+    """``emit`` and ``verify`` work against "a maneuver", so every spec must actually provide one.
+
+    Cheap, and it catches the failure mode the generalization introduced: a new maneuver that looks
+    complete until the moment the emitter asks it for a phase label it never defined.
+    """
+    assert isinstance(spec, ManeuverSpec)
+    labels = spec.phase_labels
+    assert labels and all(isinstance(s, str) for s in labels)
+    lo, hi = spec.metric_window
+    assert 0 <= lo <= hi < len(labels)
+    assert 0 <= spec.settle_phase < len(labels)
+    assert np.asarray(spec.station).shape == (3,)
+    assert spec.z_entry > spec.z_rest
+    meta = spec.reference_meta(None)
+    assert meta["maneuver"] == spec.name
+    assert meta["plane"] in ("yz", "xz", "xy")
+    assert set(meta["rotation"]) >= {"kind", "axis", "target_turns", "label"}
+    assert isinstance(spec.describe(None), str)
+    assert spec.caveats(RefModel())
+    for a, b in spec.c2_break_phases:
+        assert 0 <= a < len(labels) and 0 <= b < len(labels)
+
+
+def test_analytic_segment_refuses_a_discontinuous_entry():
+    """A ``PathSegment`` cannot teleport (it starts from the state it is handed); an analytic one
+    could, since it ignores that state. So it asserts instead of silently jumping."""
+    from neural_whoop.reference.segments import AnalyticPathSegment
+
+    def path(t):
+        t = np.asarray(t)
+        p = np.stack([np.zeros_like(t), np.zeros_like(t), np.full_like(t, 5.0)], axis=-1)
+        return p, np.zeros_like(p), np.zeros_like(p), np.zeros_like(p)
+
+    seg = AnalyticPathSegment("X", 0, 1.0, path=path)
+    with pytest.raises(ValueError, match="teleport"):
+        seg.sample(RefState.at_rest(np.zeros(3)), RefModel(), np.linspace(0, 1, 3))
+
+
+@pytest.mark.parametrize("maneuver", ["swing", "orbit"])
+def test_analytic_maneuvers_converge_second_order(maneuver):
+    """The emitted arrays satisfy DiffAero's ODE, and the residual is dominated by SAMPLING.
+
+    Same diagnostic as the flip's, and stricter in one way: there are no authored command steps to
+    mask here at all, so the masked fraction must be ~0 and the convergence ratio must be close to
+    the ideal 400× rather than the flip's 254×.
+    """
+    model = RefModel()
+    spec = SwingSpec() if maneuver == "swing" else OrbitSpec()
+    fine = spec.build(model, dt=DT_FINE).traj.sample(model, DT_FINE)
+    replay = decimate(fine, DT_REPLAY)
+    mask_f = verify.c2_break_indices(fine)
+    rf = verify.dynamics_residual(fine, model, mask=mask_f)
+    rr = verify.dynamics_residual(replay, model, mask=verify.c2_break_indices(replay))
+    # Nothing steps, so nothing at the masked frames is worse than the smooth interior.
+    for name in ("pos", "vel", "quat"):
+        assert rf[f"{name}_max_at_breaks"] < 10.0 * max(rf[f"{name}_max"], 1e-12), (
+            f"{name} residual spikes at a seam of a maneuver that claims to have no command steps"
+        )
+        ratio = rr[f"{name}_rms"] / rf[f"{name}_rms"]
+        assert 250.0 < ratio < 600.0, f"{name} improved {ratio:.0f}x, expected ~400x"
+    assert rf["vel_rms"] < 1e-3
