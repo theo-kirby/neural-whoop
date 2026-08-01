@@ -34,6 +34,19 @@ def main() -> int:
                    help="Height the Bench dashboard asks a hover_tof policy to hold (m). Keep "
                         "target + overshoot inside the ToF's 1.3 m ceiling — the measured climb "
                         "overshoots by ~0.37 m, so 1.0 puts the peak outside the sensor band.")
+    p.add_argument("--flight-max-us", type=int,
+                   default=int(os.environ.get("NW_FLIGHT_MAX_US", "1600")), metavar="US",
+                   help="Throttle ceiling the Bench dashboard streams. act[0]=+1 asks for 4.0x "
+                        "hover, which needs 1000 + 2*(hover_eff-1000) us — ABOVE 1600 for every "
+                        "hover anchor yet measured, so 1600 clips the policy's action space. "
+                        "Raise toward ~1900 to restore it; do it in steps (docs/SIM2REAL.md).")
+    p.add_argument("--flight-min-thrust-frac", type=float,
+                   default=float(os.environ.get("NW_FLIGHT_MIN_THRUST_FRAC", "0.25")),
+                   metavar="F",
+                   help="Free-flight throttle FLOOR as a fraction of learned hover thrust — the "
+                        "brake, not the arm-idle. 0.25 brakes at -0.75 g with props still lit; "
+                        "raise toward 0.5 for a gentler sink. 0 = legacy motors-off. NOT --min-us "
+                        "(that one is the armed-on-the-floor idle and must stay 1000).")
     p.add_argument("--flight-acro-weights", default=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS",
                    "runs/acro_flip/policy_weights.json"),
                    help="Acro-flip policy_weights.json the Bench Flip button drives (obs-7). "
@@ -56,6 +69,8 @@ def main() -> int:
         os.environ["NW_FLIGHT_WEIGHTS"] = args.flight_weights
         os.environ["NW_FLIGHT_ACRO_WEIGHTS"] = args.flight_acro_weights
         os.environ["NW_FLIGHT_TARGET_HEIGHT"] = str(args.flight_target_height)
+        os.environ["NW_FLIGHT_MAX_US"] = str(args.flight_max_us)
+        os.environ["NW_FLIGHT_MIN_THRUST_FRAC"] = str(args.flight_min_thrust_frac)
         src_dir = Path(__file__).resolve().parents[1] / "src"
         uvicorn.run(
             "neural_whoop.studio.server:app_factory", factory=True,
@@ -67,7 +82,9 @@ def main() -> int:
         uvicorn.run(create_app(device=args.device, bridge=args.bridge or None,
                                flight_weights=args.flight_weights,
                                flight_acro_weights=args.flight_acro_weights,
-                               flight_target_height=args.flight_target_height),
+                               flight_target_height=args.flight_target_height,
+                               flight_max_us=args.flight_max_us,
+                               flight_min_thrust_frac=args.flight_min_thrust_frac),
                     host=args.host, port=args.port)
     return 0
 

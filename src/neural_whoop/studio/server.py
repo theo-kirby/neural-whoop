@@ -97,6 +97,8 @@ def create_app(
     flight_weights: str = _DEFAULT_FLIGHT_WEIGHTS,
     flight_acro_weights: str | None = _DEFAULT_FLIGHT_ACRO_WEIGHTS,
     flight_target_height: float = 1.0,
+    flight_max_us: int = 1600,
+    flight_min_thrust_frac: float = 0.25,
     flight_manager=None,
 ) -> FastAPI:
     """Build the Studio FastAPI app. Dirs default to the repo layout; override for tests.
@@ -345,7 +347,9 @@ def create_app(
             bridge or "fake", weights=weights_abs,
             acro_weights=str(acro_abs) if acro_abs and acro_abs.is_file() else None,
             runs_dir=runs_dir / "pilot", on_flight_done=_on_done,
-            params=FlightParams(takeoff=True, target_height_m=flight_target_height),
+            params=FlightParams(takeoff=True, target_height_m=flight_target_height,
+                                max_us=flight_max_us,
+                                min_thrust_frac=flight_min_thrust_frac),
         )
         mgr.start()
         app.state.flight = mgr
@@ -427,6 +431,8 @@ def app_factory() -> FastAPI:
         flight_weights=os.environ.get("NW_FLIGHT_WEIGHTS", _DEFAULT_FLIGHT_WEIGHTS),
         flight_acro_weights=os.environ.get("NW_FLIGHT_ACRO_WEIGHTS", _DEFAULT_FLIGHT_ACRO_WEIGHTS),
         flight_target_height=float(os.environ.get("NW_FLIGHT_TARGET_HEIGHT", "1.0")),
+        flight_max_us=int(os.environ.get("NW_FLIGHT_MAX_US", "1600")),
+        flight_min_thrust_frac=float(os.environ.get("NW_FLIGHT_MIN_THRUST_FRAC", "0.25")),
     )
 
 
