@@ -316,9 +316,36 @@ def test_metrics_carry_the_acro_flip_names_so_the_two_approaches_compare(tmp_pat
     m = task.metrics(env)
     for k in ("max_lateral_drift", "peak_climb", "mean_altitude_loss", "settle_pos_error"):
         assert k in m, f"{k} is one of AcroFlipTask's names and must survive"
-    for k in ("pos_rmse_m", "att_rmse_deg", "track_success_rate", "tracked_frac"):
-        assert k in m
     assert all(isinstance(v, float) and math.isfinite(v) for v in m.values())
+
+
+def test_the_headline_tracking_numbers_are_per_step_not_episode_windowed(tmp_path):
+    """The reset-biased accumulators must not be quotable as the result.
+
+    ``eval/rollout.py`` overrides task metrics with full-horizon means of the per-step tensors in
+    ``info["metrics"]`` — but *only* for keys of the same name. A bare ``pos_rmse_m`` coming out of
+    :meth:`metrics` is therefore unreachable by that override and silently reports the
+    episode-windowed value, which is optimistic (measured 0.186 m vs 0.448 m on the trained flip,
+    2.4x in the flattering direction). So the accumulator names are ``ep_``-prefixed and the honest
+    names live in the per-step dict. This pins both halves, because the failure is silent.
+    """
+    env, task = _env(tmp_path, n_envs=32)
+    env.reset_all()
+    _, _, info = task.reward_and_done(env, torch.zeros(env.n_drones, 4))
+    m = task.metrics(env)
+    per_step = info["metrics"]
+
+    for honest in ("pos_err_m", "att_err_deg", "rate_err_rps", "tracking_ok"):
+        assert honest in per_step, f"{honest} must be per-step so eval aggregates it honestly"
+        assert per_step[honest].shape == (env.n_drones,)
+    for biased in ("ep_pos_rmse_m", "ep_att_rmse_deg", "ep_track_success_rate", "ep_tracked_frac"):
+        assert biased in m
+    # The trap: an un-prefixed name in metrics() that eval cannot override.
+    for banned in ("pos_rmse_m", "att_rmse_deg", "track_success_rate", "tracked_frac"):
+        assert banned not in m, (
+            f"{banned} is episode-windowed but reads like a headline result; prefix it ep_ or "
+            f"emit it per-step so eval/rollout.py's full-horizon override reaches it"
+        )
 
 
 def test_a_missing_reference_path_fails_at_construction(tmp_path):

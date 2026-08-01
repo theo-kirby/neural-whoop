@@ -52,9 +52,13 @@ reference, further samples teach nothing, so the episode ends and the slot is re
 
 Metrics deliberately reuse ``AcroFlipTask``'s names — ``max_lateral_drift``, ``peak_climb``,
 ``altitude_loss``, ``settle_pos_error`` — measured against the reference's own station, so a
-tracked flip and a reward-shaped flip are directly comparable. On top: ``pos_rmse_m`` /
-``att_rmse_deg`` (did it actually track?) and ``tracked_frac`` (how much of the maneuver it
-survived).
+tracked flip and a reward-shaped flip are directly comparable.
+
+**The headline tracking numbers are the per-step ones**: ``pos_err_m``, ``att_err_deg``,
+``rate_err_rps`` and ``tracking_ok``, emitted through ``info["metrics"]`` so ``eval/rollout.py``
+aggregates them over the *full* horizon. The episode-windowed accumulators in :meth:`metrics` are
+prefixed ``ep_`` and are reset-biased in the flattering direction (2.4× on the trained flip) — see
+that method. Quote ``pos_err_m``, not ``ep_pos_rmse_m``.
 """
 
 from __future__ import annotations
@@ -354,14 +358,31 @@ class ReferenceTrackTask(DroneTask):
         return reward, terminated_env, info
 
     def metrics(self, env) -> dict:
+        """Episode-windowed metrics. **The headline tracking numbers are NOT here** — see below.
+
+        These accumulators zero on every episode auto-reset, so a read at log cadence catches most
+        drones part-way through their current episode and systematically *under*-reports error: the
+        hard middle of the maneuver is averaged against however much easy tail happens to be in the
+        window. Measured on the trained flip, the same rollout reads 0.186 m through this path and
+        **0.448 m** through the honest one — a 2.4× difference, in the flattering direction.
+
+        ``eval/rollout.py`` already solves this: it aggregates the per-step tensors in
+        ``info["metrics"]`` over the *full* horizon and overrides any key of the same name. So the
+        decision metrics are emitted there, under ``pos_err_m`` / ``att_err_deg`` / ``tracking_ok``,
+        and the values below are prefixed ``ep_`` to make it impossible to quote one for the other.
+        A previous version of this method published bare ``pos_rmse_m`` / ``att_rmse_deg``, which
+        the override could not reach and which therefore silently disagreed with the honest number.
+        """
         n = self.err_count.clamp_min(1.0)
         pos_rmse = (self.pos_err_sq_sum / n).sqrt()
         att_rmse = (self.att_err_sq_sum / n).sqrt()
         return {
-            "pos_rmse_m": float(pos_rmse.mean()),
-            "att_rmse_deg": float(att_rmse.mean()) * (180.0 / math.pi),
-            "track_success_rate": float((pos_rmse < self.cfg.success_pos_rmse).float().mean()),
-            "tracked_frac": float(
+            # Episode-windowed (reset-biased, optimistic) — useful as a training *curve*, never as
+            # a reported result. The full-horizon truth is pos_err_m / att_err_deg.
+            "ep_pos_rmse_m": float(pos_rmse.mean()),
+            "ep_att_rmse_deg": float(att_rmse.mean()) * (180.0 / math.pi),
+            "ep_track_success_rate": float((pos_rmse < self.cfg.success_pos_rmse).float().mean()),
+            "ep_tracked_frac": float(
                 (self.tracked_steps.float() / self.steps.clamp_min(1).float()).mean()
             ),
             "max_lateral_drift": float(self.max_lat_drift.mean()),
