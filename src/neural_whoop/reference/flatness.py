@@ -427,6 +427,50 @@ def enforce_quat_continuity(q: np.ndarray) -> np.ndarray:
     return q
 
 
+def tilt_from_vertical(q: np.ndarray) -> np.ndarray:
+    """Angle (rad) between body **+z** and world up, ``(N,)`` — "how far over is it leaning".
+
+    Read straight off the quaternion (``R₂₂ = 1 − 2(q_x² + q_y²)``), like everything else here, so
+    it stays correct through inversion where euler roll/pitch do not. This is the number a
+    ``peak_bank_deg`` metric actually means, and on the swing it is ~1.4× the authored swing
+    amplitude rather than equal to it.
+    """
+    q = np.asarray(q, dtype=np.float64)
+    zz = 1.0 - 2.0 * (q[..., 0] ** 2 + q[..., 1] ** 2)
+    return np.arccos(np.clip(zz, -1.0, 1.0))
+
+
+def attitude_angle_from_identity(q: np.ndarray) -> np.ndarray:
+    """Geodesic rotation angle (rad, ``[0, π]``) between the attitude and identity, ``(N,)``.
+
+    This is the ``θ`` in DiffAero's rate-loop eigenvalues ``−K`` and ``−K·e^{±iθ}`` (see
+    :func:`neural_whoop.reference.verify.check_rate_loop_stability`), so it is the quantity that
+    decides whether the vendored controller is stable on a given maneuver — not a cosmetic
+    "how rotated is it" readout.
+    """
+    q = np.asarray(q, dtype=np.float64)
+    return 2.0 * np.arccos(np.clip(np.abs(q[..., 3]), 0.0, 1.0))
+
+
+def heading_azimuth(q: np.ndarray) -> np.ndarray:
+    """Unwrapped azimuth (rad) of body **+x** projected onto the horizontal plane, ``(N,)``.
+
+    The gimbal-free way to count how far a maneuver's *heading* has wound. Euler yaw cannot do it:
+    ``quaternion_to_euler`` is ZYX with pitch clamped to ±90°, and the orbit sits at 70° of bank
+    for most of its run, so its ZYX yaw is largely an artifact of the clamp.
+
+    Undefined when body +x is exactly vertical (the airframe pointing straight up or down); that
+    does not occur on any maneuver in this package, and the norm check makes it a loud ``NaN``
+    rather than a silent wrong number if it ever does.
+    """
+    R = quat_xyzw_to_rotmat(np.asarray(q, dtype=np.float64))
+    x_B = R[..., 0]
+    horiz = _norm(x_B[..., :2])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        az = np.where(horiz > 1e-9, np.arctan2(x_B[..., 1], x_B[..., 0]), np.nan)
+    return np.unwrap(az)
+
+
 def rotation_angle_about(q: np.ndarray, axis: int) -> np.ndarray:
     """Unwrapped rotation angle (rad) about body ``axis`` for a planar maneuver, ``(N,)``.
 

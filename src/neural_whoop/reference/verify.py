@@ -21,6 +21,10 @@ The checks, and what each one is really for:
   second-order difference the residual must fall by ~(20)² = 400x, and **if it doesn't, the bug is
   in the flatness map rather than in the sampling** — which is exactly what makes running it at
   two rates diagnostic instead of decorative.
+- :func:`check_rate_loop_stability` — can DiffAero's rate loop, **as vendored**, even track this?
+  A separate question from every check above, and the only one that is about the substrate rather
+  than about the reference. It runs on every maneuver so the answer is a number in every artifact,
+  not a note in one commit message.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ from neural_whoop.reference.limits import (
     MAX_THRUST_NORMED,
     RATE_CMD_HEADROOM,
 )
-from neural_whoop.reference.maneuvers import C2_BREAK_PHASES, FlipSpec
+from neural_whoop.reference.maneuvers import ManeuverSpec
 from neural_whoop.reference.model import RefModel
 from neural_whoop.reference.segments import Samples
 
@@ -92,10 +96,14 @@ def c2_break_indices(samples: Samples, *, halo: int = 1) -> list[int]:
     return sorted(set(out))
 
 
-def classify_breaks(samples: Samples) -> list[dict]:
-    """Per-seam report: what actually steps at each segment boundary, measured not assumed."""
-    from neural_whoop.reference.maneuvers import PHASE_LABELS
+def classify_breaks(samples: Samples, spec: ManeuverSpec) -> list[dict]:
+    """Per-seam report: what actually steps at each segment boundary, measured not assumed.
 
+    Worth running even on a maneuver that declares no C² breaks at all — "nothing steps anywhere"
+    is a claim, and this is what turns it into a measurement. The swing and the orbit both make it.
+    """
+    labels = list(spec.phase_labels)
+    breaks = tuple(spec.c2_break_phases)
     out: list[dict] = []
     for a, _ in samples.segment_bounds()[1:]:
         d_thrust = float(samples.normed_thrust[a] - samples.normed_thrust[a - 1])
@@ -106,65 +114,123 @@ def classify_breaks(samples: Samples) -> list[dict]:
         out.append({
             "index": int(a),
             "t_s": float(samples.t[a]),
-            "from_phase": PHASE_LABELS[p0] if p0 < len(PHASE_LABELS) else str(p0),
-            "to_phase": PHASE_LABELS[p1] if p1 < len(PHASE_LABELS) else str(p1),
+            "from_phase": labels[p0] if p0 < len(labels) else str(p0),
+            "to_phase": labels[p1] if p1 < len(labels) else str(p1),
             "d_normed_thrust": d_thrust,
             "d_acc_mps2": d_acc,
             "d_rate_cmd_rps": d_cmd,
             "d_omega_rps": d_omega,
-            "is_c2_break": bool((p0, p1) in C2_BREAK_PHASES),
+            "is_c2_break": bool((p0, p1) in breaks),
         })
     return out
 
 
-def check_quaternion(samples: Samples, spec: FlipSpec) -> dict:
-    """Unit norm, sign continuity, and a rotation that reaches the target angle exactly once.
+def check_quaternion(samples: Samples, spec: ManeuverSpec) -> dict:
+    """Quaternion hygiene, plus whatever "went round correctly" means for *this* maneuver.
 
-    **Monotonicity is asserted over the flip window (POP..CATCH), not the whole flight**, and that
-    is not a loosened test — it is the correct one. Through the recover the airframe deliberately
-    leans to fly the residual lateral offset back to the station, so the roll angle wobbles a
-    couple of degrees either side of 2π. Demanding global monotonicity would be demanding that the
-    drone never translate again. The wobble is reported (``max_post_flip_wobble_rad``) rather than
-    forbidden.
+    Unit norm and sign continuity are universal — a slerp across a sign flip spins the drone
+    backwards for a frame, and no other check would notice. What varies is the rotation claim:
+
+    - **Planar** maneuvers (flip, swing) get the single-axis test: the unwrapped rotation about the
+      declared body axis is monotone through the maneuver window and crosses its target exactly
+      once. That test is only meaningful *because* the maneuver is a pure rotation about that axis;
+      running it on the orbit would be measuring a quantity that does not exist.
+    - The **orbit** gets the heading test instead: how many turns the nose actually wound, measured
+      as the unwrapped azimuth of body +x. Not euler yaw — at 70° of bank the ZYX yaw is largely a
+      gimbal artifact of the ±90° pitch clamp.
+    """
+    q = samples.quat
+    norms = np.linalg.norm(q, axis=-1)
+    dots = np.einsum("ij,ij->i", q[1:], q[:-1])
+    base = {
+        "max_norm_error": float(np.max(np.abs(norms - 1.0))),
+        "sign_flips": int(np.count_nonzero(dots < 0.0)),
+        "max_attitude_from_identity_deg": float(
+            np.degrees(np.max(fl.attitude_angle_from_identity(q)))
+        ),
+    }
+    if spec.is_planar:
+        return {**base, "kind": "single-axis", **_planar_rotation(samples, spec)}
+    return {**base, "kind": "heading", **_heading_rotation(samples, spec)}
+
+
+def _heading_rotation(samples: Samples, spec: ManeuverSpec) -> dict:
+    """How far the nose wound, from the quaternion, gimbal-free."""
+    az = fl.heading_azimuth(samples.quat)
+    target = float((spec.reference_meta(None).get("rotation") or {}).get("target_turns") or 0.0)
+    turns = float((az[-1] - az[0]) / (2.0 * np.pi))
+    return {
+        "heading_turns": turns,
+        "heading_target_turns": target,
+        "heading_turns_error": turns - target,
+        "monotone_heading": bool(np.all(np.diff(az) >= -1e-12)),
+        "min_dpsi": float(np.min(np.diff(az))) if len(az) > 1 else 0.0,
+        "heading_note": (
+            "measured as the unwrapped azimuth of body +x, NOT euler yaw: at 70 deg of bank the "
+            "ZYX yaw is largely an artifact of the +-90 deg pitch clamp. Monotonicity is expected "
+            "here because phi-dot is authored non-negative throughout."
+        ),
+    }
+
+
+def _planar_rotation(samples: Samples, spec: ManeuverSpec) -> dict:
+    """Rotation about the **declared** body axis — see :func:`check_quaternion`.
+
+    Two claims, and only one of them is universal.
+
+    *Always*: the maneuver ends on its target rotation. For the flip that is 2π; for the swing it
+    is exactly 0, since a pendulum returns to level. Both are checked the same way.
+
+    *Only when the spec declares a ``rotation_window``*: that the rotation is monotone through it
+    and crosses the target exactly once, i.e. no two-turn root and no over-rotate-and-come-back.
+    The flip declares POP..CATCH; the swing declares **none**, and that is correct rather than
+    lenient — a swing rolls both ways by construction, so demanding monotonicity would be demanding
+    it not be a swing.
+
+    Note the window is the *flip*, not the whole flight: through the recover the airframe
+    deliberately leans to fly the residual lateral offset back to the station, so φ wobbles a couple
+    of degrees either side of 2π. That is reported (``max_post_window_wobble_rad``), not forbidden.
 
     The target crossing is counted against ``target − tol`` for the same reason a float comparison
     against an exactly-achieved value is a trap: φ lands on 2π to machine precision, so a bare
     ``phi >= 2π`` toggles on rounding noise and reports dozens of "crossings".
     """
-    q = samples.quat
-    norms = np.linalg.norm(q, axis=-1)
-    dots = np.einsum("ij,ij->i", q[1:], q[:-1])
-    phi = fl.rotation_angle_about(q, spec.axis_idx)
-
-    from neural_whoop.reference.maneuvers import PHASE
-
-    flip = (samples.phase >= PHASE["POP"]) & (samples.phase <= PHASE["CATCH"])
-    idx = np.flatnonzero(flip)
-    dphi_flip = np.diff(phi[idx]) if idx.size > 1 else np.zeros(1)
-    # Counted INSIDE the flip window, for the same reason monotonicity is: after the flip the
-    # recover leans and φ oscillates a couple of degrees about 2π, so a whole-flight count would
-    # report every one of those wobbles as a "crossing". The claim being tested is that the flip
-    # reaches its target angle once and does not over-rotate and come back.
+    phi = fl.rotation_angle_about(samples.quat, spec.axis_idx)
+    target = float(getattr(spec, "target_phi", 0.0))
+    out = {
+        "axis": int(spec.axis_idx),
+        "phi_end_rad": float(phi[-1]),
+        "phi_end_error_rad": float(phi[-1] - target),
+        "phi_end_turns": float(phi[-1] / (2.0 * np.pi)),
+        "max_abs_phi_rad": float(np.max(np.abs(phi))),
+        "target_phi_rad": target,
+    }
+    window = getattr(spec, "rotation_window", None)
+    if window is None:
+        out["monotonicity_note"] = (
+            "this maneuver declares no rotation window: it rotates both ways by construction, so "
+            "monotonicity is not a property it should have."
+        )
+        return out
+    lo, hi = window
+    idx = np.flatnonzero((samples.phase >= lo) & (samples.phase <= hi))
+    dphi = np.diff(phi[idx]) if idx.size > 1 else np.zeros(1)
     tol = 1e-6
     crossings = int(np.count_nonzero(
-        np.diff((phi[idx] >= spec.target_phi - tol).astype(np.int8))
+        np.diff((phi[idx] >= target - tol).astype(np.int8))
     )) if idx.size > 1 else 0
     post = phi[int(idx[-1]):] if idx.size else phi
-    return {
-        "max_norm_error": float(np.max(np.abs(norms - 1.0))),
-        "sign_flips": int(np.count_nonzero(dots < 0.0)),
-        "min_dphi_in_flip": float(np.min(dphi_flip)),
-        "monotone_in_flip": bool(np.all(dphi_flip >= -1e-12)),
-        "phi_end_rad": float(phi[-1]),
-        "phi_end_error_rad": float(phi[-1] - spec.target_phi),
-        "phi_end_turns": float(phi[-1] / (2.0 * np.pi)),
+    out.update({
+        "min_dphi_in_window": float(np.min(dphi)),
+        "monotone_in_window": bool(np.all(dphi >= -1e-12)),
         "crossings_of_target": crossings,
-        "max_post_flip_wobble_rad": float(np.max(np.abs(post - spec.target_phi))),
+        "max_post_window_wobble_rad": float(np.max(np.abs(post - target))),
         "wobble_note": (
-            "post-flip wobble is the RECOVER phase leaning to fly the residual lateral offset "
+            "post-window wobble is the recover phase leaning to fly the residual lateral offset "
             "back to the station — expected, not a defect."
         ),
-    }
+    })
+    return out
 
 
 def check_limits(samples: Samples, *, min_thrust_normed: float = 0.0) -> dict:
@@ -327,11 +393,102 @@ def dynamics_residual(samples: Samples, model: RefModel, *, mask: list[int] | No
     return out
 
 
+def check_rate_loop_stability(samples: Samples, model: RefModel) -> dict:
+    """**Can DiffAero's rate loop, as vendored, track this maneuver at all?**
+
+    A different question from every other check here, and the only one that is about the
+    *substrate* rather than about the reference. It runs on every maneuver so the answer ships as a
+    number in every artifact instead of living in one commit message.
+
+    ``third_party/diffaero/dynamics/controller.py:93`` computes the measured body rate as
+    ``R_i2b @ w``, but ``w`` is already body-frame — ``quadrotor.py`` uses ``q̇ = ½q⊗[w,0]`` and
+    ``M = τ − w×Jw``, both body-frame. So the closed loop is::
+
+        ω̇ = K(u − R·ω)          instead of      ω̇ = K(u − ω)
+
+    ``R`` is a rotation, so its eigenvalues are ``1`` and ``e^{±iθ}`` with ``θ`` the attitude's
+    rotation angle from identity. The loop's eigenvalues are therefore ``−K`` and ``−K·e^{±iθ}``,
+    whose **real part is ``−K·cos θ``** — negative (stable) below 90° of attitude, *positive*
+    (divergent) above it.
+
+    **The 90° threshold alone is not the answer, and the flip is the proof.** A roll flip spends
+    ~6% of its frames past 90° of attitude and tracks to 2.15 cm anyway. The reason is the third
+    eigenvalue: ``R``'s eigenvector for eigenvalue ``1`` is its own **rotation axis**, and there
+    the loop eigenvalue stays ``−K`` no matter what θ is. A planar maneuver's ω lies exactly on
+    that axis, so it never excites the two ``−K·e^{±iθ}`` modes at all.
+
+    So the check measures **both**: how far the attitude goes, *and* whether ω stays on ``R``'s
+    fixed axis. That pairing is what makes "ψ ≡ 0 is load-bearing" a mechanism rather than a
+    superstition — the flip is exempt for a stated reason that can be measured, and the orbit is
+    not exempt for the same stated reason. Measured on the orbit over its 3.85 s: **17.6 m** of
+    position error as vendored (DiffAero's own state clamps bound the blow-up rather than letting
+    it reach NaN, which is if anything more misleading — it looks like a finite trajectory) versus
+    **1.8 cm / 0.65°** through an identical loop with ``R_i2b`` removed. The observed onset matches
+    the predicted 90° crossing, and it does not improve as ``dt → 1 ms`` (17.65 / 17.87 / 17.65 m
+    at 20 / 5 / 1 ms), so it is instability and not discretization.
+
+    Returns:
+        The attitude excursion, the worst eigenvalue real part of the off-axis modes, the measured
+        ω-to-fixed-axis alignment, and the verdict that combines them.
+    """
+    q = np.asarray(samples.quat, dtype=np.float64)
+    theta = fl.attitude_angle_from_identity(q)
+    K = model.K_angvel_rp
+    above = theta > 0.5 * np.pi
+    first = np.flatnonzero(above)
+
+    # R's fixed axis is the quaternion's own rotation axis; both are undefined at identity, and
+    # the alignment question is vacuous where there is no rate to misalign.
+    axis = q[:, :3]
+    n_axis = np.linalg.norm(axis, axis=-1)
+    w = np.asarray(samples.omega, dtype=np.float64)
+    n_w = np.linalg.norm(w, axis=-1)
+    live = (n_axis > 1e-6) & (n_w > 1e-6)
+    if np.any(live):
+        align = np.abs(np.sum(axis[live] * w[live], axis=-1) / (n_axis[live] * n_w[live]))
+        min_align = float(np.min(align))
+    else:
+        min_align = 1.0
+    on_fixed_axis = min_align > 1.0 - 1e-9
+    return {
+        "max_attitude_from_identity_deg": float(np.degrees(np.max(theta))),
+        "frac_above_90deg": float(np.mean(above)),
+        "worst_offaxis_eigenvalue_real_part_per_s": float(np.max(-K * np.cos(theta))),
+        "K_angvel_rp": float(K),
+        "first_crossing_t_s": float(samples.t[int(first[0])]) if first.size else None,
+        "min_omega_fixed_axis_alignment": min_align,
+        "omega_on_fixed_axis": bool(on_fixed_axis),
+        "vendored_loop_stable": bool(on_fixed_axis or not np.any(above)),
+        "stability_reason": (
+            "omega lies on R's fixed axis (alignment "
+            f"{min_align:.6f}), so only the eigenvalue that stays -K is ever excited — the "
+            "attitude excursion is irrelevant" if on_fixed_axis else
+            ("attitude never exceeds 90 deg, so every eigenvalue has negative real part"
+             if not np.any(above) else
+             "omega leaves R's fixed axis (alignment "
+             f"{min_align:.3f}) AND the attitude passes 90 deg, so the -K*cos(theta) modes are "
+             "excited with a POSITIVE real part: the vendored loop diverges")
+        ),
+        "note": (
+            "DiffAero's RateController (controller.py:93) uses R_i2b @ w as the MEASURED body rate "
+            "while w is already body-frame, so the closed loop is wdot = K(u - R w). R's "
+            "eigenvalues are 1 and exp(+-i*theta), so the loop's are -K and -K*exp(+-i*theta) — "
+            "real part -K*cos(theta), which goes POSITIVE past 90 deg of attitude. The eigenvalue "
+            "that stays -K belongs to R's rotation axis, which is why a planar maneuver (omega ON "
+            "that axis) survives 180 deg of inversion and a 3D one does not. This is REPORTED, not "
+            "fixed: the vendored fork is deliberately untouched, and the hand-authored reference "
+            "is unaffected either way. What it blocks is using an unstable maneuver as an RL "
+            "target or "
+            "evaluating a policy against it in this simulator."
+        ),
+    }
+
+
 def verify_reference(
     fine: Samples,
     replay: Samples,
     model: RefModel,
-    spec: FlipSpec,
+    spec: ManeuverSpec,
     *,
     min_thrust_normed: float = 0.0,
 ) -> dict:
@@ -347,11 +504,20 @@ def verify_reference(
     ratio = (dt_replay / dt_fine) ** 2
     got = res_replay["vel_rms"] / max(res_fine["vel_rms"], 1e-300)
     return {
-        "planarity": assert_planar(fine, spec),
+        "maneuver": spec.name,
+        # Planarity is a claim only a planar maneuver makes. Running assert_planar on the orbit
+        # would fail by design and say nothing — the orbit's non-planarity is the point of it.
+        "planarity": (assert_planar(fine, spec) if spec.is_planar else {
+            "is_planar": False,
+            "max_abs_omega_z_rps": float(np.max(np.abs(fine.omega[:, 2]))),
+            "note": ("this maneuver is 3D by design (psi winds), so there is no planarity claim to "
+                     "assert. See rate_loop_stability for what that costs in this simulator."),
+        }),
         "quaternion": check_quaternion(fine, spec),
-        "seams": classify_breaks(fine),
+        "seams": classify_breaks(fine, spec),
         "limits": check_limits(fine, min_thrust_normed=min_thrust_normed),
         "allocation": check_allocation(fine, model),
+        "rate_loop_stability": check_rate_loop_stability(fine, model),
         "dynamics_residual_fine": res_fine,
         "dynamics_residual_replay": res_replay,
         "second_order_convergence": {

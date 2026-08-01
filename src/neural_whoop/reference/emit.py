@@ -14,6 +14,13 @@ stream is for measuring against.
 The metrics deliberately carry **the same names ``acro_flip`` computes**
 (``max_lateral_drift``, ``peak_climb``, ``altitude_loss``, ``settle_pos_error``), so "this is the
 one we want" becomes a literal number the RL is graded against rather than a paragraph of prose.
+Those four are computed here for **every** maneuver, over the window the spec declares; anything
+only one maneuver has (``swing_half_width_m``, ``axis_pointing_error_deg``, …) comes from that
+spec's :meth:`~neural_whoop.reference.maneuvers.ManeuverSpec.extra_metrics`.
+
+Everything in this module takes a :class:`~neural_whoop.reference.maneuvers.ManeuverSpec` rather
+than a ``FlipSpec``, and ``solution`` is optional — a maneuver that needed no boundary-value solve
+passes ``None``, which is a result rather than an omission.
 """
 
 from __future__ import annotations
@@ -24,7 +31,6 @@ from typing import Any
 
 import numpy as np
 
-from neural_whoop.reference import flatness as fl
 from neural_whoop.reference.imu import IMU_INFO
 from neural_whoop.reference.limits import (
     HOVER_THRUST_NORMED,
@@ -33,7 +39,7 @@ from neural_whoop.reference.limits import (
     MAX_THRUST_NORMED,
     act_v2_from_diffaero,
 )
-from neural_whoop.reference.maneuvers import PHASE, PHASE_LABELS, FlipSolution, FlipSpec
+from neural_whoop.reference.maneuvers import ManeuverSpec
 from neural_whoop.reference.model import RefModel, drag_sensitivity_models
 from neural_whoop.reference.segments import Samples, Trajectory
 from neural_whoop.viz.replay import (
@@ -45,12 +51,7 @@ from neural_whoop.viz.replay import (
 )
 
 REFERENCE_FORMAT = "neural-whoop-reference"
-REFERENCE_VERSION = 1
-
-#: The phases that constitute "the maneuver" for metric purposes. ``acro_flip`` scores an episode
-#: that begins at a level hover at ``z0`` and ends after the recover, which is exactly this window
-#: — the climb and the landing are stagecraft, not part of what the policy is graded on.
-MANEUVER_PHASES = (PHASE["POP"], PHASE["RECOVER"])
+REFERENCE_VERSION = 2
 
 
 def decimate_indices(fine: Samples, dt_replay: float) -> np.ndarray:
@@ -114,62 +115,65 @@ def step_hold_commands(fine: Samples, idx: np.ndarray) -> tuple[np.ndarray, np.n
     return thrust, rate
 
 
-def maneuver_mask(samples: Samples) -> np.ndarray:
-    """Boolean mask selecting POP..RECOVER — the window the metrics are computed over."""
-    lo, hi = MANEUVER_PHASES
+def maneuver_mask(samples: Samples, spec: ManeuverSpec) -> np.ndarray:
+    """Boolean mask selecting the spec's own metric window — the maneuver, not the stagecraft."""
+    lo, hi = spec.metric_window
     return (samples.phase >= lo) & (samples.phase <= hi)
 
 
-def reference_metrics(samples: Samples, spec: FlipSpec, model: RefModel) -> dict[str, float]:
-    """The headline numbers, using ``acro_flip``'s own metric names where they correspond."""
-    m = maneuver_mask(samples)
-    station = np.array([0.0, 0.0, spec.z_entry])
+def reference_metrics(samples: Samples, spec: ManeuverSpec, model: RefModel) -> dict[str, float]:
+    """The headline numbers, using ``acro_flip``'s own metric names where they correspond.
+
+    The first four names are computed identically for every maneuver, over that spec's own
+    ``metric_window``, so a swing and a flip are directly comparable on "did it come back?".
+    ``max_lateral_drift`` is measured against the spec's **station**, which is the origin for the
+    flip and the swing but ``(−R, 0, z)`` for the orbit — measuring it against the world origin
+    instead would report the orbit's radius as drift.
+    """
+    m = maneuver_mask(samples, spec)
+    station = np.asarray(spec.station, dtype=np.float64)
     pos = samples.pos[m]
     lat = np.linalg.norm(pos[:, :2] - station[:2], axis=-1)
     alt_err = pos[:, 2] - spec.z_entry
-    # settle: where the RECOVER phase ends, i.e. the last frame before LAND.
-    rec = np.flatnonzero(samples.phase == PHASE["RECOVER"])
-    settle_i = int(rec[-1]) if rec.size else int(np.flatnonzero(m)[-1])
-    phi = fl.rotation_angle_about(samples.quat, spec.axis_idx)
-    flip = np.flatnonzero(
-        (samples.phase >= PHASE["POP"]) & (samples.phase <= PHASE["CATCH"])
-    )
+    settle = np.flatnonzero(samples.phase == spec.settle_phase)
+    settle_i = int(settle[-1]) if settle.size else int(np.flatnonzero(m)[-1])
     imu = samples.imu(model)
-    coast = samples.phase == PHASE["COAST"]
-    return {
+    out = {
         # --- the four that acro_flip computes, by the same names ---
         "max_lateral_drift": float(np.max(lat)),
         "peak_climb": float(np.max(np.clip(alt_err, 0.0, None))),
         "altitude_loss": float(np.max(np.clip(-alt_err, 0.0, None))),
         "settle_pos_error": float(np.linalg.norm(samples.pos[settle_i] - station)),
-        # --- the maneuver's own shape ---
-        "flip_duration_s": float(samples.t[flip[-1]] - samples.t[flip[0]]),
-        "rotation_turns": float(phi[-1] / (2.0 * np.pi)),
+        # --- the envelope, for every maneuver ---
         "peak_normed_thrust": float(np.max(samples.normed_thrust)),
+        "min_normed_thrust": float(np.min(samples.normed_thrust)),
         "peak_body_rate_rps": float(np.max(np.abs(samples.omega))),
         "peak_rate_cmd_rps": float(np.max(np.abs(samples.rate_cmd))),
         "vz_min_mps": float(np.min(samples.vel[m, 2])),
         "vz_max_mps": float(np.max(samples.vel[m, 2])),
+        "peak_speed_mps": float(np.max(np.linalg.norm(samples.vel[m], axis=-1))),
         "apex_altitude_m": float(np.max(pos[:, 2])),
         "total_duration_s": float(samples.t[-1] - samples.t[0]),
-        # --- the accelerometer, because the coast is the surprising part ---
-        "imu_coast_min_g": float(np.min(np.linalg.norm(imu[coast], axis=-1)) / model.g),
-        "imu_coast_max_g": float(np.max(np.linalg.norm(imu[coast], axis=-1)) / model.g),
         "imu_peak_g": float(np.max(np.linalg.norm(imu, axis=-1)) / model.g),
     }
+    out.update(spec.extra_metrics(samples, model))
+    return out
 
 
 def drag_sensitivity(
-    traj: Trajectory, spec: FlipSpec, base: RefModel, dt: float
+    traj: Trajectory, spec: ManeuverSpec, base: RefModel, dt: float
 ) -> dict[str, dict[str, float]]:
     """Re-fly the **identical authored command stream** under other drag models.
 
     The sim's drag is the dominant modeling error and the reference bakes it in, so this is shipped
-    as a column rather than a footnote. Note what does and does not change: the *commands* are
-    fixed, so rotation is untouched (there is no aerodynamic torque in this model at all) while
-    coast duration, apex and return speed move a lot. The flatness-authored segments are re-derived
-    under each model, so their thrust changes too — that is the honest comparison, since a path is
-    only a path once you say what airframe flies it.
+    as a column rather than a footnote. Note what does and does not change. For the **flip** the
+    *commands* are fixed, so rotation is untouched (there is no aerodynamic torque in this model at
+    all) while coast duration, apex and return speed move a lot. For the **swing and the orbit**
+    the *path* is fixed instead and the attitude/thrust are re-derived, so the geometry is
+    identical under every model and what moves is what the airframe has to do to fly it — which is
+    exactly the right comparison for the orbit's axis-pointing error, whose whole claim is that it
+    is a drag artifact. ``peak_bank_deg`` / ``axis_pointing_error_deg`` therefore appear in this
+    column and are the numbers to read there.
     """
     out: dict[str, dict[str, float]] = {}
     for label, model in drag_sensitivity_models(base).items():
@@ -179,10 +183,11 @@ def drag_sensitivity(
             out[label] = {"error": str(exc)[:200],
                           "terminal_velocity_mps": model.terminal_velocity_mps}
             continue
-        m = maneuver_mask(s)
+        m = maneuver_mask(s, spec)
+        station = np.asarray(spec.station, dtype=np.float64)
         alt = s.pos[m, 2] - spec.z_entry
-        lat = np.linalg.norm(s.pos[m, :2], axis=-1)
-        out[label] = {
+        lat = np.linalg.norm(s.pos[m, :2] - station[:2], axis=-1)
+        row = {
             "D": model.D_xy,
             "terminal_velocity_mps": model.terminal_velocity_mps,
             "peak_climb_m": float(np.max(np.clip(alt, 0.0, None))),
@@ -190,16 +195,23 @@ def drag_sensitivity(
             "max_lateral_drift_m": float(np.max(lat)),
             "vz_min_mps": float(np.min(s.vel[m, 2])),
             "vz_max_mps": float(np.max(s.vel[m, 2])),
+            "peak_normed_thrust": float(np.max(s.normed_thrust)),
+            "peak_rate_cmd_rps": float(np.max(np.abs(s.rate_cmd))),
             "end_z_error_m": float(s.pos[-1, 2] - spec.z_rest),
         }
+        extra = spec.extra_metrics(s, model)
+        for key in ("peak_bank_deg", "axis_pointing_error_deg", "swing_half_width_m"):
+            if key in extra:
+                row[key] = float(extra[key])
+        out[label] = row
     return out
 
 
 def build_replay(
     replay_samples: Samples,
-    spec: FlipSpec,
+    spec: ManeuverSpec,
     model: RefModel,
-    solution: FlipSolution,
+    solution: Any = None,
     *,
     dt_replay: float,
     min_thrust_normed: float = 0.0,
@@ -211,17 +223,16 @@ def build_replay(
     ``gates`` is empty and ``scene`` carries **only** ``phase``. That is deliberate:
     ``web/studio/playback.js`` builds a 0.16 m marker sphere for any ``target``/``anchor``/``slot``
     key, which would be twice the size of the true-scale 82 mm airframe in the hero shot and has no
-    opt-out on the capture page. The station point belongs in the charts, not in the video.
+    opt-out on the capture page. **This applies to the orbit's anchor too** — it is an *invisible*
+    axis by design, and putting a marker on it would put a beach ball in the middle of the shot.
+    The station and the anchor belong in the charts, not in the video.
+
+    ``meta.scene_info.phase_labels`` comes from the spec, which is what gives each maneuver its own
+    on-screen captions with no renderer change (``web/capture/capture.js``).
     """
-    variant = ("motors-off" if spec.coast_thrust <= 0.0
-               else f"deployable (coast {spec.coast_thrust:g})")
     meta: dict[str, Any] = {
-        "config": f"reference_flip_{spec.axis}",
-        "policy": (
-            f"HAND-AUTHORED REFERENCE — not a policy rollout. {spec.axis}-flip, "
-            f"Ω={spec.omega_peak:g} rad/s, {variant}; attitude/thrust/rates derived by "
-            f"differential flatness, flip closed by a damped-Newton shoot (stage {solution.stage})."
-        ),
+        "config": f"reference_{spec.name}",
+        "policy": spec.describe(solution),
         "task": "acro_flip",
         "obs_version": "obs-v4",
         "action_version": "act-v2",
@@ -248,15 +259,21 @@ def build_replay(
         "unity_hint": UNITY_HINT,
         "imu_info": dict(IMU_INFO),
         "scene_info": {
-            "command_label": f"{spec.axis}-flip reference",
-            "phase_labels": list(PHASE_LABELS),
+            "command_label": f"{spec.name} reference",
+            "phase_labels": list(spec.phase_labels),
             "rest_z": float(spec.z_rest),
         },
         "source": "reference-generator",
+        # The spec's own knobs, plus the three windows every chart needs. Adding them here rather
+        # than in each spec keeps the replay self-describing without three copies of the same
+        # boilerplate — the charts read the replay, never a spec object.
         "reference": {
-            "axis": spec.axis, "omega_peak_rps": spec.omega_peak,
-            "coast_thrust": spec.coast_thrust, "variant": variant,
-            "z_entry_m": spec.z_entry, "stage": solution.stage,
+            **spec.reference_meta(solution),
+            "phase_labels": list(spec.phase_labels),
+            "metric_window": list(spec.metric_window),
+            "tick_window": list(getattr(spec, "rotation_window", None) or spec.metric_window),
+            "is_planar": bool(spec.is_planar),
+            "z_rest_m": float(spec.z_rest),
         },
     }
     rec = RunRecorder(meta)
@@ -285,7 +302,7 @@ def build_replay(
     rec.end_episode({
         "steps": len(replay_samples),
         "ended": "landed",
-        "sequence": "climb->hover->pop->rollin->coast->catch->recover->land",
+        "sequence": "->".join(s.lower() for s in spec.phase_labels),
         "kind": label,
     })
     return rec
@@ -307,66 +324,59 @@ def _rpy_from_quat(q: np.ndarray) -> np.ndarray:
 
 def build_reference_doc(
     fine: Samples,
-    spec: FlipSpec,
+    spec: ManeuverSpec,
     model: RefModel,
-    solution: FlipSolution,
+    solution: Any,
     checks: dict,
     *,
     metrics: dict[str, float],
     sensitivity: dict[str, dict[str, float]],
     dt_fine: float,
+    derived: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Assemble ``reference.json`` — the 1 kHz stream plus everything needed to interpret it."""
     imu = fine.imu(model)
     return {
         "format": REFERENCE_FORMAT,
         "version": REFERENCE_VERSION,
+        "maneuver": spec.name,
         "what_this_is": (
             "A hand-authored reference maneuver: the trajectory we WANT, not one a policy flew. "
-            "Attitude, body rates and collective thrust are DERIVED (differential flatness for the "
-            "powered path segments, forward integration of authored commands through the flip), "
-            "and the flip's boundary conditions are closed by a damped-Newton shoot. Nothing here "
-            "was trained. replay.json.gz is the video artifact; THIS is the data artifact."
+            "Attitude, body rates and collective thrust are DERIVED — differential flatness turns "
+            "an authored path into exactly one attitude/thrust/rate history, so working out the "
+            "thrust is algebra rather than a job for RL. Where flatness has no solution (a flip's "
+            "inversion would demand negative thrust) the COMMANDS are authored instead and the "
+            "path is what physics returns, with the boundary conditions closed by a damped-Newton "
+            "shoot. Nothing here was trained. replay.json.gz is the video artifact; THIS is the "
+            "data artifact."
         ),
         "caveats": [
             "The sim's drag is the dominant modeling error and this reference bakes it in: "
             f"D = {model.D_xy:g} N/(m/s) on {model.mass:g} kg gives a "
             f"{model.terminal_velocity_mps:.2f} m/s terminal velocity, where a real 65 mm whoop is "
-            "8-12 m/s — roughly 8x too much drag at the flip's speeds, and linear where reality is "
-            "quadratic. Coast duration, apex height, return speed and the entire coast IMU trace "
-            "are artifacts of THIS simulator. See drag_sensitivity for the bracket.",
-            "Body rate is exactly constant through the coast because DiffAero applies drag only to "
-            "linear velocity and both gyroscopic terms vanish on a symmetric-inertia axis with "
-            "w_z = 0. A real whoop would shed 5-15% of its roll rate to blade flapping over a "
-            "0.6 s coast. That is NOT modeled here.",
-            "The coast IMU is a V, not a flat free-fall null: drag scales with speed, which is "
-            "large at both ends of a ballistic arc and zero at the apex. See metrics."
-            "imu_coast_min_g / imu_coast_max_g for the measured spread. The body-z component goes "
-            "strongly negative at coast entry because the drone is climbing fast along its own "
-            "+z and drag pushes back along -z — that is what the accelerometer reads, not a sign "
-            "error.",
-            "psi == 0 is load-bearing in three places (RateController frame bug is a no-op, the "
-            "coast rate stays exactly constant, the heading construction stays non-degenerate). "
-            "A yaw sweep breaks all three and only the first fails loudly.",
-            "Control allocation: the catch itself is comfortably feasible here (see "
-            "checks.allocation.min_margin_torqued) because the rate brake is authored as a "
-            "smoothstep rather than a step command, so the torque it asks for is modest. The "
-            "binding problem is elsewhere and is structural: through the motors-off coast the "
-            "margin is exactly 0 — zero thrust demanding zero torque — which means the airframe "
-            "has NO rate authority for that whole stretch and could not correct a disturbance if "
-            "it had one. That is the AIRMODE flip-stall failure of docs/SIM2REAL.md in miniature. "
-            "If this reference is used as an RL target or a scoring reference, use the "
-            "--deployable variant, whose 0.25 floor keeps authority alive throughout.",
+            "8-12 m/s — roughly 8x too much drag at these speeds, and linear where reality is "
+            "quadratic. See drag_sensitivity for the bracket.",
+            *spec.caveats(model),
         ],
         "spec": {k: (v if not isinstance(v, np.generic) else float(v))
                  for k, v in vars(spec).items()},
+        "derived": {k: float(v) for k, v in (derived or {}).items()},
         "model": model.to_dict(),
-        "solution": solution.to_dict(),
+        "solution": solution.to_dict() if solution is not None else {
+            "stage": None,
+            "stage_meaning": (
+                "no boundary-value solve was needed: this maneuver is authored entirely by "
+                "differential flatness and closes on its own start point analytically. That is a "
+                "result, not an omission — see the package docs for why the flip cannot be."
+            ),
+        },
         "metrics": {k: float(v) for k, v in metrics.items()},
         "metrics_note": (
             "max_lateral_drift / peak_climb / altitude_loss / settle_pos_error carry the SAME "
-            "names AcroFlipTask.metrics() computes, measured over the same window (a level hover "
-            "at z_entry through the end of the recover), so they can be compared directly."
+            "names AcroFlipTask.metrics() computes, measured over this maneuver's own window "
+            "(a level hover at z_entry through the end of the settle/recover), so they can be "
+            "compared directly. max_lateral_drift is measured against spec.station, which is the "
+            "origin for the flip and the swing but (-R, 0, z) for the orbit."
         ),
         "drag_sensitivity": sensitivity,
         "checks": checks,
@@ -381,7 +391,7 @@ def build_reference_doc(
                 "rate_cmd": "body rate COMMAND rad/s (u = omega + omega_dot/K)",
                 "imu": "body specific force m/s^2, +1 g on body +z at rest",
             },
-            "phase_labels": list(PHASE_LABELS),
+            "phase_labels": list(spec.phase_labels),
             "t": fine.t.tolist(),
             "phase": fine.phase.tolist(),
             "pos": fine.pos.tolist(),

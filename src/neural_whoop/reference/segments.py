@@ -1,4 +1,4 @@
-"""The segment model: three types, two mechanisms, composed by strict sequential state-passing.
+"""The segment model: four types, two mechanisms, composed by strict sequential state-passing.
 
 Every segment implements ``sample(state_in, model, ts) -> rows``; the last row *is* the next
 segment's ``state_in``. There is no seam solve and no boundary-value problem across segments —
@@ -8,9 +8,17 @@ position and velocity are continuous **by construction**.
 type         authored                      derived                               used for
 ============ ============================= ===================================== ==================
 PathSegment  ``p(t)`` septic + ``ψ(t)``     attitude, thrust, ω via flatness      climb/recover/land
+Analytic     ``p(t)`` closed form + ``ψ(t)``same                                  swing / orbit
 RateSegment  ``u_thrust(t)``, ``ω(t)``      q, v, p by forward integration        pop/roll-in/catch
 Ballistic    thrust ≡ const, ω ≡ const      same; asserts commanded torque ≡ 0    the coast
 ============ ============================= ===================================== ==================
+
+``PathSegment`` and ``AnalyticPathSegment`` share one mechanism (the flatness map) and differ only
+in where the path comes from: a septic fitted between endpoint conditions, versus a shape the
+author already knows in closed form. Reach for the septic when what you know is "start here, end
+there, smoothly", and for the analytic one when you know the *geometry* — an arc or a circle is
+not an interpolation problem, and fitting one through a polynomial would only approximate a thing
+you already had exactly.
 
 **Why the rate segments author ``ω(t)`` and not a hand-drawn rate command.** DiffAero's
 ``RateController`` is exactly first order for a single-axis rotation from ψ = 0:
@@ -260,6 +268,84 @@ class PathSegment:
         return omega
 
 
+#: ``t -> (p, v, a, j)``, each ``(N, 3)``, in the maneuver's own time base.
+PathFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
+#: ``t -> (ψ, ψ̇)``, each ``(N,)``.
+PsiFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
+
+
+@dataclass
+class AnalyticPathSegment:
+    """Author ``p(t)`` and ``ψ(t)`` in **closed form**; derive the rest through flatness.
+
+    The sibling of :class:`PathSegment`, sharing its mechanism exactly — ``fl.flat_to_state`` plus
+    the same central difference for ``ω̇`` — and differing only in the source of the path. There is
+    no septic and no endpoint conditions here: :mod:`~neural_whoop.reference.paths` already knows
+    the shape and its first three derivatives analytically.
+
+    ``t_offset`` lets several segments carve **one** continuous authored path into separately
+    labelled beats (the orbit's WIND-UP / ORBIT / WIND-DOWN), which is what puts a caption on each
+    without introducing a seam: every sub-segment evaluates the same function, so continuity across
+    the join is exact to the last bit rather than merely matched.
+
+    The entry position is **asserted**, not assumed. A ``PathSegment`` takes its start conditions
+    from the incoming state and therefore cannot be discontinuous; an analytic path ignores the
+    incoming state entirely, so a mis-placed station would silently teleport the drone one frame
+    before the maneuver. Checking it costs nothing and turns that into a loud failure.
+    """
+
+    name: str
+    phase: int
+    duration: float
+    path: PathFn
+    psi_fn: PsiFn | None = None
+    heading: str = "x_c"
+    t_offset: float = 0.0
+    #: Tolerance on the entry-position continuity assertion (m).
+    entry_tol: float = 1e-9
+
+    def sample(self, state_in: RefState, model: RefModel, ts: np.ndarray) -> dict[str, np.ndarray]:
+        ts = np.asarray(ts, dtype=np.float64)
+        tau = self.t_offset + ts
+        pos, vel, acc, jerk = self.path(tau)
+        gap = float(np.max(np.abs(pos[0] - state_in.pos)))
+        if gap > self.entry_tol:
+            raise ValueError(
+                f"{self.name}: the authored path starts {gap:.3e} m from the incoming state "
+                f"({pos[0]} vs {state_in.pos}). An analytic segment ignores the state it is "
+                f"handed, "
+                f"so this would teleport the drone at the seam instead of flying there. Fix the "
+                f"station the preceding segment ends on."
+            )
+        psi, psidot = self._psi(tau)
+        R, omega, nt = fl.flat_to_state(vel, acc, jerk, psi, psidot, model, heading=self.heading)
+        h = _OMEGA_DIFF_H
+        omega_dot = (self._omega_at(tau + h, model) - self._omega_at(tau - h, model)) / (2.0 * h)
+        n = len(ts)
+        return {
+            "t": state_in.t + ts,
+            "phase": np.full(n, self.phase, dtype=np.int64),
+            "seg": np.zeros(n, dtype=np.int64),
+            "pos": pos, "vel": vel, "acc": acc, "jerk": jerk,
+            "quat": fl.rotmat_to_quat_xyzw(R), "omega": omega, "omega_dot": omega_dot,
+            "normed_thrust": nt,
+            "rate_cmd": omega + omega_dot / np.array(model.K_angvel),
+        }
+
+    def _psi(self, tau: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if self.psi_fn is None:
+            return np.zeros_like(tau), np.zeros_like(tau)
+        return self.psi_fn(tau)
+
+    def _omega_at(self, tau: np.ndarray, model: RefModel) -> np.ndarray:
+        _, vel, acc, jerk = self.path(tau)
+        psi, psidot = self._psi(tau)
+        _, omega, _ = fl.flat_to_state(
+            vel, acc, jerk, psi, psidot, model, heading=self.heading, check=False
+        )
+        return omega
+
+
 # =============================================================================================
 # Rate segments (command-authored, path integrated)
 # =============================================================================================
@@ -402,7 +488,7 @@ class Trajectory:
     ``k``'s last row. Nothing is solved across a seam.
     """
 
-    segments: list[PathSegment | RateSegment]
+    segments: list[PathSegment | AnalyticPathSegment | RateSegment]
     start: RefState
 
     @property

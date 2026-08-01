@@ -1,4 +1,12 @@
-"""The flip itself: a phase program, and a damped-Newton **shoot** to close it.
+"""The **maneuver protocol**, and the flip: a phase program plus a damped-Newton **shoot**.
+
+This module holds two things. :class:`ManeuverSpec` is the small protocol every reference maneuver
+satisfies, so :mod:`~neural_whoop.reference.emit` and :mod:`~neural_whoop.reference.verify` work
+against "a maneuver" rather than against the flip; :mod:`~neural_whoop.reference.maneuvers_swing`
+and :mod:`~neural_whoop.reference.maneuvers_orbit` are the other two implementations. Everything
+below the protocol is the flip.
+
+The flip: a phase program, and a damped-Newton **shoot** to close it.
 
 Flatness authors the climb, the recovery and the landing. It cannot author the flip — through
 inversion the required specific force points up while the thrust axis points down, so the map
@@ -35,12 +43,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import Callable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import numpy as np
 
 from neural_whoop.reference import flatness as fl
 from neural_whoop.reference.limits import (
+    MAX_BODY_RATE_YAW_RPS,
     MAX_RATE_CMD_RPS,
     MAX_THRUST_NORMED,
     WHOOP_REST_Z_M,
@@ -55,9 +64,145 @@ from neural_whoop.reference.segments import (
     Trajectory,
 )
 
+
+# =============================================================================================
+# The maneuver protocol
+# =============================================================================================
+@dataclass
+class ManeuverBuild:
+    """What a spec hands back: the trajectory, plus whatever solving it took to get there.
+
+    ``solution`` is ``None`` for a maneuver that needs no boundary-value solve — which is not an
+    absence but a *result*. The swing closes on its own start point at machine precision because
+    differential flatness authors the whole beat; the flip needed a shoot because flatness has no
+    solution through inversion. Carrying that as ``None`` rather than an empty record is the honest
+    encoding of "there was nothing to solve".
+    """
+
+    traj: Trajectory
+    solution: Any = None
+    derived: dict[str, float] = field(default_factory=dict)
+
+
+class RateEnvelopeError(RuntimeError):
+    """The authored maneuver asks for a command outside the act-v2 envelope.
+
+    Raised at **build** time by the maneuvers that have no shoot to absorb a bad sizing, so a
+    request the airframe cannot fly fails immediately with the measured numbers rather than
+    producing an artifact that looks fine and saturates.
+    """
+
+
+@runtime_checkable
+class ManeuverSpec(Protocol):
+    """What :mod:`~neural_whoop.reference.emit` and :mod:`~neural_whoop.reference.verify` need.
+
+    Small on purpose. :class:`FlipSpec` satisfied all of the geometric half of this before the
+    protocol existed; what the generalization added is the reporting half (``phase_labels``,
+    ``describe``, ``reference_meta``, ``caveats``), which used to be module-global constants and
+    could therefore only ever describe one maneuver.
+
+    Attributes:
+        name: Short identifier, e.g. ``"flip"`` / ``"swing"`` / ``"orbit"``.
+        phase_labels: Caption labels for the numeric ``scene.phase`` channel, index == code. The
+            capture page reads these straight out of ``meta.scene_info.phase_labels``
+            (``web/capture/capture.js``), so per-spec labels give per-maneuver captions for free.
+        c2_break_phases: ``(from, to)`` phase pairs where a command step is *intended*. Empty for
+            a fully powered maneuver — which is itself a claim worth making, and one the swing and
+            orbit both make.
+        metric_window: ``(lo, hi)`` phase codes bounding the window metrics are computed over —
+            the maneuver proper, excluding the climb and landing stagecraft.
+        settle_phase: The phase whose last frame is the "did it come back?" measurement.
+        station: The world point the maneuver departs from and returns to.
+        z_entry / z_rest: Hover altitude and resting altitude (m).
+        is_planar: Whether the maneuver is a pure rotation about one body axis with ``ψ ≡ 0``.
+        axis_idx: That axis (0 = roll, 1 = pitch) when planar; meaningless otherwise.
+        min_thrust_normed: The free-flight throttle floor the stream was authored under.
+    """
+
+    name: str
+
+    @property
+    def phase_labels(self) -> list[str]: ...
+    @property
+    def c2_break_phases(self) -> tuple[tuple[int, int], ...]: ...
+    @property
+    def metric_window(self) -> tuple[int, int]: ...
+    @property
+    def settle_phase(self) -> int: ...
+    @property
+    def station(self) -> np.ndarray: ...
+    @property
+    def z_entry(self) -> float: ...
+    @property
+    def z_rest(self) -> float: ...
+    @property
+    def is_planar(self) -> bool: ...
+    @property
+    def axis_idx(self) -> int: ...
+    @property
+    def min_thrust_normed(self) -> float: ...
+
+    def build(self, model: RefModel, *, dt: float = 1e-3, verbose: bool = False) -> ManeuverBuild:
+        """Assemble the whole sequence, solving whatever has to be solved."""
+        ...
+
+    def describe(self, solution: Any) -> str:
+        """One-line human description for ``meta.policy`` in the replay."""
+        ...
+
+    def reference_meta(self, solution: Any) -> dict:
+        """The ``meta.reference`` block — the authored knobs, for a consumer to reconstruct."""
+        ...
+
+    def extra_metrics(self, samples: Samples, model: RefModel) -> dict[str, float]:
+        """Metrics only this maneuver has (the shared ones live in ``emit``)."""
+        ...
+
+    def caveats(self, model: RefModel) -> list[str]:
+        """Maneuver-specific honest caveats, appended to the package-wide ones."""
+        ...
+
+
+def assert_within_envelope(
+    samples: Samples,
+    *,
+    rate_cmd_max: float = MAX_RATE_CMD_RPS,
+    thrust_max: float = MAX_THRUST_NORMED,
+    yaw_cmd_max: float = MAX_BODY_RATE_YAW_RPS,
+    what: str = "maneuver",
+) -> dict[str, float]:
+    """Raise :class:`RateEnvelopeError` unless every authored command is inside the envelope.
+
+    The flip can absorb a bad sizing — the shoot simply returns different parameters. The swing and
+    the orbit cannot: their sizing *is* the maneuver, so an out-of-envelope request has to fail at
+    build time with the measured numbers attached, or it ships as an artifact that looks perfect
+    and saturates the moment anything tries to fly it.
+
+    Returns:
+        The measured peaks, so a caller can publish them rather than merely pass the check.
+    """
+    rp = float(np.max(np.abs(samples.rate_cmd[:, :2])))
+    yaw = float(np.max(np.abs(samples.rate_cmd[:, 2])))
+    thrust = float(np.max(samples.normed_thrust))
+    if rp > rate_cmd_max or yaw > yaw_cmd_max or thrust > thrust_max:
+        raise RateEnvelopeError(
+            f"the authored {what} is outside the act-v2 envelope: roll/pitch rate command "
+            f"{rp:.2f} of {rate_cmd_max:.2f} rad/s, yaw {yaw:.2f} of {yaw_cmd_max:.2f}, collective "
+            f"{thrust:.2f} of {thrust_max:.2f}. The rate loop approaches its command "
+            f"asymptotically, so a reference that asks for more than this is not merely tight — it "
+            f"is untrackable, and the replay would not show it. Size the maneuver down."
+        )
+    return {"max_rate_cmd_rp_rps": rp, "max_rate_cmd_yaw_rps": yaw, "max_normed_thrust": thrust}
+
+
+# =============================================================================================
+# The flip
+# =============================================================================================
 #: Caption labels for the numeric ``scene.phase`` channel, index == code. Same mechanism
 #: ``scripts/hero_takeoff_flip_land.py`` uses, so ``web/capture/capture.js`` picks these up as
-#: on-screen captions with no renderer change.
+#: on-screen captions with no renderer change. **The flip's** — every spec now carries its own,
+#: which is what lets one renderer caption three different maneuvers.
 PHASE_LABELS = ["CLIMB", "HOVER", "POP", "ROLL-IN", "COAST", "CATCH", "RECOVER", "LAND"]
 PHASE = {name: i for i, name in enumerate(PHASE_LABELS)}
 #: The two seams where thrust steps — the intentional C² breaks. Verification masks exactly these
@@ -86,8 +231,12 @@ def _smoothstep_d(x: float) -> float:
 
 @dataclass(frozen=True)
 class FlipSpec:
-    """What the author chooses. Everything else in the maneuver is solved or derived."""
+    """What the author chooses. Everything else in the maneuver is solved or derived.
 
+    Satisfies :class:`ManeuverSpec`.
+    """
+
+    name: str = field(default="flip", init=False, repr=False)
     axis: str = "roll"
     #: Peak body rate through the coast (rad/s). The hero number, not the envelope number.
     omega_peak: float = 9.0
@@ -132,6 +281,131 @@ class FlipSpec:
     @property
     def target_phi(self) -> float:
         return 2.0 * math.pi * self.n_rotations
+
+    # --- the ManeuverSpec protocol -------------------------------------------------------
+    @property
+    def phase_labels(self) -> list[str]:
+        return list(PHASE_LABELS)
+
+    @property
+    def c2_break_phases(self) -> tuple[tuple[int, int], ...]:
+        return C2_BREAK_PHASES
+
+    @property
+    def metric_window(self) -> tuple[int, int]:
+        """POP..RECOVER — ``acro_flip`` scores an episode that begins at a level hover at ``z0``
+        and ends after the recover, so the climb and the landing are stagecraft, not the target."""
+        return (PHASE["POP"], PHASE["RECOVER"])
+
+    @property
+    def settle_phase(self) -> int:
+        return PHASE["RECOVER"]
+
+    @property
+    def rotation_window(self) -> tuple[int, int]:
+        """POP..CATCH — the window φ is claimed monotone over. **Not** the whole flight: through
+        RECOVER the airframe leans to fly the residual offset back, so φ wobbles about 2π."""
+        return (PHASE["POP"], PHASE["CATCH"])
+
+    @property
+    def station(self) -> np.ndarray:
+        return np.array([0.0, 0.0, self.z_entry])
+
+    @property
+    def is_planar(self) -> bool:
+        return True
+
+    @property
+    def min_thrust_normed(self) -> float:
+        return float(self.coast_thrust)
+
+    @property
+    def variant(self) -> str:
+        return ("motors-off" if self.coast_thrust <= 0.0
+                else f"deployable (coast {self.coast_thrust:g})")
+
+    def build(self, model: RefModel, *, dt: float = 1e-3, verbose: bool = False,
+              try_stage2: bool = True) -> ManeuverBuild:
+        """Solve the shoot, then assemble CLIMB → HOVER → flip → RECOVER → LAND around it."""
+        entry = hover_entry_state(self)
+        solution = solve_flip(self, model, entry, dt=dt, try_stage2=try_stage2, verbose=verbose)
+        return ManeuverBuild(traj=build_sequence(self, model, solution), solution=solution,
+                             derived=dict(solution.derived))
+
+    def describe(self, solution: "FlipSolution | None") -> str:
+        stage = (f", flip closed by a damped-Newton shoot (stage {solution.stage})"
+                 if solution else "")
+        return (
+            f"HAND-AUTHORED REFERENCE — not a policy rollout. {self.axis}-flip, "
+            f"Ω={self.omega_peak:g} rad/s, {self.variant}; attitude/thrust/rates derived by "
+            f"differential flatness{stage}."
+        )
+
+    def reference_meta(self, solution: "FlipSolution | None") -> dict:
+        return {
+            "maneuver": "flip", "axis": self.axis, "omega_peak_rps": self.omega_peak,
+            "n_rotations": self.n_rotations, "coast_thrust": self.coast_thrust,
+            "variant": self.variant, "z_entry_m": self.z_entry,
+            "stage": solution.stage if solution else None,
+            "plane": "yz" if self.axis_idx == 0 else "xz",
+            "lateral_axis": self.lateral_idx,
+            "station": [float(v) for v in self.station],
+            "rotation": {
+                "kind": "axis", "axis": self.axis_idx,
+                "target_turns": float(self.n_rotations),
+                "label": f"{self.axis} rotation (turns)",
+                "note": ("unwrapped from the quaternion HALF angle then doubled — doubling first "
+                         "makes a full flip a 4-pi jump that np.unwrap reads as no jump at all"),
+            },
+        }
+
+    def extra_metrics(self, samples: Samples, model: RefModel) -> dict[str, float]:
+        """The flip's own shape: how far round, how long the flip beat was, and the coast IMU."""
+        phi = fl.rotation_angle_about(samples.quat, self.axis_idx)
+        flip = np.flatnonzero(
+            (samples.phase >= PHASE["POP"]) & (samples.phase <= PHASE["CATCH"])
+        )
+        imu = samples.imu(model)
+        coast = samples.phase == PHASE["COAST"]
+        out = {
+            "flip_duration_s": (float(samples.t[flip[-1]] - samples.t[flip[0]])
+                                if flip.size else 0.0),
+            "rotation_turns": float(phi[-1] / (2.0 * np.pi)),
+        }
+        if np.any(coast):
+            mag = np.linalg.norm(imu[coast], axis=-1) / model.g
+            out["imu_coast_min_g"] = float(np.min(mag))
+            out["imu_coast_max_g"] = float(np.max(mag))
+        return out
+
+    def caveats(self, model: RefModel) -> list[str]:
+        return [
+            "Body rate is exactly constant through the coast because DiffAero applies drag only to "
+            "linear velocity and both gyroscopic terms vanish on a symmetric-inertia axis with "
+            "w_z = 0. A real whoop would shed 5-15% of its roll rate to blade flapping over a "
+            "0.6 s coast. That is NOT modeled here.",
+            "The coast IMU is a V, not a flat free-fall null: drag scales with speed, which is "
+            "large at both ends of a ballistic arc and zero at the apex. See metrics."
+            "imu_coast_min_g / imu_coast_max_g for the measured spread. The body-z component goes "
+            "strongly negative at coast entry because the drone is climbing fast along its own "
+            "+z and drag pushes back along -z — that is what the accelerometer reads, not a sign "
+            "error.",
+            "psi == 0 is load-bearing in three places (RateController frame bug is a no-op, the "
+            "coast rate stays exactly constant, the heading construction stays non-degenerate). "
+            "A yaw sweep breaks all three and only the first fails loudly. See "
+            "checks.rate_loop_stability for what 'the frame bug is a no-op here' actually rests "
+            "on: the flip's omega lies on R's fixed axis, the one eigenvalue that stays -K "
+            "regardless of attitude.",
+            "Control allocation: the catch itself is comfortably feasible here (see "
+            "checks.allocation.min_margin_torqued) because the rate brake is authored as a "
+            "smoothstep rather than a step command, so the torque it asks for is modest. The "
+            "binding problem is elsewhere and is structural: through the motors-off coast the "
+            "margin is exactly 0 — zero thrust demanding zero torque — which means the airframe "
+            "has NO rate authority for that whole stretch and could not correct a disturbance if "
+            "it had one. That is the AIRMODE flip-stall failure of docs/SIM2REAL.md in miniature. "
+            "If this reference is used as an RL target or a scoring reference, use the "
+            "--deployable variant, whose 0.25 floor keeps authority alive throughout.",
+        ]
 
 
 @dataclass
@@ -550,8 +824,11 @@ def hover_entry_state(spec: FlipSpec) -> RefState:
     return RefState.at_rest(np.array([0.0, 0.0, spec.z_entry]))
 
 
-def assert_planar(samples: Samples, spec: FlipSpec, *, tol: float = 1e-9) -> dict[str, float]:
+def assert_planar(samples: Samples, spec: ManeuverSpec, *, tol: float = 1e-9) -> dict[str, float]:
     """Assert the maneuver is a pure rotation about its own axis — no yaw, no off-axis rate.
+
+    Only meaningful for a spec that declares ``is_planar``; it raises on one that does not, rather
+    than reporting a failure for a maneuver whose whole point is being 3D.
 
     Measured on the **quaternion**, not on euler yaw. A pitch flip passes through 180° of pitch,
     where the ZYX yaw ``atan2(R₁₀, R₀₀)`` reads exactly π even though the airframe never yawed —
@@ -563,6 +840,11 @@ def assert_planar(samples: Samples, spec: FlipSpec, *, tol: float = 1e-9) -> dic
     docstring), and only one of the three would fail loudly on its own. Returns the measured
     maxima so they are published rather than merely checked.
     """
+    if not spec.is_planar:
+        raise ValueError(
+            f"{spec.name} declares itself non-planar, so 'pure rotation about one axis' is not a "
+            f"claim it makes. Gate this call on spec.is_planar."
+        )
     ax = spec.axis_idx
     off_q = [i for i in (0, 1, 2) if i != ax]
     max_off_q = float(np.max(np.abs(samples.quat[:, off_q])))
@@ -577,5 +859,5 @@ def assert_planar(samples: Samples, spec: FlipSpec, *, tol: float = 1e-9) -> dic
             f"heading drifted and DiffAero's RateController frame bug (controller.py:93) stops "
             f"being a no-op."
         )
-    return {"max_abs_off_axis_quat": max_off_q, "max_abs_omega_z_rps": max_wz,
-            "max_abs_off_axis_rate_rps": max_off_rate}
+    return {"is_planar": True, "axis": float(ax), "max_abs_off_axis_quat": max_off_q,
+            "max_abs_omega_z_rps": max_wz, "max_abs_off_axis_rate_rps": max_off_rate}
