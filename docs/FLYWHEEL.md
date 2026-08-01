@@ -7,16 +7,45 @@ operating loop for the agent is in `AGENTS.md`.
 
 ## Setup (one-time, interactive — needs the user)
 
-Flywheel MCP is not connected by default. To enable it:
+Flywheel is not connected by default. It installs in one of **two modes**, and which one you get
+decides how the agent talks to the graph:
 
 ```bash
-npx --yes @paradigma-inc/flywheel setup --mode mcp
-# then authenticate in the browser at flywheel.paradigma.inc
+npx --yes @paradigma-inc/flywheel setup --claude --mode mcp   # MCP tools (flywheel_get_node, ...)
+npx --yes @paradigma-inc/flywheel setup --claude --mode cli   # the `flywheel` CLI + skills
+# then authenticate in the browser at flywheel.paradigma.inc (or supply --api-key)
 ```
 
-Verify with the `flywheel_auth_status` MCP tool. **This step is interactive** (browser / API-key
-auth); the autonomous agent cannot complete it — the user must. Until it's done, training/eval/
-export all work locally; only the graph recording is gated.
+**Both modes work; the `flywheel_*` tool names used throughout these docs assume `--mode mcp`.**
+Under `--mode cli` there are no MCP tools — `claude mcp list` will not show Flywheel — and every
+mutation goes through the `flywheel` binary instead. The mapping is one-to-one:
+
+| doc says (MCP) | CLI equivalent |
+|---|---|
+| `flywheel_auth_status` | `flywheel auth:status` |
+| `flywheel_get_node` (`projection=full`) | `flywheel nodes:get --node_id <id> --projection full` |
+| create a node | `flywheel nodes:commit-new --payload_json=@payload.json` |
+| prepare → PUT → finalize | `flywheel artifacts:upload --node_id <id> --expected_revision <r> --items=@items.json` |
+| set tag assignments | `flywheel tags:assign --node_id <id> --tag_ids a,b,c --expected_revision <r>` |
+
+Verify with `flywheel auth:status` (or the `flywheel_auth_status` tool). **This step is
+interactive** (browser / API-key auth); the autonomous agent cannot complete it — the user must.
+Until it's done, training/eval/export all work locally; only the graph recording is gated.
+
+**Gotchas found the hard way (2026-08-01), all of them silent failures:**
+
+- **`setup` is per-host.** Installing for a different host (e.g. `--openclaw`) leaves Claude Code
+  with nothing. Pass `--claude` explicitly. Switching an already-installed host between modes needs
+  `--force` and tears down the other mode, so decide once.
+- **`nodes:get --projection core` reports `artifacts_total: 0` even when artifacts are attached.**
+  Verify with `--projection full` (or `artifacts:list`), or a correct upload looks like a failure.
+- **`nodes:parents` / `nodes:children` return their rows under `edges`**, not `items`/`parents` —
+  parsing the wrong key makes a correctly-wired DAG look edgeless.
+- **Artifact type/media-type is validated and the batch is atomic.** Use `binary` +
+  `application/gzip` for `replay.json.gz` (**not** `json` — it is gzipped, and `json` 422s), `json`
+  for plain `.json`, `image` for `.png`, `binary` + `video/mp4` for clips. The `table` type rejected
+  a `text/csv` upload; ship tabular results as `json`. One bad item fails the whole batch with a
+  bare `422`, so mirror the types an existing node already uses.
 
 ## Graph structure
 
