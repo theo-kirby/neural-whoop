@@ -31,12 +31,16 @@ a longer, more legible inverted coast, roughly 0.6 m of apex gain that actually 
 and about half the lateral excursion — while a 12 rad/s flip compresses the level pop beat to
 under a millisecond, i.e. invisible.
 
-**ψ ≡ 0 is silently load-bearing in three places at once**, which is why the generator asserts it
-rather than trusting it: it makes DiffAero's ``RateController`` frame bug (``controller.py:93``,
-``R_i2b @ w``) an exact no-op (identity for a rotation about the same axis the rate is on); it is
-what keeps ω *exactly* constant through the coast (no gyroscopic term); and it keeps the heading
-construction non-degenerate. A future cinematic yaw sweep would break all three, and only the
-first would fail loudly.
+**ψ ≡ 0 is silently load-bearing in two places** (it was three before 2026-08-01), which is why the
+generator asserts it rather than trusting it: it is what keeps ω *exactly* constant through the
+coast (no gyroscopic term), and it keeps the heading construction non-degenerate. A future
+cinematic yaw sweep would break both, and neither fails loudly.
+
+Historically it was load-bearing in a third way that mattered more than either: it made DiffAero's
+``RateController`` frame bug (``R_i2b @ w``) an exact no-op, because ``R`` is the identity for a
+rotation about the same axis the rate is on. That bug is **fixed** in the fork now, so the flip no
+longer depends on ψ ≡ 0 for *stability* — but the assertion stays, because the other two reasons
+are unchanged and because the planarity check is what made the bug findable in the first place.
 """
 
 from __future__ import annotations
@@ -390,12 +394,13 @@ class FlipSpec:
             "strongly negative at coast entry because the drone is climbing fast along its own "
             "+z and drag pushes back along -z — that is what the accelerometer reads, not a sign "
             "error.",
-            "psi == 0 is load-bearing in three places (RateController frame bug is a no-op, the "
-            "coast rate stays exactly constant, the heading construction stays non-degenerate). "
-            "A yaw sweep breaks all three and only the first fails loudly. See "
-            "checks.rate_loop_stability for what 'the frame bug is a no-op here' actually rests "
-            "on: the flip's omega lies on R's fixed axis, the one eigenvalue that stays -K "
-            "regardless of attitude.",
+            "psi == 0 is load-bearing in two places (the coast rate stays exactly constant, the "
+            "heading construction stays non-degenerate), and a yaw sweep breaks both without "
+            "failing loudly. Before 2026-08-01 it was load-bearing in a third and larger way: it "
+            "made the RateController frame bug an exact no-op, because the flip's omega lies on "
+            "R's fixed axis, the one eigenvalue that stays -K regardless of attitude. That bug is "
+            "now fixed in the fork, so stability no longer rests on it. See "
+            "checks.rate_loop_stability.",
             "Control allocation: the catch itself is comfortably feasible here (see "
             "checks.allocation.min_margin_torqued) because the rate brake is authored as a "
             "smoothstep rather than a step command, so the torque it asks for is modest. The "
@@ -856,8 +861,9 @@ def assert_planar(samples: Samples, spec: ManeuverSpec, *, tol: float = 1e-9) ->
     if max_off_q > 1e-9:
         raise AssertionError(
             f"off-axis quaternion component {max_off_q:.3e}: the rotation left its plane, so the "
-            f"heading drifted and DiffAero's RateController frame bug (controller.py:93) stops "
-            f"being a no-op."
+            f"heading drifted and this maneuver is no longer the planar thing it claims to be. "
+            f"(Before the 2026-08-01 controller fix this also meant DiffAero's RateController "
+            f"frame bug stopped being a no-op and the maneuver became unflyable.)"
         )
     return {"is_planar": True, "axis": float(ax), "max_abs_off_axis_quat": max_off_q,
             "max_abs_omega_z_rps": max_wz, "max_abs_off_axis_rate_rps": max_off_rate}

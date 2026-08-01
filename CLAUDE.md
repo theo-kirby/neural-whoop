@@ -233,16 +233,18 @@ orbit are fully powered and need no equivalent.
    track collapses to the circle's centre and the follow rig degenerates into a tripod.
    `--track-smooth 6` fixes it (10% spread); the preset is **not** retuned, since that is a decision
    about every other clip in the repo.
-2. **DiffAero's vendored rate loop is unstable past 90° of attitude.** `controller.py:93` uses
-   `R_i2b @ w` as the *measured* body rate while `w` is already body-frame, so the closed loop is
-   `ω̇ = K(u − R·ω)` with eigenvalues `−K` and `−K·e^{±iθ}` — real part `−K·cos θ`. The flip
-   survives 180° of inversion *only* because its ω lies on `R`'s fixed axis (alignment measured
-   1.000000000), the eigenvalue that stays `−K`; the orbit's does not (0.000584) and it diverges
-   **17.65 m** where an identical loop with `R_i2b` removed tracks to **1.8 cm**, flat across
-   20/5/1 ms so it is instability rather than discretization. **Reported, not fixed** — the vendored
-   fork is deliberately untouched and the hand-authored references are unaffected either way; what
-   is blocked is using a non-planar maneuver as an RL target in this simulator.
-   `verify.check_rate_loop_stability` ships the verdict *and its reason* in every `verify.json`.
+2. **DiffAero's vendored rate loop was unstable past 90° of attitude — found here, FIXED
+   2026-08-01.** `controller.py` used `R_i2b @ w` as the *measured* body rate while `w` is already
+   body-frame, so the closed loop was `ω̇ = K(u − R·ω)` with eigenvalues `−K` and `−K·e^{±iθ}` —
+   real part `−K·cos θ`. The flip survived 180° of inversion *only* because its ω lies on `R`'s
+   fixed axis (alignment measured 1.000000000), the eigenvalue that stays `−K`; the orbit's does
+   not (0.000584) and it diverged **17.65 m** where the corrected loop tracks to **1.8 cm**, flat
+   across 20/5/1 ms so it was instability rather than discretization. The fork now reads
+   `actual_angvel_b = w`; the orbit tracks at **1.80 cm / 0.65°** in the patched simulator, and
+   **non-planar maneuvers are now valid RL targets**. Details and the "what this means for pre-fix
+   results" note live in *Vendored DiffAero edits* above; `verify.check_rate_loop_stability` still
+   ships the *legacy* verdict and its reason in every `verify.json` so older artifacts stay
+   readable.
 
 **Render-free perception seam.** Primary training feeds the policy the ground-truth body-frame
 target vector via `OracleEstimator`, optionally corrupted by a batched `DetectorNoise` model
@@ -280,6 +282,23 @@ stack:
 - `dynamics/whoop.py` (ours) additionally **saturates body rates/velocity each step** — DiffAero
   defines but never applies its state bounds, and a whoop's tiny inertia makes the RK4 rotational
   dynamics go unstable past the rate limit.
+- `dynamics/controller.py` — **the rate-loop frame bug (fixed 2026-08-01).** `RateController`
+  computed the *measured* body rate as `actual_angvel_b = R_i2b @ w`, but `w` is already body-frame
+  (`quadrotor.py` applies `M = τ − w×Jw` and integrates `q̇ = ½q⊗[w,0]`, both body-frame). The
+  closed loop was `ω̇ = K(u − R·ω)` instead of `K(u − ω)`; `R`'s eigenvalues are `1` and `e^{±iθ}`,
+  so the loop's were `−K` and `−K·e^{±iθ}` — **real part `−K·cos θ`, positive (divergent) past 90°
+  of attitude.** Now reads `actual_angvel_b = w`.
+  **Why it hid:** the eigenvalue that stays `−K` belongs to `R`'s own rotation axis, and a *planar*
+  maneuver's ω lies exactly on it — so every gate_race / hover / flip / swing policy this lab ever
+  trained was unaffected, and only the genuinely 3D `orbit` reference exposed it (17.65 m of error
+  on a 1 m circle, flat across 20/5/1 ms → instability, not discretization; **1.80 cm** corrected).
+  Both arms of that control experiment are pinned in `tests/test_reference_sim.py`
+  (`_legacy_rollout` re-implements the old loop) so the fix cannot silently regress.
+  **Consequence for old work:** policies trained before this date learned against the buggy loop.
+  For level/planar flight `R ≈ I` and the difference is negligible, but any *non-planar* result
+  predating 2026-08-01 was measured on a divergent substrate. `verify.check_rate_loop_stability`
+  now answers "would the *legacy* loop have tracked this", which is what a reader of a pre-fix
+  artifact needs; `substrate_rate_loop_fixed` marks the post-fix ones.
 
 We use **only** DiffAero's dynamics core (`dynamics/`, `utils/math.py`, `utils/randomizer.py`) — its
 env/algo/rendering layers are not installed. Deps from DiffAero: just `torch` + `omegaconf`.

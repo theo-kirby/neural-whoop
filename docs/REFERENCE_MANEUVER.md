@@ -18,7 +18,7 @@ package is really about, not the individual clips:
 |---|---|---|---|
 | **`flip`** | flatness *cannot* author it → author the **commands**, close with a damped-Newton **shoot** | ~1e-8 (solved) | yes |
 | **`swing`** | flatness authors the **whole beat** — **no shoot at all** | **0.00e+00** (exact) | yes |
-| **`orbit`** | flatness authors it, with a winding `ψ` | 0.00e+00 (exact) | **no** — `controller.py:93` |
+| **`orbit`** | flatness authors it, with a winding `ψ` | 0.00e+00 (exact) | yes — **since the 2026-08-01 rate-loop fix** |
 
 ```bash
 uv run python scripts/reference_maneuver.py --maneuver swing --out runs/reference/swing_roll --video
@@ -416,11 +416,17 @@ available at full resolution in `reference.json`'s 1 kHz stream.
 
 ### `ψ ≡ 0` is a tripwire, not a formality
 
-It is silently load-bearing in three places at once: it makes DiffAero's `RateController` frame bug
-(`controller.py:93`, `R_i2b @ w`) a no-op; it is what keeps `ω` exactly constant through the coast;
-and it keeps the heading construction non-degenerate. A cinematic yaw sweep breaks all three and
-**only the first fails loudly**. So it is asserted, in the generator *and* in the simulator, and
-both report exactly `0.0`.
+It is silently load-bearing in two places: it is what keeps `ω` exactly constant through the coast,
+and it keeps the heading construction non-degenerate. A cinematic yaw sweep breaks both and
+*neither* fails loudly. So it is asserted, in the generator *and* in the simulator, and both report
+exactly `0.0`.
+
+Until 2026-08-01 there was a **third**, and it mattered more than either: `ψ ≡ 0` made DiffAero's
+`RateController` frame bug (`R_i2b @ w`) an exact no-op, which is the only reason the flip tracked
+through 180° of inversion on a simulator that could not actually do it. That one *did* fail loudly
+— eventually, once a maneuver was authored that broke the invariant. The bug is fixed now, so the
+flip's stability no longer rests on planarity; the assertion stays for the two reasons above, and
+because it is the check that made the bug findable at all.
 
 The planarity assertion measures the **quaternion**, not euler yaw: a pitch flip passes through 180°
 of pitch, where the ZYX yaw `atan2(R₁₀, R₀₀)` reads exactly π even though the airframe never yawed.
@@ -429,12 +435,14 @@ The orbit is the maneuver that finally *did* break `ψ ≡ 0`, and what it expos
 
 ---
 
-## The rate-loop finding: DiffAero's vendored controller is unstable past 90° of attitude
+## The rate-loop finding: DiffAero's vendored controller was unstable past 90° of attitude
 
-This is about the **substrate**, not about any of these videos, and it is the reason the orbit ships
-as a valid reference that is nevertheless not flyable here.
+**Status: found by the orbit, FIXED in the fork on 2026-08-01.** This is about the **substrate**,
+not about any of these videos. It is the most consequential thing this package produced — a latent
+correctness bug in the simulator every policy in this lab is trained against, which was invisible
+to every maneuver the lab had flown up to that point.
 
-`third_party/diffaero/dynamics/controller.py:93` computes the *measured* body rate as
+`third_party/diffaero/dynamics/controller.py` used to compute the *measured* body rate as
 
 ```python
 actual_angvel_b = torch.bmm(R_i2b, w.unsqueeze(-1)).squeeze(-1)      # R_i2b @ w
@@ -484,12 +492,25 @@ does not — so the next person reads `controller.py:93` instead of tuning `dt`.
 velocity every step, so the blow-up is *bounded* and the output still looks like a finite
 trajectory. 17.65 m of error on a 1 m circle is the number to quote.
 
-**Per the project's decision this is reported, not fixed.** The vendored fork is deliberately
-untouched; the corrected loop in `tests/test_reference_sim.py` is a local re-implementation used
-purely as a measurement. The hand-authored references and their videos are unaffected either way.
-What is blocked is using a non-planar maneuver as an RL target, or evaluating a policy against one,
-in this simulator. `verify.check_rate_loop_stability` ships the verdict — and its *reason* — in
-every maneuver's `verify.json`, so the finding stays durable rather than living in a commit message.
+### It is fixed (2026-08-01)
+
+`controller.py` now reads `actual_angvel_b = w`, and the orbit tracks at **1.80 cm / 0.65°** in
+DiffAero as vendored — the number the control arm predicted, reproduced to three significant
+figures by the patched fork. Non-planar maneuvers are **first-class RL targets** from here.
+
+The control experiment is kept in `tests/test_reference_sim.py` with *both* arms: the patched fork,
+and `_legacy_rollout`, a local re-implementation of the old loop. "The orbit tracks now" on its own
+would also pass if someone quietly resized the maneuver below 90° of attitude, so only the pairing
+says the frame bug was the cause and that the fix is what resolved it. (`_legacy_rollout` reads
+~14.6 m rather than 17.65 m because it is pure numpy without `WhoopDynamics`' state clamps; the
+assertion is on `> 1.0 m`, since the exact magnitude of an unstable mode is not the finding.)
+
+**What it means for results predating the fix.** Everything this lab trained — gate_race, hover,
+the flip, the swing — is *planar*, ω on `R`'s fixed axis, so those policies learned against a loop
+that was locally correct and their numbers stand. What cannot be carried over uninspected is any
+**non-planar** measurement made before 2026-08-01. `verify.check_rate_loop_stability` now answers
+"would the **legacy** loop have tracked this" and ships `substrate_rate_loop_fixed` alongside it,
+so an artifact's own `verify.json` says which simulator it was flown on.
 
 ---
 
@@ -597,9 +618,9 @@ Three things worth knowing before wiring it up:
    `rise_scale` penalty. That is a genuine, actionable mismatch between the stated target and the
    reward — raising `pop_allow` to ~0.7 is a training decision, so it is flagged here rather than
    changed.
-3. **The orbit cannot be used as an RL target at all** until the `controller.py:93` decision is made.
-   It is a valid reference and a valid video; it is not something a policy can be trained to, or
-   evaluated against, in this simulator. See the rate-loop section above.
+3. **The orbit is usable as an RL target as of the 2026-08-01 rate-loop fix.** It was blocked
+   before that — the simulator could not track a non-planar maneuver at all — so any orbit result
+   dated earlier was measured on a divergent substrate. See the rate-loop section above.
 
 The `imu` channel is what makes the deliverable dual-use: `analysis/flight_log.py` already carries
 `acc_x`/`acc_y`/`acc_z`, so a real flight and this reference land in the same slot and become

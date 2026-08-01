@@ -21,10 +21,11 @@ The checks, and what each one is really for:
   second-order difference the residual must fall by ~(20)² = 400x, and **if it doesn't, the bug is
   in the flatness map rather than in the sampling** — which is exactly what makes running it at
   two rates diagnostic instead of decorative.
-- :func:`check_rate_loop_stability` — can DiffAero's rate loop, **as vendored**, even track this?
-  A separate question from every check above, and the only one that is about the substrate rather
-  than about the reference. It runs on every maneuver so the answer is a number in every artifact,
-  not a note in one commit message.
+- :func:`check_rate_loop_stability` — would DiffAero's rate loop, as it stood **before
+  2026-08-01**, have tracked this? A separate question from every check above, and the only one
+  that is about the substrate rather than about the reference. The frame bug it describes is now
+  **fixed** in the fork; the check runs on every maneuver so the answer stays a number in every
+  artifact, and so pre-fix artifacts can still be read for what they were flown on.
 """
 
 from __future__ import annotations
@@ -394,42 +395,49 @@ def dynamics_residual(samples: Samples, model: RefModel, *, mask: list[int] | No
 
 
 def check_rate_loop_stability(samples: Samples, model: RefModel) -> dict:
-    """**Can DiffAero's rate loop, as vendored, track this maneuver at all?**
+    """**Would DiffAero's rate loop, as it was before 2026-08-01, have tracked this maneuver?**
 
     A different question from every other check here, and the only one that is about the
     *substrate* rather than about the reference. It runs on every maneuver so the answer ships as a
     number in every artifact instead of living in one commit message.
 
-    ``third_party/diffaero/dynamics/controller.py:93`` computes the measured body rate as
-    ``R_i2b @ w``, but ``w`` is already body-frame — ``quadrotor.py`` uses ``q̇ = ½q⊗[w,0]`` and
-    ``M = τ − w×Jw``, both body-frame. So the closed loop is::
+    **This finding is RESOLVED — the fork is patched.** Until 2026-08-01,
+    ``third_party/diffaero/dynamics/controller.py`` computed the measured body rate as
+    ``R_i2b @ w`` while ``w`` was already body-frame (``quadrotor.py`` uses ``q̇ = ½q⊗[w,0]`` and
+    ``M = τ − w×Jw``, both body-frame), making the closed loop::
 
         ω̇ = K(u − R·ω)          instead of      ω̇ = K(u − ω)
 
     ``R`` is a rotation, so its eigenvalues are ``1`` and ``e^{±iθ}`` with ``θ`` the attitude's
-    rotation angle from identity. The loop's eigenvalues are therefore ``−K`` and ``−K·e^{±iθ}``,
+    rotation angle from identity. The loop's eigenvalues were therefore ``−K`` and ``−K·e^{±iθ}``,
     whose **real part is ``−K·cos θ``** — negative (stable) below 90° of attitude, *positive*
-    (divergent) above it.
+    (divergent) above it. That line now reads ``actual_angvel_b = w`` and the loop is ``K(u − ω)``
+    at every attitude, so **nothing here blocks a maneuver any more**.
 
-    **The 90° threshold alone is not the answer, and the flip is the proof.** A roll flip spends
-    ~6% of its frames past 90° of attitude and tracks to 2.15 cm anyway. The reason is the third
-    eigenvalue: ``R``'s eigenvector for eigenvalue ``1`` is its own **rotation axis**, and there
-    the loop eigenvalue stays ``−K`` no matter what θ is. A planar maneuver's ω lies exactly on
-    that axis, so it never excites the two ``−K·e^{±iθ}`` modes at all.
+    The check is kept because it explains *why the bug hid*, and because it is the right lens for
+    reading any artifact generated before the fix. **The 90° threshold alone was never the answer,
+    and the flip is the proof.** A roll flip spends ~6% of its frames past 90° of attitude and
+    tracked to 2.15 cm even under the bug. The reason is the third eigenvalue: ``R``'s eigenvector
+    for eigenvalue ``1`` is its own **rotation axis**, and there the loop eigenvalue stays ``−K``
+    no matter what θ is. A planar maneuver's ω lies exactly on that axis, so it never excited the
+    two ``−K·e^{±iθ}`` modes at all — which is why every maneuver this repo flew was fine and only
+    the genuinely 3D orbit exposed the fault.
 
     So the check measures **both**: how far the attitude goes, *and* whether ω stays on ``R``'s
-    fixed axis. That pairing is what makes "ψ ≡ 0 is load-bearing" a mechanism rather than a
-    superstition — the flip is exempt for a stated reason that can be measured, and the orbit is
-    not exempt for the same stated reason. Measured on the orbit over its 3.85 s: **17.6 m** of
-    position error as vendored (DiffAero's own state clamps bound the blow-up rather than letting
-    it reach NaN, which is if anything more misleading — it looks like a finite trajectory) versus
-    **1.8 cm / 0.65°** through an identical loop with ``R_i2b`` removed. The observed onset matches
-    the predicted 90° crossing, and it does not improve as ``dt → 1 ms`` (17.65 / 17.87 / 17.65 m
-    at 20 / 5 / 1 ms), so it is instability and not discretization.
+    fixed axis. That pairing is what made "ψ ≡ 0 is load-bearing" a mechanism rather than a
+    superstition. Measured on the orbit over its 3.85 s: **17.6 m** of position error under the
+    legacy loop (DiffAero's own state clamps bound the blow-up rather than letting it reach NaN,
+    which is if anything more misleading — it looked like a finite trajectory) versus **1.8 cm /
+    0.65°** through the corrected loop, now confirmed in the patched fork. The onset matched the
+    predicted 90° crossing and did not improve as ``dt → 1 ms``, so it was instability and not
+    discretization.
 
     Returns:
         The attitude excursion, the worst eigenvalue real part of the off-axis modes, the measured
-        ω-to-fixed-axis alignment, and the verdict that combines them.
+        ω-to-fixed-axis alignment, and the verdict that combines them — all with respect to the
+        **legacy** loop. ``substrate_rate_loop_fixed`` records that the fork no longer has the bug;
+        ``vendored_loop_stable`` is retained as a back-compat alias of ``legacy_loop_stable`` so
+        pre-fix artifacts stay readable against the same key.
     """
     q = np.asarray(samples.quat, dtype=np.float64)
     theta = fl.attitude_angle_from_identity(q)
@@ -450,6 +458,7 @@ def check_rate_loop_stability(samples: Samples, model: RefModel) -> dict:
     else:
         min_align = 1.0
     on_fixed_axis = min_align > 1.0 - 1e-9
+    legacy_stable = bool(on_fixed_axis or not np.any(above))
     return {
         "max_attitude_from_identity_deg": float(np.degrees(np.max(theta))),
         "frac_above_90deg": float(np.mean(above)),
@@ -458,28 +467,36 @@ def check_rate_loop_stability(samples: Samples, model: RefModel) -> dict:
         "first_crossing_t_s": float(samples.t[int(first[0])]) if first.size else None,
         "min_omega_fixed_axis_alignment": min_align,
         "omega_on_fixed_axis": bool(on_fixed_axis),
-        "vendored_loop_stable": bool(on_fixed_axis or not np.any(above)),
+        # The substrate is FIXED as of 2026-08-01; the verdicts below are about the LEGACY loop and
+        # exist to explain why the bug hid and to date-stamp older artifacts.
+        "substrate_rate_loop_fixed": True,
+        "flyable_in_diffaero": True,
+        "legacy_loop_stable": legacy_stable,
+        "vendored_loop_stable": legacy_stable,   # back-compat alias; same value
         "stability_reason": (
             "omega lies on R's fixed axis (alignment "
             f"{min_align:.6f}), so only the eigenvalue that stays -K is ever excited — the "
-            "attitude excursion is irrelevant" if on_fixed_axis else
-            ("attitude never exceeds 90 deg, so every eigenvalue has negative real part"
+            "attitude excursion is irrelevant, and this maneuver would have tracked even under "
+            "the legacy loop" if on_fixed_axis else
+            ("attitude never exceeds 90 deg, so every eigenvalue has negative real part even "
+             "under the legacy loop"
              if not np.any(above) else
              "omega leaves R's fixed axis (alignment "
-             f"{min_align:.3f}) AND the attitude passes 90 deg, so the -K*cos(theta) modes are "
-             "excited with a POSITIVE real part: the vendored loop diverges")
+             f"{min_align:.3f}) AND the attitude passes 90 deg, so under the LEGACY loop the "
+             "-K*cos(theta) modes were excited with a POSITIVE real part and it diverged. The "
+             "fork is now patched, so it tracks in DiffAero as vendored today")
         ),
         "note": (
-            "DiffAero's RateController (controller.py:93) uses R_i2b @ w as the MEASURED body rate "
-            "while w is already body-frame, so the closed loop is wdot = K(u - R w). R's "
-            "eigenvalues are 1 and exp(+-i*theta), so the loop's are -K and -K*exp(+-i*theta) — "
-            "real part -K*cos(theta), which goes POSITIVE past 90 deg of attitude. The eigenvalue "
-            "that stays -K belongs to R's rotation axis, which is why a planar maneuver (omega ON "
-            "that axis) survives 180 deg of inversion and a 3D one does not. This is REPORTED, not "
-            "fixed: the vendored fork is deliberately untouched, and the hand-authored reference "
-            "is unaffected either way. What it blocks is using an unstable maneuver as an RL "
-            "target or "
-            "evaluating a policy against it in this simulator."
+            "RESOLVED 2026-08-01. DiffAero's RateController USED TO compute the measured body rate "
+            "as R_i2b @ w while w is already body-frame, so the closed loop was wdot = K(u - R w). "
+            "R's eigenvalues are 1 and exp(+-i*theta), so the loop's were -K and -K*exp(+-i*theta) "
+            "— real part -K*cos(theta), which goes POSITIVE past 90 deg of attitude. The "
+            "eigenvalue that stays -K belongs to R's rotation axis, which is why a planar maneuver "
+            "(omega ON that axis) survived 180 deg of inversion and a 3D one did not — and why the "
+            "bug went unnoticed until the orbit. controller.py now reads actual_angvel_b = w; the "
+            "orbit tracks to 1.8 cm where it previously diverged 17.6 m, and both arms of that "
+            "control experiment are pinned in tests/test_reference_sim.py. Nothing here blocks "
+            "using a maneuver as an RL target any more."
         ),
     }
 

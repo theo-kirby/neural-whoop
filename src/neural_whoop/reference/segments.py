@@ -362,8 +362,9 @@ class RateSegment:
     here, not an input — once the motors cut, where the drone goes is gravity's business.
 
     ``omega_fn``/``omega_dot_fn`` give the body rate about ``axis`` only; the other two body-rate
-    components are authored as exactly zero, which is what keeps ψ ≡ 0 and makes DiffAero's
-    ``RateController`` frame bug (``controller.py:93``, ``R_i2b @ w``) a genuine no-op.
+    components are authored as exactly zero, which is what keeps ψ ≡ 0. (Before the 2026-08-01
+    controller fix that also made DiffAero's ``RateController`` frame bug — ``R_i2b @ w`` — a
+    genuine no-op, which is why every planar maneuver tracked while the substrate was wrong.)
     """
 
     name: str

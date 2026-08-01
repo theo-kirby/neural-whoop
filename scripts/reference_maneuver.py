@@ -247,8 +247,8 @@ def generate(args) -> int:
     print(f"  rate loop:  max attitude from identity "
           f"{loop['max_attitude_from_identity_deg']:.1f}°, "
           f"{loop['frac_above_90deg']*100:.0f}% of frames past 90°, ω-to-fixed-axis alignment "
-          f"{loop['min_omega_fixed_axis_alignment']:.6f} -> DiffAero's vendored loop is "
-          f"{'STABLE' if loop['vendored_loop_stable'] else 'DIVERGENT'}")
+          f"{loop['min_omega_fixed_axis_alignment']:.6f} -> the LEGACY (pre-2026-08-01) loop was "
+          f"{'STABLE' if loop['legacy_loop_stable'] else 'DIVERGENT'}; the patched fork tracks it")
     print(f"              {loop['stability_reason']}")
     if spec.is_planar:
         pl = checks["planarity"]
@@ -340,12 +340,13 @@ def generate(args) -> int:
               f"{-alloc['min_margin']:.3f} normed collective — the airframe cannot produce that "
               f"torque at that throttle. Fine as a concept shot; do NOT use it as an RL target.",
               file=sys.stderr)
-    if not loop["vendored_loop_stable"]:
+    if not loop["legacy_loop_stable"]:
         print(f"\nNOTE: this maneuver takes the attitude past 90° from identity "
-              f"({loop['max_attitude_from_identity_deg']:.0f}° max), where DiffAero's rate loop as "
-              f"vendored is DIVERGENT (controller.py:93 — see verify.json's rate_loop_stability). "
-              f"The reference and its video are unaffected; what is blocked is flying it in this "
-              f"simulator.", file=sys.stderr)
+              f"({loop['max_attitude_from_identity_deg']:.0f}° max) off ω's fixed axis, which the "
+              f"rate loop could NOT track before the 2026-08-01 controller fix. It is flyable on "
+              f"the patched fork (the orbit tracks to 1.8 cm), but any artifact generated before "
+              f"that date was flown on the divergent loop — see verify.json's rate_loop_stability.",
+              file=sys.stderr)
     return 0
 
 

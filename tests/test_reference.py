@@ -798,33 +798,45 @@ def test_orbit_is_genuinely_3d(ref_orbit):
 def test_rate_loop_stability_discriminates_by_the_fixed_axis(ref_motors_off, ref_swing, ref_orbit):
     """The 90° threshold alone is not the answer, and the flip is the proof.
 
-    A roll flip spends ~6% of its frames past 90° of attitude and tracks to 2.15 cm anyway,
-    because its ω lies on ``R``'s **fixed axis** — the eigenvector whose loop eigenvalue stays
-    ``−K`` no matter what θ is. The orbit's ω does not, and it diverges. A check that reported only
-    "attitude exceeded 90°" would call the flip unstable and be useless; this pins the mechanism.
+    A roll flip spends ~6% of its frames past 90° of attitude and tracked to 2.15 cm even under the
+    legacy loop, because its ω lies on ``R``'s **fixed axis** — the eigenvector whose loop
+    eigenvalue stays ``−K`` no matter what θ is. The orbit's ω does not, and it diverged. A check
+    that reported only "attitude exceeded 90°" would call the flip unstable and be useless; this
+    pins the mechanism, which is also the explanation for why the bug survived undetected until a
+    genuinely 3D maneuver was authored.
+
+    The substrate is fixed as of 2026-08-01, so these verdicts are now historical — see
+    ``tests/test_reference_sim.py`` for the live control experiment against the patched fork.
     """
     model = RefModel()
     flip = verify.check_rate_loop_stability(ref_motors_off[3], model)
     swing = verify.check_rate_loop_stability(ref_swing[3], model)
     orbit = verify.check_rate_loop_stability(ref_orbit[3], model)
 
-    # The flip goes right past 90 deg and is stable anyway — for a stated, measured reason.
+    # The flip goes right past 90 deg and was stable anyway — for a stated, measured reason.
     assert flip["max_attitude_from_identity_deg"] > 170.0
     assert flip["frac_above_90deg"] > 0.0
     assert flip["min_omega_fixed_axis_alignment"] == pytest.approx(1.0, abs=1e-12)
     assert flip["omega_on_fixed_axis"]
-    assert flip["vendored_loop_stable"]
+    assert flip["legacy_loop_stable"]
 
     # The swing never gets near 90 deg AND is on the fixed axis: stable twice over.
     assert swing["max_attitude_from_identity_deg"] < 90.0
-    assert swing["vendored_loop_stable"]
+    assert swing["legacy_loop_stable"]
 
-    # The orbit is the one that breaks it, and both conditions fail together.
+    # The orbit is the one that broke it, and both conditions fail together.
     assert not orbit["omega_on_fixed_axis"]
     assert orbit["min_omega_fixed_axis_alignment"] < 0.05
     assert orbit["frac_above_90deg"] > 0.1
-    assert not orbit["vendored_loop_stable"]
+    assert not orbit["legacy_loop_stable"]
     assert orbit["worst_offaxis_eigenvalue_real_part_per_s"] > 0.0
+
+    # The fork is patched, so nothing here blocks a maneuver any more — and the back-compat alias
+    # still tracks legacy_loop_stable so pre-fix artifacts stay readable against the same key.
+    for r in (flip, swing, orbit):
+        assert r["substrate_rate_loop_fixed"] is True
+        assert r["flyable_in_diffaero"] is True
+        assert r["vendored_loop_stable"] == r["legacy_loop_stable"]
     # The predicted onset: the eigenvalue turns positive exactly when theta crosses 90 deg.
     # first_crossing_t_s is absolute (it includes the climb and hover stagecraft), so measure it
     # against the frame the maneuver actually starts on.

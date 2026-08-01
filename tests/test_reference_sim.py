@@ -5,28 +5,31 @@ everything else. Every other check asks "is the reference self-consistent?"; thi
 actually *sent* these commands to the thing the reference claims to describe, would you get this
 trajectory?"
 
-It is also a **well-aimed tripwire** rather than noise, and with three maneuvers it now measures
-both sides of that tripwire. DiffAero's ``RateController`` computes the *measured* rate as
-``R_i2b @ w`` (``controller.py:93``) while ``w`` is already body-frame — so the closed loop is
-``ω̇ = K(u − R·ω)``, whose eigenvalues are ``−K`` and ``−K·e^{±iθ}``: the real part is
-``−K·cos θ``, **positive past 90° of attitude**.
+It is also a **well-aimed tripwire** rather than noise, and it is the file that found — and now
+guards — the substrate's rate-loop frame bug.
+
+**History (resolved 2026-08-01).** DiffAero's ``RateController`` used to compute the *measured*
+rate as ``R_i2b @ w`` while ``w`` was already body-frame, making the closed loop
+``ω̇ = K(u − R·ω)`` whose eigenvalues are ``−K`` and ``−K·e^{±iθ}``: real part ``−K·cos θ``,
+**positive past 90° of attitude**. It hid for a long time because everything this repo flies is
+planar:
 
 - The **flip** and the **swing** are planar, so their ω lies on ``R``'s fixed axis — the one
-  eigenvalue that stays ``−K`` regardless of θ. They track to centimetres, the flip *through* 180°
-  of inversion. That, precisely, is why ``ψ ≡ 0`` is load-bearing.
-- The **orbit** is not planar, and it **diverges: 17.6 m of position error on a 1 m circle**.
-  Asserting only that would be a weak test — it would still pass if the reference itself were
-  wrong — so it is paired with the control experiment: the identical command stream through an
-  identical loop with ``R_i2b`` removed tracks to 1.8 cm. One of those two numbers is about the
-  reference; the other is about the simulator, and running both is the only way to tell them apart.
+  eigenvalue that stays ``−K`` regardless of θ. They tracked to centimetres even under the bug,
+  the flip *through* 180° of inversion. That, precisely, is why ``ψ ≡ 0`` was load-bearing.
+- The **orbit** is not planar, and under the bug it **diverged: 17.6 m of position error on a 1 m
+  circle**, flat across 20/5/1 ms control steps (instability, not discretization).
 
-  Note it does *not* reach NaN. ``WhoopDynamics`` saturates body rate and velocity every step
-  (``dynamics/whoop.py``), so the blow-up is bounded — which is worse for a reader, because the
-  output still looks like a finite trajectory. Every assertion here is therefore on the error
-  magnitude, never on ``isfinite``.
+The fork is now patched (``third_party/diffaero/dynamics/controller.py``) and the orbit tracks to
+**1.8 cm**. The tests below keep *both* arms — the corrected fork and a local re-implementation of
+the legacy loop (``_legacy_rollout``) — because "the orbit tracks now" on its own would also pass
+if someone quietly resized the maneuver below 90° of attitude. Only the pairing says the frame bug
+was the cause and that the fix is what resolved it.
 
-Per the project's decision the vendored fork is **not** patched: the corrected loop here is a local
-re-implementation used purely as a measurement.
+Note the legacy divergence does *not* reach NaN. ``WhoopDynamics`` saturates body rate and velocity
+every step (``dynamics/whoop.py``), so the blow-up is bounded — which is worse for a reader, because
+the output still looks like a finite trajectory. Every assertion here is therefore on the error
+magnitude, never on ``isfinite``.
 
 Expect a few cm and a few degrees over ~6-9 s on the stable maneuvers, dominated by DiffAero's
 100 Hz RK4 against the reference's 1 kHz and by the zero-order hold.
@@ -278,18 +281,30 @@ def test_swing_tracks_better_than_the_flip(swing, reference):
 
 
 # =============================================================================================
-# The orbit: it must diverge — AND the corrected loop must not. That pairing is the experiment.
+# The orbit: it must now TRACK — and the legacy loop must still diverge. That pairing is the
+# experiment, and keeping both arms is what stops the fix from silently regressing.
 # =============================================================================================
-def _corrected_rollout(fine, dt: float):
-    """The identical command stream through DiffAero's own ODE with the rate-loop frame bug removed.
+def _legacy_rollout(fine, dt: float):
+    """The identical command stream through DiffAero's own ODE with the rate-loop frame bug **back in**.
 
-    A local re-implementation, deliberately: the project's decision is to **report** the vendored
-    controller's frame bug, not patch the fork. This exists purely as the control arm of the
-    measurement, and it is a faithful one — ``quadrotor.py``'s ``M = τ − ω×Jω`` cancels the
-    controller's own ``ω×Jω`` term exactly, so DiffAero's rotational dynamics reduce to
-    ``ω̇ = K(u − ω_measured)`` and the *only* difference from the vendored path is dropping the
-    ``R_i2b`` that should not be there. Everything else — the drag law, the gravity sign, the
+    This is the historical arm of the control experiment. Until 2026-08-01 the vendored
+    ``RateController`` used ``R_i2b @ w`` as the *measured* body rate while ``w`` was already
+    body-frame; that line is now corrected in the fork (``controller.py``), so reproducing the old
+    behaviour needs a local re-implementation. It is a faithful one — ``quadrotor.py``'s
+    ``M = τ − ω×Jω`` cancels the controller's own ``ω×Jω`` term exactly, so DiffAero's rotational
+    dynamics reduce to ``ω̇ = K(u − ω_measured)`` and the *only* difference from the corrected path
+    is the ``R_i2b`` that should not be there. Everything else — the drag law, the gravity sign, the
     thrust convention, RK4, the substep count — is the same.
+
+    Keeping it is the point: "the orbit tracks now" alone would also pass if someone quietly
+    resized the maneuver below 90° of attitude. Only the pairing says *the frame bug was the cause*.
+
+    **Why this reads ~14.6 m where the historical artifacts say 17.65 m.** That figure was measured
+    through the real ``WhoopDynamics``, which saturates body rate and velocity every step; this is
+    pure numpy without those clamps, so the bounded blow-up settles at a different magnitude. Both
+    are the same qualitative result — a divergence three orders of magnitude past the 1.8 cm the
+    corrected loop achieves — and the assertion is on ``> 1.0 m`` rather than on either number,
+    because the exact magnitude of an unstable mode is not the finding.
     """
     idx = decimate_indices(fine, dt)
     replay = decimate(fine, dt)
@@ -301,12 +316,14 @@ def _corrected_rollout(fine, dt: float):
 
     def deriv(y, u_thrust, u_rate):
         v, q, w = y[3:6], y[6:10] / np.linalg.norm(y[6:10]), y[10:13]
-        z_B = fl.quat_xyzw_to_rotmat(q)[:, 2]
+        R_b2i = fl.quat_xyzw_to_rotmat(q)
+        z_B = R_b2i[:, 2]
+        w_measured = R_b2i.T @ w               # <- the legacy frame bug: R_i2b @ w
         return np.concatenate([
             v,
             u_thrust * m.g * z_B - m.g * e_z - m.drag_per_mass * v,
             fl.quat_derivative(q, w),
-            K * (u_rate - w),                     # <- the corrected loop: no R_i2b
+            K * (u_rate - w_measured),
         ])
 
     n = len(replay)
@@ -328,70 +345,78 @@ def _corrected_rollout(fine, dt: float):
     return replay, pos, quat
 
 
-def test_orbit_diverges_in_diffaero_but_not_through_a_corrected_rate_loop(orbit):
-    """**The control experiment.** Both halves are required; either alone proves nothing.
+def test_orbit_tracks_in_diffaero_now_that_the_rate_loop_is_fixed(orbit):
+    """**The control experiment**, in its post-fix form. Both halves are still required.
 
-    Asserting only "the orbit diverges" would still pass if the *reference* were wrong — a garbage
-    trajectory diverges too. Asserting only "the corrected loop tracks" would not establish that
-    anything is wrong with the substrate. Running the identical command stream through both, and
-    changing exactly one line of the controller between them, is what isolates the cause.
+    Asserting only "the orbit tracks" would pass if someone resized the maneuver below 90° of
+    attitude, and would say nothing about *why*. Asserting only "the legacy loop diverges" would
+    not establish that the substrate is now correct. Running the identical command stream through
+    both — differing in exactly the one line that was patched — is what ties the fix to the cause.
 
-    Measured over the orbit's 3.85 s: **17.6 m** of position error as vendored versus **1.8 cm**
-    corrected. Note it does not reach NaN — ``WhoopDynamics`` saturates body rate and velocity
-    every step, so the divergence is bounded and the output still *looks* like a trajectory. That
-    is why the assertion is on the error magnitude rather than on ``isfinite``.
+    Measured over the orbit's 3.85 s: **1.8 cm** through the corrected fork versus **17.6 m**
+    through the legacy loop. The legacy number does not reach NaN — ``WhoopDynamics`` saturates
+    body rate and velocity every step, so the blow-up is bounded and the output still *looks* like
+    a trajectory. That is why the assertion is on the error magnitude rather than on ``isfinite``.
     """
     model, spec, _, fine = orbit
     replay, pos, quat, _ = _rollout(fine, DT_REPLAY)
-    finite = np.isfinite(pos).all(axis=-1)
-    worst_before_nan = float(np.max(np.linalg.norm(
-        pos[finite] - replay.pos[finite], axis=-1))) if finite.any() else float("inf")
-    print(f"\norbit through DiffAero AS VENDORED: worst error {worst_before_nan:.2f} m "
-          f"({'reached NaN' if not np.isfinite(pos).all() else 'bounded by the state clamps'})")
-    assert not np.isfinite(pos).all() or worst_before_nan > 1.0, (
-        "the orbit tracked in the vendored simulator — either controller.py:93 was fixed (in "
-        "which case this finding is resolved and the caveats should come out of the artifacts) or "
-        "the maneuver was resized below 90 deg of attitude."
-    )
-
-    replay_c, pos_c, quat_c = _corrected_rollout(fine, DT_REPLAY)
-    err = np.linalg.norm(pos_c - replay_c.pos, axis=-1)
-    att = _attitude_error_deg(quat_c, replay_c.quat)
-    print(f"orbit through an identical loop with R_i2b REMOVED: "
+    err = np.linalg.norm(pos - replay.pos, axis=-1)
+    att = _attitude_error_deg(quat, replay.quat)
+    print(f"\norbit through DiffAero AS VENDORED (rate loop FIXED): "
           f"pos max {err.max()*100:.2f} cm, attitude max {att.max():.2f}°")
-    assert np.isfinite(pos_c).all()
-    assert err.max() < 0.05, f"the corrected loop drifted {err.max()*100:.1f} cm"
+    assert np.isfinite(pos).all()
+    assert err.max() < 0.05, (
+        f"the orbit drifted {err.max()*100:.1f} cm through the corrected fork — the "
+        f"controller.py rate-loop fix may have regressed"
+    )
     assert att.max() < 5.0
 
+    replay_l, pos_l, quat_l = _legacy_rollout(fine, DT_REPLAY)
+    finite = np.isfinite(pos_l).all(axis=-1)
+    worst = float(np.max(np.linalg.norm(
+        pos_l[finite] - replay_l.pos[finite], axis=-1))) if finite.any() else float("inf")
+    print(f"orbit through the LEGACY loop (R_i2b @ w restored): worst error {worst:.2f} m")
+    assert worst > 1.0, (
+        "the legacy frame bug no longer diverges on the orbit — either the maneuver was resized "
+        "below 90 deg of attitude or _legacy_rollout no longer reproduces the old behaviour, and "
+        "either way this test has stopped isolating the cause of the fix."
+    )
 
-def test_orbit_divergence_is_instability_not_discretization(orbit):
-    """It must **not** improve as ``dt → 1 ms``. That is what tells the two explanations apart.
 
-    A discretization error shrinks with the step; a positive eigenvalue does not. Without this the
-    obvious reading of the NaN would be "the control rate is too low", which would send the next
-    person to tune ``dt`` instead of reading ``controller.py:93``.
+def test_legacy_orbit_divergence_was_instability_not_discretization(orbit):
+    """The legacy divergence must **not** improve as ``dt → 1 ms``. It is why the fix was a fix.
+
+    A discretization error shrinks with the step; a positive eigenvalue does not. This is the
+    measurement that ruled out "the control rate is too low" and sent the diagnosis to
+    ``controller.py``'s frame handling instead. Kept post-fix so the reasoning stays reproducible
+    rather than surviving only in a commit message.
     """
     model, spec, _, fine = orbit
     worst = {}
     for dt in (DT_REPLAY, DT_REPLAY / 4, 1e-3):
-        replay, pos, _, _ = _rollout(fine, dt)
-        finite = np.isfinite(pos).all(axis=-1)
-        err = np.linalg.norm(pos[finite] - replay.pos[finite], axis=-1)
-        worst[dt] = float(err.max()) if err.size else float("inf")
-    print("\norbit vendored-loop error vs control rate: " +
+        replay_l, pos_l, _ = _legacy_rollout(fine, dt)
+        finite = np.isfinite(pos_l).all(axis=-1)
+        e = np.linalg.norm(pos_l[finite] - replay_l.pos[finite], axis=-1)
+        worst[dt] = float(e.max()) if e.size else float("inf")
+    print("\norbit LEGACY-loop error vs control rate: " +
           ", ".join(f"{k*1e3:.1f} ms -> {v:.2f} m" for k, v in worst.items()))
     assert all(v > 1.0 for v in worst.values()), (
-        f"the divergence shrank with the step ({worst}), which would make it a discretization "
-        f"artifact rather than the instability the eigenvalue argument predicts"
+        f"the legacy divergence shrank with the step ({worst}), which would make it a "
+        f"discretization artifact rather than the instability the eigenvalue argument predicts"
     )
 
 
-def test_the_flip_survives_because_its_omega_is_on_the_fixed_axis(reference, orbit):
-    """The mechanism, measured on both: alignment 1.0 survives 180°; alignment ~0 does not.
+def test_the_flip_survived_the_legacy_loop_because_its_omega_was_on_the_fixed_axis(reference, orbit):
+    """Why the bug hid for so long: alignment 1.0 survives 180°; alignment ~0 does not.
 
     The flip goes just as far from identity as the orbit — both reach ~180° — so "how rotated is
-    it" cannot be what separates them. What separates them is whether ω lies on ``R``'s rotation
-    axis, the eigenvector whose loop eigenvalue stays ``−K`` regardless of θ.
+    it" was never what separated them. What separated them is whether ω lies on ``R``'s rotation
+    axis, the eigenvector whose legacy-loop eigenvalue stays ``−K`` regardless of θ. That is the
+    whole reason every planar maneuver in this repo tracked fine while the substrate was wrong.
+
+    ``check_rate_loop_stability`` analyses the *legacy* loop, so its verdicts are unchanged by the
+    fix — it now reads as "would this maneuver have been trustworthy before 2026-08-01", which is
+    exactly what a reader of the older artifacts needs.
     """
     from neural_whoop.reference.verify import check_rate_loop_stability
 
@@ -399,20 +424,29 @@ def test_the_flip_survives_because_its_omega_is_on_the_fixed_axis(reference, orb
     flip = check_rate_loop_stability(reference[3], model)
     orb = check_rate_loop_stability(orbit[3], model)
     print(f"\nflip:  attitude {flip['max_attitude_from_identity_deg']:.1f}°, ω-axis alignment "
-          f"{flip['min_omega_fixed_axis_alignment']:.9f} -> stable={flip['vendored_loop_stable']}")
+          f"{flip['min_omega_fixed_axis_alignment']:.9f} -> legacy-stable={flip['vendored_loop_stable']}")
     print(f"orbit: attitude {orb['max_attitude_from_identity_deg']:.1f}°, ω-axis alignment "
-          f"{orb['min_omega_fixed_axis_alignment']:.9f} -> stable={orb['vendored_loop_stable']}")
+          f"{orb['min_omega_fixed_axis_alignment']:.9f} -> legacy-stable={orb['vendored_loop_stable']}")
 
     assert flip["max_attitude_from_identity_deg"] > 170.0
     assert orb["max_attitude_from_identity_deg"] > 170.0
     assert flip["min_omega_fixed_axis_alignment"] > 1.0 - 1e-12
     assert orb["min_omega_fixed_axis_alignment"] < 0.05
-    # ...and the simulator agrees with the prediction on both.
-    _, flip_pos, _, _ = _rollout(reference[3], DT_REPLAY)
-    _, orb_pos, _, _ = _rollout(orbit[3], DT_REPLAY)
-    assert np.isfinite(flip_pos).all()
-    flip_err = np.linalg.norm(flip_pos - decimate(reference[3], DT_REPLAY).pos, axis=-1).max()
-    orb_err = np.linalg.norm(orb_pos - decimate(orbit[3], DT_REPLAY).pos, axis=-1).max()
-    print(f"in-sim error: flip {flip_err*100:.2f} cm vs orbit {orb_err:.1f} m")
+
+    # The legacy simulator agrees with the prediction on both: the flip tracked, the orbit did not.
+    _, flip_legacy, _ = _legacy_rollout(reference[3], DT_REPLAY)
+    _, orb_legacy, _ = _legacy_rollout(orbit[3], DT_REPLAY)
+    flip_err = np.linalg.norm(flip_legacy - decimate(reference[3], DT_REPLAY).pos, axis=-1).max()
+    orb_err = np.linalg.norm(orb_legacy - decimate(orbit[3], DT_REPLAY).pos, axis=-1).max()
+    print(f"legacy-loop error: flip {flip_err*100:.2f} cm vs orbit {orb_err:.1f} m")
     assert flip_err < 0.05
     assert orb_err > 1.0
+
+    # ...and in the corrected fork BOTH track, which is the point of having fixed it.
+    _, flip_now, _, _ = _rollout(reference[3], DT_REPLAY)
+    _, orb_now, _, _ = _rollout(orbit[3], DT_REPLAY)
+    flip_now_err = np.linalg.norm(flip_now - decimate(reference[3], DT_REPLAY).pos, axis=-1).max()
+    orb_now_err = np.linalg.norm(orb_now - decimate(orbit[3], DT_REPLAY).pos, axis=-1).max()
+    print(f"corrected-fork error: flip {flip_now_err*100:.2f} cm vs orbit {orb_now_err*100:.2f} cm")
+    assert flip_now_err < 0.05
+    assert orb_now_err < 0.05

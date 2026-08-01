@@ -905,9 +905,17 @@ def plot_reference_telemetry(
             f"settle {m.get('settle_pos_error', float('nan')):.3f} m") if m else ""
     loop = checks.get("rate_loop_stability") or {}
     if loop and not loop.get("vendored_loop_stable", True):
-        head += (f"\n⚠ attitude reaches {loop['max_attitude_from_identity_deg']:.0f}° from "
-                 f"identity — DiffAero's vendored rate loop (controller.py:93) is DIVERGENT past "
-                 f"90°, so this maneuver is a valid reference but is NOT flyable in this simulator")
+        # The maneuver is non-planar past 90°, i.e. it is one the LEGACY rate loop could not track.
+        # Post-fix (2026-08-01) that is history, not a blocker — but artifacts generated before the
+        # fix carry the same flag and must not be read as if they were flown on the patched fork.
+        if loop.get("substrate_rate_loop_fixed"):
+            head += (f"\n attitude reaches {loop['max_attitude_from_identity_deg']:.0f}° from "
+                     f"identity off ω's fixed axis — untrackable by DiffAero's rate loop before "
+                     f"the 2026-08-01 controller fix; flyable on the patched fork")
+        else:
+            head += (f"\n⚠ attitude reaches {loop['max_attitude_from_identity_deg']:.0f}° from "
+                     f"identity — DiffAero's vendored rate loop (controller.py:93) is DIVERGENT "
+                     f"past 90°, so this maneuver is a valid reference but is NOT flyable here")
     fig.suptitle(
         f"REFERENCE maneuver — hand-authored, not a rollout\n{_reference_title(ref)}\n{head}",
         fontsize=11,

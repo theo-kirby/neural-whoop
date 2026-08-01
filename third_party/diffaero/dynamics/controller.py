@@ -81,16 +81,20 @@ class RateController(BaseController):
     
     def __call__(self, q_xyzw, w, action):
         # type: (torch.Tensor, torch.Tensor, torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]
-        
-        # quaternion with real component first
-        R_b2i = p3d_transforms.quaternion_to_matrix(q_xyzw.roll(1, dims=-1))
-        # for numeric stability, very important
-        R_b2i.clamp_(min=-1.0+1e-6, max=1.0-1e-6)
-        # Convert current rotation matrix to euler angles
-        R_i2b = torch.transpose(R_b2i, -1, -2)
-        
+
+        # NEURAL-WHOOP EDIT (2026-08-01): ``w`` is ALREADY body-frame, so the upstream
+        # ``actual_angvel_b = R_i2b @ w`` rotated it a second time. The closed loop was
+        # ``w_dot = K(u - R w)`` instead of ``K(u - w)``, whose eigenvalues are -K and
+        # -K*exp(+-i*theta) -- real part ``-K*cos(theta)``, i.e. DIVERGENT past 90 deg of
+        # attitude. Level flight has R ~ I so nothing noticed; a non-planar acro maneuver
+        # does. Measured on the hand-authored orbit reference (docs/REFERENCE_MANEUVER.md):
+        # 17.65 m of position error on a 1 m circle, flat across 20/5/1 ms control steps
+        # (instability, not discretization), versus 1.80 cm with this line corrected.
+        # ``w`` is body-frame at the call site by construction: quadrotor.py:123 applies
+        # ``M = tau - w x Jw`` and quadrotor.py:137 integrates ``q_dot = 0.5 q (x) [w,0]``,
+        # both body-frame conventions. See CLAUDE.md "Vendored DiffAero edits".
         desired_angvel_b = action[:, 1:]
-        actual_angvel_b = torch.bmm(R_i2b, w.unsqueeze(-1)).squeeze(-1)
+        actual_angvel_b = w
         angvel_err = desired_angvel_b - actual_angvel_b
         
         # Ω × JΩ

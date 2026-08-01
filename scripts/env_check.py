@@ -23,8 +23,23 @@ def check_torch_gpu() -> None:
     archs = torch.cuda.get_arch_list()
     print(f"device: {name}  capability sm_{cap[0]}{cap[1]}  arch_list={archs}")
     sm = f"sm_{cap[0]}{cap[1]}"
-    assert sm in archs, f"{sm} kernels missing from this torch build — need the cu128 index"
-    # Run a real kernel and read it back (not just is_available()).
+    # CUDA guarantees binary compatibility *forward* within a major compute capability: an sm_86
+    # cubin runs on sm_89 (Ada), but not the reverse. So the gate is "some cubin of the same major
+    # with a minor <= ours", not an exact string match — an exact match would fail on the 4070 box
+    # against a wheel that ships sm_86 but not sm_89, even though every kernel runs fine.
+    usable = [
+        a for a in archs
+        if a.startswith("sm_") and a[3:].isdigit()
+        and int(a[3:-1] or 0) == cap[0] and int(a[3:][-1]) <= cap[1]
+    ]
+    assert usable, (
+        f"{sm} has no compatible kernels in this torch build (arch_list={archs}) — need the "
+        f"cu128 index; see pyproject's [[tool.uv.index]] pytorch-cu128"
+    )
+    if sm not in archs:
+        print(f"[ok] no exact {sm} cubin, but {usable[-1]} is binary-compatible with it")
+    # Run a real kernel and read it back (not just is_available()) — this is what actually proves
+    # the compatibility argument above, so it matters more than the arch-list check.
     a = torch.randn(4096, 4096, device="cuda")
     val = (a @ a).sum().item()
     torch.cuda.synchronize()
@@ -82,7 +97,11 @@ def main() -> int:
     except Exception as e:  # noqa: BLE001
         print(f"\n[FAIL] {type(e).__name__}: {e}")
         return 1
-    print("\n[PASS] environment is green — torch sm_120, DiffAero, and the env all run on the 5090.")
+    import torch
+    dev = torch.cuda.get_device_name(0)
+    cap = torch.cuda.get_device_capability(0)
+    print(f"\n[PASS] environment is green — torch sm_{cap[0]}{cap[1]}, DiffAero, and the env all "
+          f"run on the {dev}.")
     return 0
 
 

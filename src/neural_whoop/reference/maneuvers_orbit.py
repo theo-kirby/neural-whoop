@@ -22,37 +22,39 @@ The phase program::
 The three orbit beats evaluate the **same** analytic function at different time offsets, so the
 joins between them are exact to the last bit — they are labels, not seams.
 
-============================================================================================
-THE ORBIT CANNOT BE FLOWN IN DIFFAERO AS VENDORED, AND THAT IS A FINDING ABOUT THE SUBSTRATE
-============================================================================================
+===========================================================================================
+THE ORBIT FOUND A REAL BUG IN THE SUBSTRATE'S RATE LOOP — NOW FIXED (2026-08-01)
+===========================================================================================
 
-``third_party/diffaero/dynamics/controller.py:93`` computes the *measured* body rate as
+``third_party/diffaero/dynamics/controller.py`` used to compute the *measured* body rate as
 ``R_i2b @ w``, but ``w`` is already body-frame (``quadrotor.py`` uses ``q̇ = ½q⊗[w,0]`` and
-``M = τ − w×Jw``, both body-frame). The closed loop is therefore ``ω̇ = K(u − R·ω)``, whose
+``M = τ − w×Jw``, both body-frame). The closed loop was therefore ``ω̇ = K(u − R·ω)``, whose
 eigenvalues are ``−K`` and ``−K·e^{±iθ}`` with ``θ`` the attitude's rotation angle from identity —
-so the **real part is ``−K·cos θ`` and the loop goes unstable past 90° of attitude.**
+so the **real part is ``−K·cos θ`` and the loop went unstable past 90° of attitude.**
 
 Measured, not asserted, on this exact trajectory:
 
 ======================================== ==========================
-DiffAero as vendored, open-loop, 3.85 s  **17.6 m / 180°**
-identical loop with ``R_i2b`` removed    **1.8 cm / 0.65°**
+legacy loop, open-loop, 3.85 s           **17.6 m / 180°**
+patched fork (``actual_angvel_b = w``)   **1.8 cm / 0.65°**
 ======================================== ==========================
 
-(It does not actually reach NaN: ``WhoopDynamics`` saturates body rate and velocity every step, so
-the blow-up is *bounded* — which is worse for a reader, because the output still looks like a
+(It did not actually reach NaN: ``WhoopDynamics`` saturates body rate and velocity every step, so
+the blow-up was *bounded* — which is worse for a reader, because the output still looked like a
 finite trajectory. 17.6 m of error on a 1 m circle is the number to quote.)
 
-The predicted onset matches the observed one — attitude crosses 90° at t = 0.78 s and divergence
-appears between 0.4 s and 1.0 s — and it does not improve as ``dt → 1 ms``, so it is instability
-and not discretization. **The flip survives only because its ω lies on ``R``'s fixed axis**, the
-one eigenvalue that stays ``−K`` regardless of θ. That is the real reason ``ψ ≡ 0`` is load-bearing
-in the flip and the swing, and it is sharper than "the frame bug is a no-op here".
+The predicted onset matched the observed one — attitude crosses 90° at t = 0.78 s and divergence
+appeared between 0.4 s and 1.0 s — and it did not improve as ``dt → 1 ms``, so it was instability
+and not discretization. **The flip survived only because its ω lies on ``R``'s fixed axis**, the
+one eigenvalue that stays ``−K`` regardless of θ. That is why every planar maneuver in this repo
+tracked fine while the substrate was wrong, and why it took a genuinely 3D maneuver to expose it —
+sharper than "the frame bug is a no-op here", and the reason ``ψ ≡ 0`` was load-bearing.
 
-Per the project's decision: this is **reported, not fixed**. The reference and its video are
-hand-authored and unaffected either way; what is blocked is using the orbit as an RL target or
-evaluating a policy against it in this simulator. ``verify.check_rate_loop_stability`` ships the
-number on every maneuver so the finding stays durable.
+**The fork is now patched** and the orbit is a first-class RL target like the others. Both arms of
+the control experiment — the corrected fork *and* a local re-implementation of the legacy loop —
+are pinned in ``tests/test_reference_sim.py`` so the fix cannot silently regress.
+``verify.check_rate_loop_stability`` still ships on every maneuver: it now answers "would the
+legacy loop have tracked this", which is what a reader of any pre-fix artifact needs.
 
 The other honest caveat is geometric: **"the top face points at the axis" has a closed-form error
 and it is not zero.** Drag is tangential, so the thrust axis leans into travel by exactly
@@ -229,8 +231,8 @@ class OrbitSpec:
             f"R={self.radius:g} m, "
             f"Ω={self.omega_orbit:g} rad/s, {self.n_revs:g} revs, nose {self.nose} at a vertical "
             f"anchor axis. Authored by differential flatness with a winding psi — the first "
-            f"maneuver in this package that is genuinely 3D and breaks psi == 0. NOT flyable in "
-            f"DiffAero as vendored (controller.py:93 rate-loop frame bug); see checks."
+            f"maneuver in this package that is genuinely 3D and breaks psi == 0, and the one that "
+            f"exposed the rate-loop frame bug fixed in controller.py on 2026-08-01; see checks."
             f"rate_loop_stability."
         )
 
@@ -286,17 +288,17 @@ class OrbitSpec:
         path = self.path()
         err = math.degrees(path.axis_pointing_error_rad(model.drag_per_mass))
         return [
-            "THIS MANEUVER CANNOT BE FLOWN IN DIFFAERO AS VENDORED. controller.py:93 computes the "
-            "measured body rate as R_i2b @ w while w is ALREADY body-frame, so the closed loop is "
-            "wdot = K(u - R w), whose eigenvalues are -K and -K*exp(+-i*theta) — real part "
-            "-K*cos(theta), unstable past 90 degrees of attitude. Measured on this exact "
-            "trajectory over its 3.85 s: 17.6 m of position error as vendored (WhoopDynamics's "
-            "state clamps bound the blow-up instead of letting it reach NaN, so the output still "
-            "LOOKS like a finite trajectory), versus 1.8 cm / 0.65 deg "
-            "through an identical loop with R_i2b removed. It does not improve as dt -> 1 ms, so "
-            "it is instability, not discretization. The reference and its video are hand-authored "
-            "and unaffected; what is blocked is using this as an RL target or evaluating a policy "
-            "against it in this simulator. See checks.rate_loop_stability.",
+            "THIS MANEUVER EXPOSED A REAL BUG IN THE SUBSTRATE, FIXED 2026-08-01. controller.py "
+            "used to compute the measured body rate as R_i2b @ w while w is ALREADY body-frame, so "
+            "the closed loop was wdot = K(u - R w), whose eigenvalues are -K and -K*exp(+-i*theta) "
+            "— real part -K*cos(theta), unstable past 90 degrees of attitude. Measured on this "
+            "exact trajectory over its 3.85 s: 17.6 m of position error under the legacy loop "
+            "(WhoopDynamics's state clamps bound the blow-up instead of letting it reach NaN, so "
+            "the output still LOOKED like a finite trajectory), versus 1.8 cm / 0.65 deg on the "
+            "patched fork. It did not improve as dt -> 1 ms, so it was instability, not "
+            "discretization. The fork now reads actual_angvel_b = w and this maneuver is a "
+            "first-class RL target; artifacts generated BEFORE that date were flown on the "
+            "divergent loop and should be read accordingly. See checks.rate_loop_stability.",
             f"'The top face points at the anchor axis' has a closed-form error and it is NOT zero: "
             f"drag is tangential, so the thrust axis leans into travel by exactly "
             f"atan((D/m)/Omega) = {err:.1f} deg here — INDEPENDENT OF RADIUS (the centripetal "
