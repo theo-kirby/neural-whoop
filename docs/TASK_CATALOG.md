@@ -282,6 +282,20 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   ~zero lateral, because a coast applies no lateral force at all. Spawn = level hover at rest (the
   flip is the learned behaviour). Config-selectable `axis` (roll→`p` / pitch→`q`) and `n_rotations`.
   Scope this round is **roll only**, A/B'd against the v1 roll baseline; pitch follows if it lands.
+- **v2 result (2026-08-01, RTX 4070): RED. `configs/acro_flip_v2.yaml` does not learn the flip.**
+  400 M steps, `flip_success_rate` **0.000 final**, best-ever **0.122** — against v1's reported
+  0.845. The run oscillates: it reaches ~0.1, collapses back to 0.000, recovers, collapses again,
+  and ends never attempting the maneuver (`mean_completion_time` 0.000, `post_recovery_tilt_deg`
+  0.000, `peak_climb` 0.44 — it hovers and pops slightly, nothing more). The reason is structural
+  rather than a tuning miss, and it is the two terms v2 *added*: `lat_scale` 1.0 and `sink_scale`
+  1.0 make "sit at the spawn point collecting `alive_bonus`" a strong local optimum, while the pop
+  is punished on the way up and a policy that never inverts never discovers that the far side pays.
+  So the shaping meant to produce a *tighter* flip removed the gradient that produced a flip at all.
+  **This is an exploration failure, not a capacity one**, which is why re-weighting is not
+  guaranteed to fix it — and it is the direct argument for `reference_track` below. The v2 config
+  as committed was a stated hypothesis; this is the first time it was measured. `pop_allow: 0.4`
+  also still contradicts the reference's measured `peak_climb` of 0.617 m (0.680 deployable), i.e.
+  the shape the docs say we want collects a `rise_scale` penalty under this reward.
 - **Sim2real basis:** pure IMU + the existing act-v2 CTBR contract → **zero new hardware** (the
   productive agility milestone while the XIAO Sense camera module ships). The acro sim2real risk —
   the attitude estimate degrading mid-flip — is modeled by per-channel obs noise/bias on the
@@ -293,6 +307,61 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   pilot silently rewrites. Default `0.0` leaves every other task bit-identical. See
   `docs/SIM2REAL.md` for the AIRMODE prerequisite that the floor is insurance against, not a
   guarantee of.
+
+### 🔜 `reference_track` — fly the **hand-authored** maneuver (flip / swing / orbit), graded against it
+- **Metric:** `pos_rmse_m` ↓ and `att_rmse_deg` ↓ (did it actually track?) + `track_success_rate`
+  (episode-mean position error under `success_pos_rmse`) ↑, with `tracked_frac` (how much of the
+  maneuver survived early termination) as the guardrail. The shape names `max_lateral_drift` /
+  `peak_climb` / `mean_altitude_loss` / `settle_pos_error` are computed with **`acro_flip`'s own
+  definitions**, so a tracked flip and a reward-shaped flip land in one table.
+- **Obs/oracle:** **[gravity_body(3), p, q, r, maneuver_phase, gravity_body_ref(3), omega_ref(3)]**
+  (13). The first seven are `acro_flip`'s sensor set minus `rotation_remaining` (flip-specific, and
+  meaningless for a swing). The last six are the reference's **own attitude and body rate at the
+  current phase** — *authored* signals in the same class as `maneuver_phase`, a deterministic
+  function of the clock, so at deploy they ship with the policy as a small table rather than needing
+  a sensor. They are handed over explicitly rather than left for the net to memorise because a
+  `[64,64]` policy should spend capacity on control, not on storing a trajectory it gets for free.
+  Reference **position is deliberately absent**: a whoop has no onboard position sensor, so
+  `pos_ref − pos` cannot be an observation and position tracking lives in the *reward* only — the
+  same privileged line `acro_flip` draws for station-keeping.
+- **Status:** implemented (`tasks/reference_track.py` + `reference/track.py`; configs
+  `reference_track_{flip,swing,orbit}.yaml` and `_eval` twins). **One task, three maneuvers** —
+  `reference/` is a `ManeuverSpec` protocol with three implementations emitting one format, so a
+  fourth authored maneuver needs no code here. The reward is a weighted sum of tracking bells
+  `exp(−(err/σ)²)` on attitude / rate / position / velocity: bounded, smooth, and it saturates
+  rather than exploding on a bad frame. **Reference State Initialization is the load-bearing part,
+  not a detail** — `rsi_frac` 0.8 of episodes start at a random phase *in the reference's own
+  state*, so inverted flight gets gradient from the first update instead of after a lucky
+  exploration sequence (the DeepMimic result, Peng et al. 2018). That is what `env.spawn()` grew a
+  `quat=` argument for: a flip spawns inverted, where the ZYX euler triple is degenerate. Early
+  termination past `fail_pos_err` reclaims hopeless rollouts. The tracked window drops
+  `CLIMB`/`HOVER`/`LAND` as stagecraft, matching the deploy split where `hover_tof` owns take-off
+  and landing; a non-contiguous phase selection is **refused**, since a hole would teleport the
+  target while still looking smooth on both sides. **Eval twins set `rsi_frac: 0`** — an honest
+  rollout, and the only one a hero video should be rendered from, flies the whole maneuver from
+  phase 0.
+- **Why it exists:** `acro_flip` v2 is the cautionary tale directly above — reward-shaped discovery
+  of an acro maneuver is an *exploration* problem, and describing the shape in penalty terms does
+  not make its optimum reachable. The maneuver already exists as exactly-derived data
+  (`docs/REFERENCE_MANEUVER.md`: differential flatness + a damped-Newton shoot, residuals ~1e-8), so
+  the shaping problem moves out of the reward and into the authoring, where it is algebra with a
+  closed form. Early signal: `att_rmse` 22° / `tracked_frac` 0.98 at **1 M steps**, against v2's
+  0.000 at 400 M.
+- **Use `--deployable` for the flip.** Its motors-off coast has *zero* rate authority for 10 % of
+  the flight (`allocation.min_margin_torqued == 0`), and a policy cannot be trained to track a
+  trajectory over an interval where it has no control authority. The swing and the orbit are fully
+  powered and need no equivalent — and must **not** inherit the flip's `act.min_thrust_normed`
+  floor, since they were not solved against one.
+- **The orbit is this lab's first non-planar RL target**, and it only became possible with the
+  2026-08-01 vendored rate-loop fix (`CLAUDE.md`, *Vendored DiffAero edits*). Before that a
+  non-planar maneuver diverged 17.65 m in this simulator.
+- **Sim2real basis:** IMU + the act-v2 CTBR contract + an authored table — **zero new hardware**.
+  DR is deliberately lighter than `acro_flip`'s: the reference is authored against the *nominal*
+  airframe (`RefModel`, `randomize_airframe=False`), so heavy DR asks the policy to track a
+  trajectory that is not physically reachable on the sampled airframe and the tracking error starts
+  measuring the DR draw instead of the policy. Harden after the nominal-airframe result is GREEN.
+  The reference obs channels carry **no** noise — noising them would model a sensor that does not
+  exist.
 
 ### ⬜ `alt_sensor` — alternative-sensor module (e.g. range/flow/lidar-lite)
 - **Metric:** task metric under a degraded/alternative sensor suite.
