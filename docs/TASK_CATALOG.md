@@ -345,8 +345,28 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   not make its optimum reachable. The maneuver already exists as exactly-derived data
   (`docs/REFERENCE_MANEUVER.md`: differential flatness + a damped-Newton shoot, residuals ~1e-8), so
   the shaping problem moves out of the reward and into the authoring, where it is algebra with a
-  closed form. Early signal: `att_rmse` 22° / `tracked_frac` 0.98 at **1 M steps**, against v2's
-  0.000 at 400 M.
+  closed form.
+- **First results (2026-08-01, RTX 4070, 300 M steps each, ~10 min/run).** DR-off eval through the
+  `_eval` twins (`rsi_frac 0`, no station jitter), quoting the **full-horizon per-step** numbers —
+  not `metrics()`'s `ep_`-prefixed accumulators, which are reset-biased by ~2.4×:
+
+  | maneuver | `pos_err_m` | `att_err_deg` | `tracking_ok` | crash | verdict |
+  |---|---|---|---|---|---|
+  | **swing** | 0.195 | **1.78** | **1.0000** | 0.0000 | **GREEN** |
+  | **orbit** | 0.239 | 10.49 | **1.0000** | 0.0000 | **GREEN** (first non-planar policy) |
+  | **flip**  | 0.448 | 12.77 | 0.9773 | 0.0227 | partial — see below |
+
+  The ordering is exactly what the reference package predicted from its own authoring numbers: the
+  swing is fully powered, planar, 32 % rate headroom and closes at machine precision, and it is the
+  one that tracks to under 2°. The orbit is fully powered but genuinely 3D and lands in between.
+  **The flip is hardest for a structural reason, not a tuning one** — through its coast the throttle
+  is floored at 0.25 and the airframe is inverted, so lateral error taken on before or during the
+  coast cannot be bought back until `CATCH`. It also under-does the pop (`peak_climb` 0.212 m vs the
+  reference's 0.680 m): it rotates correctly but flies a flatter flip than authored.
+- **Known next lever on the flip:** the position reward is a bell `exp(−(err/0.25)²)`, which at the
+  measured 0.448 m error returns ~0.04 — i.e. the gradient has essentially vanished exactly where
+  the policy actually is. Widening `pos_sigma` and/or adding a linear position term so the gradient
+  never dies is the obvious next experiment, and it is untested.
 - **Use `--deployable` for the flip.** Its motors-off coast has *zero* rate authority for 10 % of
   the flight (`allocation.min_margin_torqued == 0`), and a policy cannot be trained to track a
   trajectory over an interval where it has no control authority. The swing and the orbit are fully
