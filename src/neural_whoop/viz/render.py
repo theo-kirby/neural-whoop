@@ -580,6 +580,9 @@ def plot_hover_telemetry(log: Any, metrics: dict, out_path: str | Path) -> Path:
 _PHASE_BAND_COLORS = {
     "CLIMB": "#9aa4b2", "HOVER": "#c9d1d9", "POP": "#f0a35e", "ROLL-IN": "#e8734a",
     "COAST": "#6fa8dc", "CATCH": "#e8734a", "RECOVER": "#8fd19e", "LAND": "#9aa4b2",
+    # the swing / orbit beats
+    "SWING": "#e8734a", "SETTLE": "#8fd19e",
+    "WIND-UP": "#f0a35e", "ORBIT": "#e8734a", "WIND-DOWN": "#f0a35e",
 }
 
 
@@ -633,6 +636,76 @@ def _replay_rotation_turns(ep: dict, axis: int) -> np.ndarray:
     return 2.0 * np.unwrap(np.arctan2(q[:, axis], q[:, 3])) / (2.0 * np.pi)
 
 
+def _replay_heading_turns(ep: dict) -> np.ndarray:
+    """Unwrapped azimuth of body **+x**, in turns — how far the *nose* wound.
+
+    The right rotation readout for a maneuver that yaws rather than rolling. The orbit sits at 70°
+    of bank for most of its run, where ZYX yaw is largely an artifact of the ±90° pitch clamp and
+    the single-axis half-angle formula measures a quantity that does not exist.
+    """
+    q = np.array([f["quat"] for f in ep["frames"]], dtype=np.float64)
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    xb_x = 1 - 2 * (y * y + z * z)
+    xb_y = 2 * (x * y + z * w)
+    return np.unwrap(np.arctan2(xb_y, xb_x)) / (2.0 * np.pi)
+
+
+def _replay_body_z(ep: dict) -> np.ndarray:
+    """Body **+z** (the thrust axis) in world, ``(N, 3)``, straight from the quaternion."""
+    q = np.array([f["quat"] for f in ep["frames"]], dtype=np.float64)
+    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    return np.stack([2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)], axis=-1)
+
+
+def _reference_rotation(ep: dict, ref: dict) -> tuple[np.ndarray, float, str]:
+    """``(turns, target_turns, label)`` — the rotation readout **this** maneuver actually has.
+
+    Driven by ``meta.reference.rotation``, which the spec writes, so one chart captions a roll
+    flip, a swing that returns to level, and a three-revolution orbit without knowing about any of
+    them. Falls back to the pre-generalization behaviour (axis from ``reference.axis``) so the
+    already-shipped 1.2 m flip artifacts still render.
+    """
+    rot = ref.get("rotation") or {}
+    if rot.get("kind") == "heading":
+        return (_replay_heading_turns(ep), float(rot.get("target_turns") or 0.0),
+                str(rot.get("label", "heading (turns)")))
+    axis = int(rot.get("axis", 1 if ref.get("axis") == "pitch" else 0))
+    target = rot.get("target_turns")
+    if target is None:
+        target = float(ref.get("n_rotations", 1.0) or 1.0)
+    return (_replay_rotation_turns(ep, axis), float(target),
+            str(rot.get("label", "rotation (turns)")))
+
+
+def _reference_title(ref: dict) -> str:
+    """One line naming the maneuver and the two or three knobs that actually set its shape."""
+    kind = ref.get("maneuver") or ("flip" if "omega_peak_rps" in ref else "reference")
+    variant = ref.get("variant", "")
+    if kind == "flip":
+        return (f"{ref.get('axis', '?')}-flip Ω={ref.get('omega_peak_rps', float('nan')):g} rad/s"
+                f" · {variant}")
+    if kind == "swing":
+        return (f"roll U-swing L={ref.get('arc_length_m', float('nan')):g} m "
+                f"Θ={ref.get('amplitude_deg', float('nan')):g}° "
+                f"{ref.get('freq_scale', float('nan')):g}× resonance, "
+                f"{ref.get('n_swings', float('nan')):g} swings · {variant}")
+    if kind == "orbit":
+        return (f"banked orbit R={ref.get('radius_m', float('nan')):g} m "
+                f"Ω={ref.get('omega_orbit_rps', float('nan')):g} rad/s, "
+                f"{ref.get('n_revs', float('nan')):g} revs, nose {ref.get('nose', '?')} · {variant}")
+    return f"{kind} · {variant}"
+
+
+def _reference_window(codes: np.ndarray, ref: dict, key: str, n: int) -> np.ndarray:
+    """Frame indices inside a phase-code window the spec declared, with a whole-flight fallback."""
+    win = ref.get(key)
+    if win and len(win) == 2:
+        idx = np.flatnonzero((codes >= int(win[0])) & (codes <= int(win[1])))
+        if idx.size:
+            return idx
+    return np.arange(n)
+
+
 def plot_reference_telemetry(
     replay: str | Path | dict,
     checks: dict,
@@ -677,9 +750,10 @@ def plot_reference_telemetry(
     ep = _best_episode(doc)
     meta = doc.get("meta", {})
     ref = meta.get("reference", {})
-    axis = 1 if ref.get("axis") == "pitch" else 0
-    lat_axis = 0 if axis == 1 else 1
+    axis = int((ref.get("rotation") or {}).get("axis", 1 if ref.get("axis") == "pitch" else 0))
+    lat_axis = int(ref.get("lateral_axis", 0 if axis == 1 else 1))
     z_entry = float(ref.get("z_entry_m", 0.0))
+    station = np.asarray(ref.get("station") or [0.0, 0.0, z_entry], dtype=np.float64)
 
     fr = ep["frames"]
     t = np.array([f["t"] for f in fr], dtype=np.float64)
@@ -689,15 +763,18 @@ def plot_reference_telemetry(
     act = np.array([f["action_diffaero"] for f in fr], dtype=np.float64)
     has_imu = "imu" in fr[0]
     imu = np.array([f.get("imu", [np.nan] * 3) for f in fr], dtype=np.float64)
-    turns = _replay_rotation_turns(ep, axis)
+    turns, n_turns, rot_label = _reference_rotation(ep, ref)
     lat_name = "xy"[lat_axis]
+    # Lateral offset FROM THE STATION, not from the world origin: the orbit's station is
+    # (-R, 0, z), so plotting raw x there would read the orbit's own radius as an excursion.
+    lat_offset = pos[:, lat_axis] - station[lat_axis]
 
     fig, axes = plt.subplots(6, 1, figsize=(12, 15), sharex=True)
 
     # 1) altitude + lateral offset
     ax = axes[0]
     ax.plot(t, pos[:, 2], color=_PATH_COLOR, lw=1.4, label="altitude z")
-    ax.plot(t, pos[:, lat_axis], color=_NEXT_HEX, lw=1.2, label=f"lateral {lat_name}")
+    ax.plot(t, lat_offset, color=_NEXT_HEX, lw=1.2, label=f"lateral {lat_name} (from station)")
     if z_entry:
         ax.axhline(z_entry, color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.85)
         ax.text(t[0], z_entry, f" entry {z_entry:g} m", color=_ORACLE_COLOR, fontsize=8,
@@ -713,21 +790,27 @@ def plot_reference_telemetry(
     ax.set_ylabel("velocity (m/s)")
     ax.legend(loc="upper left", fontsize=8, ncol=2)
 
-    # 3) rotation + body rate
+    # 3) rotation + body rate. Which rotation is the spec's business (see _reference_rotation):
+    #    a roll flip counts turns about body x, the orbit counts how far the nose wound.
     ax = axes[2]
-    n_turns = float(ref.get("n_rotations", 1.0) or 1.0)
-    ax.plot(t, turns, color=_PATH_COLOR, lw=1.8, label="rotation (turns)")
+    ax.plot(t, turns, color=_PATH_COLOR, lw=1.8, label=rot_label)
     ax.axhline(n_turns, color=_PATH_COLOR, lw=1.0, ls="--", alpha=0.6)
     ax.text(t[-1], n_turns, f"target {n_turns:g} turn ", color=_PATH_COLOR, fontsize=8,
             ha="right", va="bottom")
-    ax.set_ylabel("rotation (turns)", color=_PATH_COLOR)
+    ax.set_ylabel(rot_label, color=_PATH_COLOR)
     ax.tick_params(axis="y", labelcolor=_PATH_COLOR)
-    ax.set_ylim(-0.08, n_turns * 1.18)
+    lo, hi = float(np.min(turns)), max(float(np.max(turns)), n_turns)
+    pad = max(0.08, 0.12 * (hi - lo))
+    ax.set_ylim(lo - pad, hi + pad)
     axr = ax.twinx()
     rate_lim = float(meta.get("action_limits", {}).get("max_body_rate_rp_rps", 12.0))
     axr.plot(t, angvel[:, axis], color=_NEXT_HEX, lw=1.2, label="body rate ω")
     axr.plot(t, act[:, 1 + axis], color="#6b7280", lw=1.0, ls=":",
              label="rate command u = ω + ω̇/K")
+    if not ref.get("is_planar", True):
+        # A 3D maneuver has meaningful rate on every axis; showing only the lean axis would hide
+        # the yaw that is the whole reason it breaks psi == 0.
+        axr.plot(t, angvel[:, 2], color="#7a3b8f", lw=1.0, alpha=0.8, label="body rate ω_z")
     for sign in (1, -1):
         axr.axhline(sign * rate_lim, color=_ORACLE_COLOR, lw=1.0, ls=":", alpha=0.75)
     axr.text(t[0], rate_lim, f" act-v2 rate limit ±{rate_lim:g}", color=_ORACLE_COLOR,
@@ -813,9 +896,13 @@ def plot_reference_telemetry(
             f"peak climb {m.get('peak_climb', float('nan')):+.3f} m · "
             f"alt loss {m.get('altitude_loss', float('nan')):.3f} m · "
             f"settle {m.get('settle_pos_error', float('nan')):.3f} m") if m else ""
+    loop = checks.get("rate_loop_stability") or {}
+    if loop and not loop.get("vendored_loop_stable", True):
+        head += (f"\n⚠ attitude reaches {loop['max_attitude_from_identity_deg']:.0f}° from "
+                 f"identity — DiffAero's vendored rate loop (controller.py:93) is DIVERGENT past "
+                 f"90°, so this maneuver is a valid reference but is NOT flyable in this simulator")
     fig.suptitle(
-        f"REFERENCE maneuver (hand-authored, not a rollout) · {ref.get('axis', '?')}-flip "
-        f"Ω={ref.get('omega_peak_rps', float('nan')):g} rad/s · {ref.get('variant', '')}\n{head}",
+        f"REFERENCE maneuver (hand-authored, not a rollout) · {_reference_title(ref)}\n{head}",
         fontsize=12,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.965))
@@ -823,86 +910,113 @@ def plot_reference_telemetry(
 
 
 def plot_reference_envelope(
-    replay: str | Path | dict, out_path: str | Path, *, spec: Any = None, every: int = 2
+    replay: str | Path | dict, out_path: str | Path, *, plane: str | None = None,
+    spec: Any = None, every: int = 2,
 ) -> Path:
-    """The "flip strip": the maneuver plane's path with a body-z tick every few frames.
+    """The "maneuver strip": the maneuver's own plane, with a body-z tick every few frames.
 
-    This is the single most legible picture of the maneuver and costs almost nothing — the tick
-    direction *is* the attitude, so the rotation, the pop's lean and the catch's counter-lean are
-    all visible at a glance in one static image, which no time-series panel manages.
+    This is the single most legible picture of a maneuver and costs almost nothing — the tick
+    direction *is* the attitude, so the flip's rotation, the swing's lean into travel and the
+    orbit's bank are all visible at a glance in one static image, which no time-series panel
+    manages.
+
+    Which plane is the *maneuver's* business, not the chart's:
+
+    - ``"yz"`` / ``"xz"`` — a side elevation, for the planar maneuvers. The flip and the swing both
+      live in one vertical plane, so this is the whole truth about where they went.
+    - ``"xy"`` — a **top-down** view, for the orbit. Its whole shape is horizontal; an elevation
+      would render a 1 m circle as a flat line and the ticks would all point the same way.
+
+    On the top-down view the invisible anchor axis is drawn as a cross with the authored circle
+    around it, so "the top face points at the axis" and its measured 24° error are things you can
+    *see* rather than only read in ``verify.json``. The anchor is deliberately **not** in the
+    video — ``web/studio/playback.js`` would draw a 0.16 m marker sphere, twice the size of the
+    true-scale airframe, right in the middle of the shot.
+
+    Args:
+        replay: The reference replay document or a path to one.
+        out_path: PNG output path.
+        plane: ``"yz"`` / ``"xz"`` / ``"xy"``; ``None`` reads ``meta.reference.plane`` and falls
+            back to the flip's convention so pre-generalization artifacts still render.
+        spec: Unused; accepted so old call sites keep working.
+        every: Draw an attitude tick every N frames.
     """
     plt = _mpl()
     doc = _as_doc(replay)
     ep = _best_episode(doc)
     meta = doc.get("meta", {})
     ref = meta.get("reference", {})
-    axis = 1 if ref.get("axis") == "pitch" else 0
-    lat_axis = 0 if axis == 1 else 1
-    lat_name = "xy"[lat_axis]
+    plane = plane or ref.get("plane") or ("xz" if ref.get("axis") == "pitch" else "yz")
+    if plane not in ("yz", "xz", "xy"):
+        raise ValueError(f"plane must be 'yz', 'xz' or 'xy', got {plane!r}")
+    h_axis = {"yz": 1, "xz": 0, "xy": 0}[plane]
+    v_axis = {"yz": 2, "xz": 2, "xy": 1}[plane]
+    h_name, v_name = "xyz"[h_axis], "xyz"[v_axis]
+    top_down = plane == "xy"
 
     fr = ep["frames"]
     pos = np.array([f["pos"] for f in fr], dtype=np.float64)
-    q = np.array([f["quat"] for f in fr], dtype=np.float64)
+    zb = _replay_body_z(ep)
     codes, labels = _replay_phases(doc, ep)
 
-    # Body +z (the thrust axis) in world, straight from the quaternion.
-    x, y, z, w = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-    zb = np.stack([2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)], axis=-1)
-
-    # The maneuver window (POP..RECOVER). The climb and the landing are stagecraft and, on an
-    # equal-aspect axis, a 1.2 m vertical line would squash the ~0.8 m flip into a corner — so the
-    # zoom is on the flip and the full flight stays as faint context.
-    try:
-        lo, hi = labels.index("POP"), labels.index("RECOVER")
-        win = np.flatnonzero((codes >= lo) & (codes <= hi))
-    except ValueError:
-        win = np.arange(len(pos))
-    if win.size == 0:
-        win = np.arange(len(pos))
+    # Zoom to the maneuver, keep the whole flight as faint context. The climb and the landing are
+    # stagecraft and, on an equal-aspect axis, a 1.2 m vertical line squashes the maneuver into a
+    # corner. The window comes from the spec (meta.reference.metric_window).
+    win = _reference_window(codes, ref, "metric_window", len(pos))
+    tw = _reference_window(codes, ref, "tick_window", len(pos))
 
     fig, ax = plt.subplots(figsize=(9, 8))
-    ax.plot(pos[:, lat_axis], pos[:, 2], color="#dfe3ea", lw=1.0, zorder=1)
+    ax.plot(pos[:, h_axis], pos[:, v_axis], color="#dfe3ea", lw=1.0, zorder=1)
     for c in np.unique(codes):
         if c < 0 or c >= len(labels):
             continue
         m = codes == c
-        ax.plot(pos[m, lat_axis], pos[m, 2], lw=2.2, zorder=2,
+        ax.plot(pos[m, h_axis], pos[m, v_axis], lw=2.2, zorder=2,
                 color=_PHASE_BAND_COLORS.get(labels[c], "#9aa4b2"), label=labels[c])
-    # Attitude ticks only through the flip proper (POP..CATCH). Through RECOVER the airframe is
-    # level by construction, so 60 identical up-arrows would be noise sitting on the one part of
-    # the picture that is already busy.
-    try:
-        tw = np.flatnonzero((codes >= labels.index("POP")) & (codes <= labels.index("CATCH")))
-    except ValueError:
-        tw = win
+
+    # Attitude ticks only through the maneuver proper: outside it the airframe is level by
+    # construction, so a hundred identical up-arrows would be noise on the busiest part of the plot.
     tick = 0.05
     sel = (tw if tw.size else win)[:: max(1, every)]
-    ax.quiver(pos[sel, lat_axis], pos[sel, 2], zb[sel, lat_axis], zb[sel, 2],
+    ax.quiver(pos[sel, h_axis], pos[sel, v_axis], zb[sel, h_axis], zb[sel, v_axis],
               color="#33383f", width=0.0024, scale=1.0 / tick, scale_units="xy",
               angles="xy", zorder=3, alpha=0.8)
-    z_entry = float(ref.get("z_entry_m", 0.0))
-    if z_entry:
-        ax.axhline(z_entry, color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.7)
-        ax.text(0.995, z_entry, "entry / station ", color=_ORACLE_COLOR, fontsize=8,
-                ha="right", va="bottom", transform=ax.get_yaxis_transform())
-    rest_z = float((meta.get("scene_info", {}) or {}).get("rest_z", 0.0))
-    ax.axhline(rest_z, color="#555", lw=1.4)
+
+    anchor = ref.get("anchor")
+    if top_down and anchor:
+        a_h, a_v = float(anchor[h_axis]), float(anchor[v_axis])
+        ax.plot([a_h], [a_v], marker="+", ms=16, mew=2.0, color=_ORACLE_COLOR, zorder=4,
+                label="anchor axis (invisible)")
+        r = ref.get("radius_m")
+        if r:
+            th = np.linspace(0.0, 2.0 * np.pi, 361)
+            ax.plot(a_h + float(r) * np.cos(th), a_v + float(r) * np.sin(th),
+                    color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.55, zorder=1)
+    elif not top_down:
+        z_entry = float(ref.get("z_entry_m", 0.0))
+        if z_entry:
+            ax.axhline(z_entry, color=_ORACLE_COLOR, lw=1.0, ls="--", alpha=0.7)
+            ax.text(0.995, z_entry, "entry / station ", color=_ORACLE_COLOR, fontsize=8,
+                    ha="right", va="bottom", transform=ax.get_yaxis_transform())
+        rest_z = float((meta.get("scene_info", {}) or {}).get("rest_z", 0.0))
+        ax.axhline(rest_z, color="#555", lw=1.4)
 
     pad = 0.12
-    x0, x1 = pos[win, lat_axis].min(), pos[win, lat_axis].max()
-    y0, y1 = pos[win, 2].min(), pos[win, 2].max()
+    x0, x1 = pos[win, h_axis].min(), pos[win, h_axis].max()
+    y0, y1 = pos[win, v_axis].min(), pos[win, v_axis].max()
     ax.set_xlim(x0 - pad - 0.08, x1 + pad + 0.08)
     ax.set_ylim(y0 - pad, y1 + pad)
-    ax.set_xlabel(f"{lat_name} (m)   — the maneuver plane")
-    ax.set_ylabel("z (m)")
+    ax.set_xlabel(f"{h_name} (m)" + ("   — top-down" if top_down else "   — the maneuver plane"))
+    ax.set_ylabel(f"{v_name} (m)")
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="lower left", fontsize=8, ncol=2)
+    view = ("top-down: the ticks are body +z projected onto the floor, so their angle to the "
+            "anchor IS the axis-pointing error" if top_down else
+            "ticks are body +z (the thrust axis)")
     ax.set_title(
-        f"reference {ref.get('axis', '?')}-flip envelope · ticks are body +z (the thrust axis), "
-        f"every {every} frames\nΩ={ref.get('omega_peak_rps', float('nan')):g} rad/s · "
-        f"{ref.get('variant', '')} · zoomed to POP..RECOVER "
-        f"(climb/land shown faint)",
+        f"reference envelope · {_reference_title(ref)}\n{view}, every {every} frames · zoomed to "
+        f"the maneuver (climb/land shown faint)",
         fontsize=11,
     )
     del spec
