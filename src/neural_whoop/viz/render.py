@@ -875,14 +875,21 @@ def plot_reference_telemetry(
         ax.text(0.5, 0.5, "no residual series supplied", transform=ax.transAxes,
                 ha="center", va="center", color="#888", fontsize=9)
     ax.set_ylabel("dynamics residual\n(SI, log)")
+    # How many seams actually STEP is a per-maneuver fact — the flip has two, the swing and the
+    # orbit have none — so the caption counts them rather than asserting "the two C² breaks".
+    n_steps = sum(1 for s in checks.get("seams", []) if s.get("is_c2_break"))
+    masked = len(rr.get("masked_indices", []))
     ax.set_title(
         f"residual at {conv.get('dt_replay_s', 0.02)*1e3:.0f} ms (shown) vs "
         f"{conv.get('dt_fine_s', 0.001)*1e3:.0f} ms stream: vel rms "
         f"{rr.get('vel_rms', float('nan')):.2e} vs {rf.get('vel_rms', float('nan')):.2e} = "
         f"{conv.get('observed_vel_rms_ratio', float('nan')):.0f}x, expected ~"
-        f"{conv.get('expected_ratio', float('nan')):.0f}x for a second-order difference. "
-        f"Dotted red = the {len(rr.get('masked_indices', []))} frames masked at the two "
-        f"intentional C² breaks.",
+        f"{conv.get('expected_ratio', float('nan')):.0f}x for a second-order difference.\n"
+        f"Dotted red = the {masked} frames masked at every segment seam" +
+        (f"; {n_steps} of those seams are intentional C² breaks (the motor cut and the catch)."
+         if n_steps else
+         "; this maneuver has NO intentional C² breaks — nothing steps the motor command anywhere,"
+         " so the mask is precautionary rather than load-bearing."),
         fontsize=7.5, color="#555", loc="left",
     )
 
@@ -902,10 +909,10 @@ def plot_reference_telemetry(
                  f"identity — DiffAero's vendored rate loop (controller.py:93) is DIVERGENT past "
                  f"90°, so this maneuver is a valid reference but is NOT flyable in this simulator")
     fig.suptitle(
-        f"REFERENCE maneuver (hand-authored, not a rollout) · {_reference_title(ref)}\n{head}",
-        fontsize=12,
+        f"REFERENCE maneuver — hand-authored, not a rollout\n{_reference_title(ref)}\n{head}",
+        fontsize=11,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    fig.tight_layout(rect=(0, 0, 1, 0.955))
     return _save(fig, out_path)
 
 
@@ -1011,13 +1018,13 @@ def plot_reference_envelope(
     ax.set_aspect("equal", adjustable="box")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="lower left", fontsize=8, ncol=2)
-    view = ("top-down: the ticks are body +z projected onto the floor, so their angle to the "
-            "anchor IS the axis-pointing error" if top_down else
-            "ticks are body +z (the thrust axis)")
+    view = ("TOP-DOWN. Ticks are body +z projected onto the floor, so their angle to the anchor\n"
+            "IS the axis-pointing error" if top_down else
+            "Ticks are body +z (the thrust axis)")
     ax.set_title(
-        f"reference envelope · {_reference_title(ref)}\n{view}, every {every} frames · zoomed to "
-        f"the maneuver (climb/land shown faint)",
-        fontsize=11,
+        f"reference envelope · {_reference_title(ref)}\n"
+        f"{view}, every {every} frames · zoomed to the maneuver, climb/land faint",
+        fontsize=9.5,
     )
     del spec
     fig.tight_layout()

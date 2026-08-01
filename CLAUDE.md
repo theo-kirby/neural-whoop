@@ -111,6 +111,8 @@ training/export.py -> TorchScript / ONNX deploy policy
 viz/replay.py    -> versioned self-describing replay schema + recorder (the "visual contract")
 viz/render.py    -> lazy renderer: trajectory / synthetic FPV / training curves / comparison
 reference/       -> HAND-AUTHORED reference maneuvers (pure numpy): the trajectory we WANT
+   ├─ ManeuverSpec protocol   -> flip (shoot) | swing (flatness only) | orbit (3D, breaks psi=0)
+   └─ video.py                -> the reference VIDEO contract: one hero invocation, pinned by a test
 ```
 
 **Visual observability seam (`viz/`).** A versioned replay schema
@@ -196,18 +198,51 @@ tasks just raise it. Each drone is one PPO sample (shared-policy parameter shari
 artifact saying what it **should** do. A maneuver is authored by hand, deterministically, and every
 physical quantity (attitude, body rates, collective, and the IMU's specific force) is **derived**,
 not guessed. It is pure numpy + stdlib — no torch, no simulator — the same convention as
-`contract`/`course`/`reward`. `scripts/reference_flip.py` emits a 50 Hz `replay.json.gz` (the
-**video** artifact — `--preset hero` renders it unchanged) and a 1 kHz `reference.json` (the **data**
-artifact), plus `verify.json` and a two-chart pack. Key facts, all measured rather than asserted:
-**differential flatness** turns the powered beats into algebra (author `p(t)`, the thrust falls out
-— it is not a job for RL), but it **cannot author the flip** (through inversion it would demand
-negative thrust), so there we author the *commands* and close the boundary conditions with a damped
-Newton **shoot**; the binding constraint is the rate loop's 16 s⁻¹ bandwidth, not the 12 rad/s
-ceiling, so `ω(t)` is authored as the lag *response* and `u = ω + ω̇/K` emitted; and the replay's
-action is an **impulse-matched** hold (the step mean), without which the emitted stream drifts ~1 m
-instead of 2.2 cm. The metrics use `acro_flip`'s own names so the target is a number the RL can be
-graded against — but use the `--deployable` variant for that, since the motors-off coast has *zero*
-rate authority by construction.
+`contract`/`course`/`reward`. `scripts/reference_maneuver.py --maneuver flip|swing|orbit` emits a
+50 Hz `replay.json.gz` (the **video** artifact) and a 1 kHz `reference.json` (the **data** artifact),
+plus `verify.json`, `run.json` and a two-chart pack; `--video` additionally renders the MP4.
+(`scripts/reference_flip.py` is a thin alias, so every command already documented still works.)
+
+**Three maneuvers needing three different authoring mechanisms** — that, not the individual clips,
+is what the package is about. **Differential flatness** turns a powered path into algebra (author
+`p(t)`, the attitude/rates/thrust fall out — not a job for RL). It **cannot author the flip**
+(through inversion it would demand negative thrust), so there we author the *commands* and close the
+boundary conditions with a damped Newton **shoot** (residuals ~1e-8). The **swing** is the exact
+complement: `θ(t) = Θ·W(t)·sin(ωt)` with a septic window and `ωT = 2π·n` closes on its own start
+point at *machine precision* (`|p−p₀| = |v| = |a| = |j| = 0.00e+00`), so it needs **no shoot at
+all**. The **orbit** is the first genuinely 3D maneuver and the one that breaks `ψ ≡ 0`.
+
+Other facts, all measured: the binding constraint is the rate loop's 16 s⁻¹ bandwidth, not the
+12 rad/s ceiling, so `ω(t)` is authored as the lag *response* and `u = ω + ω̇/K` emitted; the
+replay's action is an **impulse-matched** hold (the step mean), without which the emitted stream
+drifts ~1 m instead of 2.2 cm; the swing must be driven at **0.8× resonance** (1.0× wants 89° of
+tilt and a 15.45 rad/s command against an 11.64 ceiling, and the generator refuses it), and its peak
+tilt is ~1.4× the authored amplitude, so `--amplitude-deg` is *not* the bank angle. Metrics use
+`acro_flip`'s own names so the target is a number the RL can be graded against — use `--deployable`
+for the flip, since its motors-off coast has *zero* rate authority by construction; the swing and
+orbit are fully powered and need no equivalent.
+
+**Two standing findings from this package, both durable rather than filed in a commit message:**
+
+1. **The reference video contract.** `--preset hero` is the deliverable, not a flag someone typed.
+   The one standard invocation lives in `reference/video.py`, `--video` shells out to it and takes
+   no camera flags, `tests/test_capture_preset.py` pins the preset field by field, and the
+   capturer's framing check (worst |NDC|, apparent-size spread) is captured into `run.json`.
+   *Measured limit:* the orbit stays in frame (|NDC| 0.65) but its apparent size swings **117%** —
+   `hero`'s `track_smooth = 20` is a ±0.4 s window against a 0.898 s revolution, so the smoothed
+   track collapses to the circle's centre and the follow rig degenerates into a tripod.
+   `--track-smooth 6` fixes it (10% spread); the preset is **not** retuned, since that is a decision
+   about every other clip in the repo.
+2. **DiffAero's vendored rate loop is unstable past 90° of attitude.** `controller.py:93` uses
+   `R_i2b @ w` as the *measured* body rate while `w` is already body-frame, so the closed loop is
+   `ω̇ = K(u − R·ω)` with eigenvalues `−K` and `−K·e^{±iθ}` — real part `−K·cos θ`. The flip
+   survives 180° of inversion *only* because its ω lies on `R`'s fixed axis (alignment measured
+   1.000000000), the eigenvalue that stays `−K`; the orbit's does not (0.000584) and it diverges
+   **17.65 m** where an identical loop with `R_i2b` removed tracks to **1.8 cm**, flat across
+   20/5/1 ms so it is instability rather than discretization. **Reported, not fixed** — the vendored
+   fork is deliberately untouched and the hand-authored references are unaffected either way; what
+   is blocked is using a non-planar maneuver as an RL target in this simulator.
+   `verify.check_rate_loop_stability` ships the verdict *and its reason* in every `verify.json`.
 
 **Render-free perception seam.** Primary training feeds the policy the ground-truth body-frame
 target vector via `OracleEstimator`, optionally corrupted by a batched `DetectorNoise` model
@@ -292,13 +327,17 @@ uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
     --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --preset hero --width 1080 --height 1080
 
-# The HAND-AUTHORED reference maneuver — "this is the one we want", as data, not a rollout
+# The HAND-AUTHORED reference maneuvers — "this is the one we want", as data, not a rollout
 # (docs/REFERENCE_MANEUVER.md). Pure numpy: no policy, no training, no simulator in the loop.
+# --video takes NO camera flags: it shells out to the one standard hero invocation.
+uv run python scripts/reference_maneuver.py --maneuver swing --out runs/reference/swing_roll --video
+uv run python scripts/reference_maneuver.py --maneuver orbit --out runs/reference/orbit_z  --video
+uv run python scripts/reference_maneuver.py --maneuver flip --z-entry 0.9 \
+    --out runs/reference/flip_roll_z09 --video
+# The original 1.2 m flip; reference_flip.py is a thin alias, so this still works verbatim.
 uv run python scripts/reference_flip.py --axis roll --omega 9.0 --out runs/reference/flip_roll
 uv run python scripts/reference_flip.py --axis roll --omega 9.0 --deployable \
     --out runs/reference/flip_roll_deployable          # <- use THIS one as an RL/scoring target
-uv run python scripts/capture_video.py --replay runs/reference/flip_roll/replay.json.gz \
-    --out runs/reference/flip_roll/reference_flip.mp4 --preset hero --width 1080 --height 1080
 
 # Interactive Studio (browser viewer: pick policy + course + drone count, watch it fly) — docs/STUDIO.md:
 uv pip install -e '.[studio]'                       # FastAPI + uvicorn
