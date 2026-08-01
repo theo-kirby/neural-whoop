@@ -1,0 +1,129 @@
+# reference_track / FLIP — track the hand-authored point-in-space flip instead of rediscovering it.
+#
+# The parent this exists to answer: configs/acro_flip_v2.yaml. On the 4070, v2 trained to 400 M
+# steps reached flip_success_rate 0.000 — it never attempts the flip at all. Its station-keeping
+# terms (lat_scale 1.0 + sink_scale 1.0, both added in v2) out-weigh the rotation-progress reward,
+# so the reward's true optimum is "hover at the spawn point and collect alive_bonus". The pop is
+# not just unrewarded, it is actively punished on the way up, and a policy that never inverts never
+# discovers that the far side pays. That is an EXPLORATION failure, not a capacity one, and no
+# amount of reward re-weighting is guaranteed to fix it — which is the argument for this task.
+#
+# Here the maneuver is not discovered. It is DATA: docs/REFERENCE_MANEUVER.md solves the same
+# maneuver exactly against this airframe (differential flatness + a damped-Newton shoot, residuals
+# ~1e-8) and the policy is graded on tracking it. Reference State Initialization is what removes
+# the barrier: 80% of episodes start at a RANDOM phase of the reference, in the reference's own
+# state, so inverted flight gets gradient from the first update rather than after a lucky sequence.
+#
+# The reference is the --deployable variant ON PURPOSE. The motors-off coast of the aesthetic
+# variant has zero rate authority for 10% of the flight (allocation min_margin_torqued == 0), and
+# you cannot train a policy to track a trajectory over an interval where it has no control
+# authority — it would be learning to be lucky. The deployable solve keeps the 0.25 throttle floor
+# alive throughout (zero_authority_frac 0.10 -> 0.00) and is a genuinely different trajectory:
+# T_pop 0.125 -> 0.141 s, apex +0.617 -> +0.680 m, drift 0.180 -> 0.255 m.
+#
+# Generate the reference first (it is not checked in — runs/ is gitignored):
+#   uv run python scripts/reference_maneuver.py --maneuver flip --z-entry 0.9 --deployable \
+#       --out runs/reference/flip_roll_z09_deployable
+#
+# Metric: pos_rmse_m / att_rmse_deg (did it track?) + track_success_rate. The shape names
+# max_lateral_drift / peak_climb / mean_altitude_loss / settle_pos_error are computed with
+# acro_flip's own definitions so the two approaches are directly comparable. The reference's own
+# numbers are the target to beat: drift 0.255 m, peak_climb +0.680 m, altitude_loss 0.0002 m,
+# settle_pos_error 0.000 m.
+
+run:
+  name: reference_track_flip
+
+task:
+  name: reference_track
+  reference: runs/reference/flip_roll_z09_deployable/reference.json
+  # Tracked window = POP, ROLL-IN, COAST, CATCH, RECOVER (2.20 s at 50 Hz -> 110 steps). CLIMB /
+  # HOVER / LAND are dropped as stagecraft: the deploy split gives take-off and landing to the
+  # hover_tof policy, and the acro policy owns only the bounded maneuver window.
+  exclude_phases: [CLIMB, HOVER, LAND]
+  settle_steps: 25          # hold the final state — "come back AND stop there"
+
+  # --- RSI: the load-bearing setting. 0.0 here reproduces acro_flip_v2's exploration barrier. ---
+  rsi_frac: 0.8
+  rsi_max_frac: 0.9
+  rsi_pos_jitter: 0.03
+  rsi_vel_jitter: 0.05
+  rsi_omega_jitter: 0.10
+  rsi_tilt_jitter: 0.03
+
+  # --- tracking bells, exp(-(err/sigma)^2) ---
+  # Attitude leads: through a flip the attitude IS the maneuver, and it is the channel the policy
+  # can actually observe onboard (gravity_body). Position is weighted equally but its sigma is
+  # tight, because "point in space" is the whole claim being tested.
+  att_scale: 2.0
+  att_sigma: 0.40
+  rate_scale: 0.5
+  rate_sigma: 3.0
+  pos_scale: 2.0
+  pos_sigma: 0.25
+  vel_scale: 0.5
+  vel_sigma: 1.0
+  alive_bonus: 0.02
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+  fail_pos_err: 1.0         # abandon a hopeless rollout rather than paying for its samples
+  station_jitter_xy: 0.5    # don't let the policy memorise one absolute world position
+  station_jitter_z: 0.3
+  success_pos_rmse: 0.20
+
+  bound_xy: 6.0
+  bound_z_min: 0.15
+  bound_z_max: 4.0
+
+# act-v2 envelope. Matches the reference variant: --deployable solves against this exact floor, so
+# a policy trained without it would be tracking a trajectory the deploy path rewrites under it.
+act:
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  # Deliberately lighter than acro_flip_v2's. The reference is authored against the NOMINAL
+  # airframe (RefModel, randomize_airframe=False), so heavy DR asks the policy to track a
+  # trajectory that is not physically reachable on the sampled airframe — the tracking error then
+  # measures the DR draw rather than the policy. Harden after the nominal-airframe result is GREEN.
+  wind_accel_mps2: 0.5
+  rate_gain_frac: 0.10
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    phase, g_ref(3),      w_ref(3)]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  action_latency_steps: 2
+  # The reference channels carry NO noise: like maneuver_phase they are authored signals shipped
+  # with the policy, not measurements. Noising them would model a sensor that does not exist.
+
+# Air65 II + XIAO companion, the weighed/spec ~30 g AUW band (same as acro_flip_v2).
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 300_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

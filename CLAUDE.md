@@ -112,7 +112,9 @@ viz/replay.py    -> versioned self-describing replay schema + recorder (the "vis
 viz/render.py    -> lazy renderer: trajectory / synthetic FPV / training curves / comparison
 reference/       -> HAND-AUTHORED reference maneuvers (pure numpy): the trajectory we WANT
    ├─ ManeuverSpec protocol   -> flip (shoot) | swing (flatness only) | orbit (3D, breaks psi=0)
-   └─ video.py                -> the reference VIDEO contract: one hero invocation, pinned by a test
+   ├─ video.py                -> the reference VIDEO contract: one hero invocation, pinned by a test
+   └─ track.py                -> reference.json -> control-rate tracking table (the RL consumer)
+tasks/reference_track.py -> TRACK a reference instead of rediscovering it (RSI + tracking bells)
 ```
 
 **Visual observability seam (`viz/`).** A versioned replay schema
@@ -221,6 +223,23 @@ tilt is ~1.4× the authored amplitude, so `--amplitude-deg` is *not* the bank an
 `acro_flip`'s own names so the target is a number the RL can be graded against — use `--deployable`
 for the flip, since its motors-off coast has *zero* rate authority by construction; the swing and
 orbit are fully powered and need no equivalent.
+
+**Using a reference as an RL target (`tasks/reference_track.py`, `reference/track.py`).** The
+reference stopped being only a *ruler* on 2026-08-01: `reference_track` loads a `reference.json`,
+resamples it to the control step, and grades a policy on tracking it — so the shaping problem moves
+out of the reward (where nobody can predict the optimum) and into the authoring (where it is
+algebra with a closed form). **One task covers all three maneuvers**, because `ManeuverSpec` is a
+protocol with three implementations emitting one format; point `reference:` at a different file.
+Obs is 13-wide and deploy-honest — `[gravity_body(3), p, q, r, maneuver_phase, gravity_body_ref(3),
+omega_ref(3)]`, where the reference channels are *authored* signals (a table shipped with the
+policy, like `maneuver_phase`), and reference **position is deliberately absent** because a whoop
+has no position sensor; position tracking lives in the reward only.
+**Reference State Initialization is the load-bearing part**, not a detail: 80 % of episodes start
+at a random phase *in the reference's own state*, which is why `env.spawn()` grew a `quat=`
+argument (a flip spawns inverted, where the ZYX euler triple is degenerate). Windowing drops the
+`CLIMB`/`HOVER`/`LAND` stagecraft, matching the deploy split where `hover_tof` owns take-off and
+landing. Eval twins (`configs/reference_track_*_eval.yaml`) set `rsi_frac: 0` — an honest rollout,
+and the only one a hero video should be rendered from, flies the whole maneuver from phase 0.
 
 **Two standing findings from this package, both durable rather than filed in a commit message:**
 

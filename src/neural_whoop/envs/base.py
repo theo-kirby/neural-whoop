@@ -122,21 +122,33 @@ class MultiAgentDroneEnv:
         ang_vel: Tensor | None = None,
         roll: Tensor | None = None,
         pitch: Tensor | None = None,
+        quat: Tensor | None = None,
     ) -> None:
         """Set the spawn state for the given flat ``drone_idx``.
 
         ``pos`` is ``(k, 3)``; ``vel``/``ang_vel`` default to zero; ``yaw`` (``(k,)`` rad) sets the
         initial heading. ``roll``/``pitch`` (``(k,)`` rad) default to zero (level) — the hover task
         passes a randomized tilt so the policy trains recovery. Quaternions are real-last (xyzw).
+
+        ``quat`` ``(k, 4)`` sets the attitude directly and is **mutually exclusive** with
+        ``roll``/``pitch``/``yaw``. It exists for reference-state initialization (``reference_track``
+        spawns mid-maneuver, at an arbitrary attitude): a flip passes through inversion, where the
+        ZYX euler triple is degenerate — ``quaternion_to_euler`` clamps pitch to ±90° — so an
+        euler-only spawn simply cannot express half the states a flip visits.
         """
         k = drone_idx.numel()
         z = torch.zeros(k, device=self.device)
         vel = vel if vel is not None else torch.zeros(k, 3, device=self.device)
         ang_vel = ang_vel if ang_vel is not None else torch.zeros(k, 3, device=self.device)
-        yaw = yaw if yaw is not None else z
-        roll = roll if roll is not None else z
-        pitch = pitch if pitch is not None else z
-        quat = euler_to_quaternion(roll, pitch, yaw)  # (k, 4) xyzw
+        if quat is not None:
+            if any(v is not None for v in (yaw, roll, pitch)):
+                raise ValueError("spawn(): pass either quat or roll/pitch/yaw, not both.")
+            quat = quat / quat.norm(dim=-1, keepdim=True)
+        else:
+            yaw = yaw if yaw is not None else z
+            roll = roll if roll is not None else z
+            pitch = pitch if pitch is not None else z
+            quat = euler_to_quaternion(roll, pitch, yaw)  # (k, 4) xyzw
         self.dyn.set_state(drone_idx, pos, vel, quat, ang_vel)
 
     # --- DR curriculum ---

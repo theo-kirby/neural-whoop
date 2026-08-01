@@ -1,0 +1,131 @@
+# EVAL TWIN of configs/reference_track_orbit.yaml — RSI OFF.
+#
+# Training runs with rsi_frac 0.8: most episodes start at a random phase of the reference, in the
+# reference's own state. That is what removes the exploration barrier, but it makes the training
+# metrics a mixture over PARTIAL maneuvers, so they are not the number to quote. An honest eval
+# flies the WHOLE maneuver from phase 0 with no spawn jitter — the same thing the deployed pilot
+# does when it hands over at the trigger, and the only rollout a hero video should be rendered from.
+#
+# Everything else is bit-identical to the training config. Use with --no-dr for the headline
+# tracking numbers:
+#   uv run python scripts/eval.py --config configs/reference_track_orbit_eval.yaml \
+#       --from runs/reference_track_orbit/ckpt_final.pt --no-dr --record
+
+# reference_track / ORBIT — the revolve. THE FIRST NON-PLANAR RL TARGET THIS LAB HAS EVER HAD.
+#
+# This config could not have existed before 2026-08-01. DiffAero's vendored rate loop computed the
+# measured body rate as R_i2b @ w while w was already body-frame, making the closed loop
+# wdot = K(u - R w) — real part -K*cos(theta), DIVERGENT past 90 deg of attitude. Planar maneuvers
+# were immune (their omega sits on R's fixed axis, the eigenvalue that stays -K), which is why every
+# policy this lab ever trained was fine and why the bug survived until a genuinely 3D maneuver was
+# authored. The orbit diverged 17.65 m on a 1 m circle. The fork is now patched and it tracks to
+# 1.80 cm. See CLAUDE.md "Vendored DiffAero edits" and tests/test_reference_sim.py.
+#
+# So treat this run as testing two things at once, and do not conflate them: whether a policy can
+# learn a banked revolution, AND whether the substrate fix holds up under a full training load.
+#
+# The orbit is fully powered (no coast, no throttle floor) like the swing. Its own honest caveat is
+# geometric, not dynamic: "the top face points at the anchor axis" has a closed-form error of
+# atan((D/m)/Omega) = 24.1 deg in this sim, RADIUS-INDEPENDENT, and it is this simulator's oversized
+# linear drag rather than the maneuver. A real whoop's ~10 m/s terminal velocity would put it near
+# 8 deg (2.8 deg under a genuinely quadratic law). The policy will learn the 24 deg version.
+#
+# Generate the reference first:
+#   uv run python scripts/reference_maneuver.py --maneuver orbit --out runs/reference/orbit_z
+#
+# Reference numbers: radius 0.5 m (a 1 m circle), speed 3.50 m/s, peak bank 69.9 deg, exactly
+# 3.000000 revolutions, settle_pos_error 0.000.
+
+run:
+  name: reference_track_orbit_eval
+
+task:
+  name: reference_track
+  reference: runs/reference/orbit_z/reference.json
+  # Tracked window = WIND-UP, ORBIT, WIND-DOWN, SETTLE (4.46 s at 50 Hz -> 223 steps).
+  exclude_phases: [CLIMB, HOVER, LAND]
+  settle_steps: 25          # hold the final state — "come back AND stop there"
+
+  # --- RSI: the load-bearing setting. 0.0 here reproduces acro_flip_v2's exploration barrier. ---
+  rsi_frac: 0.0        # EVAL: always start at phase 0 and fly the whole maneuver
+  rsi_max_frac: 0.9
+  rsi_pos_jitter: 0.03
+  rsi_vel_jitter: 0.05
+  rsi_omega_jitter: 0.10
+  rsi_tilt_jitter: 0.03
+
+  # --- tracking bells, exp(-(err/sigma)^2) ---
+  # Attitude leads: through a flip the attitude IS the maneuver, and it is the channel the policy
+  # can actually observe onboard (gravity_body). Position is weighted equally but its sigma is
+  # tight, because "point in space" is the whole claim being tested.
+  att_scale: 2.0
+  att_sigma: 0.40
+  rate_scale: 0.5
+  rate_sigma: 3.0
+  pos_scale: 2.0
+  pos_sigma: 0.25
+  vel_scale: 0.5
+  vel_sigma: 1.0
+  alive_bonus: 0.02
+  smoothness_penalty: 0.001
+  crash_penalty: 10.0
+
+  fail_pos_err: 1.0         # abandon a hopeless rollout rather than paying for its samples
+  station_jitter_xy: 0.0   # EVAL: fixed placement, so runs are directly comparable
+  station_jitter_z: 0.0
+  success_pos_rmse: 0.20
+
+  bound_xy: 6.0
+  bound_z_min: 0.15
+  bound_z_max: 4.0
+
+# NO `act:` block on purpose. This maneuver is fully powered — the reference never asks for a coast,
+# so it was solved with NO throttle floor and adding one here would mean tracking a trajectory the
+# envelope no longer permits. Only the flip needs the floor, and only because of its motors-off coast.
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 1
+
+dr:
+  enabled: true
+  # Deliberately lighter than acro_flip_v2's. The reference is authored against the NOMINAL
+  # airframe (RefModel, randomize_airframe=False), so heavy DR asks the policy to track a
+  # trajectory that is not physically reachable on the sampled airframe — the tracking error then
+  # measures the DR draw rather than the policy. Harden after the nominal-airframe result is GREEN.
+  wind_accel_mps2: 0.5
+  rate_gain_frac: 0.10
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0
+  #                        [grav_x, grav_y, grav_z, p,    q,    r,    phase, g_ref(3),      w_ref(3)]
+  obs_noise_std_channels: [0.03,   0.03,   0.03,   0.02, 0.02, 0.02, 0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  obs_bias_channels:      [0.02,   0.02,   0.02,   0.0,  0.0,  0.0,  0.0,   0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  action_latency_steps: 2
+  # The reference channels carry NO noise: like maneuver_phase they are authored signals shipped
+  # with the policy, not measurements. Noising them would model a sensor that does not exist.
+
+# Air65 II + XIAO companion, the weighed/spec ~30 g AUW band (same as acro_flip_v2).
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 300_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [64, 64]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800
