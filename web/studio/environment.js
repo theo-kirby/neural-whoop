@@ -1,26 +1,49 @@
-// Themed greybox environment manager — the single owner of a scene's greybox reference room plus
-// its theme-driven scene chrome (background, fog, light intensities). Both Studio tabs (the
-// Simulation player/editor and the Real bench) build one over their `view` so the light/dark toggle
-// and the per-course room sizing go through one seam.
+// Themed greybox environment manager — the single owner of a scene's stage floor plus its
+// theme-driven scene chrome (background, fog, light intensities). Every view in the repo builds one
+// over its `view`: the Studio's Simulation player, the course editor, the Real bench, and the
+// headless video capturer. There is exactly ONE environment — a fogged cyclorama — and no walled
+// variant, so a clip and the dashboard cannot show different places.
 //
-// `createEnvironment(view, { labels })` -> { setTheme, setSize, setFog, dispose }.
-// `labels: false` builds the room without the baked pitch / "PROTOTYPE" text (the grid still
-// carries the scale) — a clean backdrop for the capture page's product shot.
-//   - setTheme repaints the room texture from the active palette and swaps scene.background / fog /
+// `createEnvironment(view, { labels })` -> { setTheme, setStage, setSize, setFog, dispose }.
+// `labels: false` builds the floor without the baked pitch / "PROTOTYPE" text (the grid still
+// carries the scale) — a clean backdrop for a product shot.
+//   - setTheme repaints the floor texture from the active palette and swaps scene.background / fog /
 //     ground tint / light intensities (a cheap rebuild — new CanvasTextures);
-//   - setSize disposes the old room mesh and builds a new one — `{footprint, height, floorZ}` plus
-//     the grid/backdrop shape `{pitch, minor, walls}` (call on course load / arena-preset change);
-//   - setFog overrides the theme's fog distances, for close shots where the ground has to fade out
-//     within a couple of metres instead of at arena range;
-//   - dispose tears the whole thing down (room geometry + per-face textures + the extra fill light).
+//   - setStage is THE entry point: give it the shot's camera distance and it derives fog, then the
+//     floor size from the fog, then the grid subdivision from the framing — and returns what it
+//     derived, so a caller can report the numbers rather than recompute them;
+//   - setSize / setFog are the primitives setStage drives; call them directly only to override one
+//     axis of the derivation.
+//   - dispose tears the whole thing down (floor geometry + texture + the extra fill light).
 
 import * as THREE from "three";
-import { buildRoom } from "./geometry.js";
+import { buildStageFloor, chooseGridPitch } from "./geometry.js";
+import { KEY_DIR } from "./scene.js";
 
-// A vertical sky gradient as an equirectangular background. Above the horizon a walled room has a
-// ceiling to look at; a cyclorama has nothing, and a flat fill there reads as "the render ran out"
-// rather than as space. The gradient's HORIZON stop is exactly the flat background colour, so the
-// fogged floor still fades into it seamlessly and only the empty upper half gains shape.
+// The derivation constants behind `setStage`. Every one of these used to be a hard-coded number
+// inside web/capture/capture.js, reachable only via `--preset hero`; naming them here is what makes
+// "the video look" and "the Studio look" the same object rather than two that resemble each other.
+//
+//   fog*      — the fade, from the camera's standoff: near at 1.5x the subject distance (so the
+//               subject itself is never fogged), far at 14x (so mid-ground reads as depth rather
+//               than haze). The Min floors keep an extreme close-up from fogging its own floor out.
+//   footprintFogMul — the floor runs to 4x the fog's far distance, which is the invariant that
+//               matters: the plane's own EDGE is always well past the point it has faded to
+//               background, so no shot can ever catch the stage ending.
+//   grid*     — the metre pitch is kept honest (that label is the scale reference) and a finer mesh
+//               is chosen from the shot's own framing, so an 82 mm airframe sits on something it
+//               can be read against instead of on 1/12 of a bare metre square. A wide arena shot
+//               resolves the subdivision to "coarser than the tile", i.e. none.
+export const STAGE_LOOK = {
+  fogNearMul: 1.5, fogNearMin: 1.0, fogFarMul: 14, fogFarMin: 6.0,
+  footprintFogMul: 4, gridPitch: 1, gridSpanMul: 2.5, gridWant: 5,
+  keyDir: KEY_DIR, exposure: 0.95,
+};
+
+// A vertical sky gradient as an equirectangular background. It is unconditional now: with the
+// walled room gone, EVERY scene has a horizon, and a flat fill above it reads as "the render ran
+// out" rather than as space. The gradient's HORIZON stop is exactly the flat background colour, so
+// the fogged floor still fades into it seamlessly and only the empty upper half gains shape.
 function skyGradient(bg, top) {
   const canvas = document.createElement("canvas");
   canvas.width = 8; canvas.height = 256;
@@ -40,6 +63,10 @@ function skyGradient(bg, top) {
 // Two environment palettes (tile texture + scene chrome). `light` reads bright — soft grey scene
 // background/fog, mid-grey tiles, soft light gridlines, dark-on-light labels — matching the
 // prototype-map reference image. `dark` is the near-black void (the original course look).
+//
+// The `fogNear`/`fogFar` here are only the FIRST-PAINT fallback: they hold from createEnvironment
+// until the first `setStage`, which derives the real fade from the shot's own standoff. They are
+// arena-sized on purpose, so a scene that has not been staged yet still shows something.
 export const THEME_PALETTES = {
   light: {
     tile: { tileA: "#9aa0a9", tileB: "#a3a9b2", line: "#d7dbe1", dot: "#e0e4ea",
@@ -63,13 +90,13 @@ export const THEME_PALETTES = {
 
 function paletteFor(theme) { return THEME_PALETTES[theme] || THEME_PALETTES.light; }
 
-export function createEnvironment(view, { labels = true, sky = false } = {}) {
+export function createEnvironment(view, { labels = true } = {}) {
   let theme = "light";
-  let size = { footprint: 10, height: 10, floorZ: 0, pitch: 1, minor: 0, walls: true };
+  let size = { footprint: 10, floorZ: 0, pitch: 1, minor: 0 };
   let fogOverride = null;                 // {near, far} set by setFog; survives theme rebuilds
   let room = null;
 
-  // An extra hemisphere fill so the greybox room reads bright and even (replacing bench.js's old
+  // An extra hemisphere fill so the greybox floor reads bright and even (replacing bench.js's old
   // ad-hoc light); its intensity/ground colour are themed too.
   const roomFill = new THREE.HemisphereLight(0xffffff, 0xbfc4cc, 1.4);
   view.scene.add(roomFill);
@@ -87,9 +114,9 @@ export function createEnvironment(view, { labels = true, sky = false } = {}) {
 
   function rebuildRoom() {
     disposeObj(room);
-    room = buildRoom(view.world, {
-      size: size.footprint, height: size.height, floorZ: size.floorZ,
-      pitch: size.pitch, minor: size.minor, walls: size.walls,
+    room = buildStageFloor(view.world, {
+      size: size.footprint, floorZ: size.floorZ,
+      pitch: size.pitch, minor: size.minor,
       palette: paletteFor(theme).tile, labels,
     });
   }
@@ -97,9 +124,7 @@ export function createEnvironment(view, { labels = true, sky = false } = {}) {
   function applyChrome() {
     const s = paletteFor(theme).scene;
     view.scene.background?.dispose?.();
-    view.scene.background = sky
-      ? skyGradient(`#${s.bg.toString(16).padStart(6, "0")}`, s.sky)
-      : new THREE.Color(s.bg);
+    view.scene.background = skyGradient(`#${s.bg.toString(16).padStart(6, "0")}`, s.sky);
     view.scene.fog = new THREE.Fog(
       s.bg, fogOverride ? fogOverride.near : s.fogNear, fogOverride ? fogOverride.far : s.fogFar);
     if (view.ground) view.ground.material.color.setHex(s.bg);
@@ -120,11 +145,9 @@ export function createEnvironment(view, { labels = true, sky = false } = {}) {
   function setSize(sz = {}) {
     size = {
       footprint: sz.footprint ?? size.footprint,
-      height: sz.height ?? size.height,
       floorZ: sz.floorZ ?? size.floorZ,
       pitch: sz.pitch ?? size.pitch,
       minor: sz.minor ?? size.minor,
-      walls: sz.walls ?? size.walls,
     };
     rebuildRoom();
   }
@@ -137,6 +160,48 @@ export function createEnvironment(view, { labels = true, sky = false } = {}) {
     applyChrome();
   }
 
+  // Set up the whole stage for a shot at `camDist` metres from its subject, and RETURN what was
+  // derived. One call, one chain of consequences: fog comes from the standoff, the floor's size
+  // comes from the fog, and the grid's subdivision comes from the framing.
+  //
+  // This is the fix for a specific bug, not just tidying. Sizing the floor to the COURSE (what the
+  // Studio used to do) and leaving fog at the palette's fixed [40, 150] worked only because walls
+  // bounded the view; with the walls gone, a 10 m floor inside 40 m of clear air shows its own
+  // edge as a hard horizon line. Deriving the size from the fade makes "you can never see the
+  // stage end" true by construction, at any scale, in the dashboard and in a video alike.
+  //
+  //   camDist   metres from the camera to what it is looking at — the ONE number a caller must
+  //             supply, because everything else is a consequence of it.
+  //   camReach  how far the camera itself stands from the origin; the floor is grown to cover it.
+  //             Defaults to the live camera's own horizontal distance.
+  //   frameSpan metres of world the frame spans vertically, for the grid subdivision. Defaults to
+  //             the live camera's FOV applied to camDist.
+  //   fog / gridPitch / gridMinor / roomSize   explicit overrides for any one derived value.
+  function setStage({ camDist, camReach = null, frameSpan = null, fog = null,
+                      gridPitch = null, gridMinor = null, roomSize = null } = {}) {
+    const d = Math.max(1e-3, Number(camDist) || 0);
+    const L = STAGE_LOOK;
+
+    const span = frameSpan ?? (2 * Math.tan(THREE.MathUtils.degToRad(view.camera.fov) / 2) * d);
+    const reach = camReach ?? 2 * (Math.hypot(view.camera.position.x, view.camera.position.z) + 0.6);
+
+    let [fogNear, fogFar] = fog
+      ?? [Math.max(L.fogNearMin, L.fogNearMul * d), Math.max(L.fogFarMin, L.fogFarMul * d)];
+    // The fade must COMPLETE inside the frustum, or the far plane clips a floor that is still
+    // partly visible and you get the hard horizon back by another route. Only bites on the giant
+    // arena presets (a 60 m course wants a 806 m fade against the camera's 800 m far plane).
+    if (!fog) fogFar = Math.min(fogFar, 0.9 * view.camera.far);
+    const footprint = roomSize ?? Math.max(L.footprintFogMul * fogFar, reach);
+
+    const pitch = gridPitch ?? L.gridPitch;
+    const autoMinor = chooseGridPitch(span * L.gridSpanMul, L.gridWant);
+    const minor = gridMinor ?? (autoMinor <= pitch / 2 ? autoMinor : 0);
+
+    setFog({ near: fogNear, far: fogFar });
+    setSize({ footprint, floorZ: 0, pitch, minor });
+    return { roomSize: footprint, fog: { near: fogNear, far: fogFar }, pitch, minor, frameSpan: span };
+  }
+
   function dispose() {
     disposeObj(room);
     room = null;
@@ -144,5 +209,11 @@ export function createEnvironment(view, { labels = true, sky = false } = {}) {
   }
 
   setTheme(theme);
-  return { setTheme, setSize, setFog, dispose, get theme() { return theme; } };
+  // Stage once at construction, from wherever the camera currently is. Without this the FIRST
+  // paint — the Simulation tab before you hit Run — is a 10 m slab floating inside the palette's
+  // arena-sized fog, showing its own edge as a hard horizon: exactly what the walls used to hide.
+  // Callers restage as soon as they know what they are looking at (a course, an arena preset, the
+  // bench's fixed shot); this only has to be right enough that the floor outruns its own fade.
+  setStage({ camDist: Math.max(1, view.camera.position.length()) });
+  return { setTheme, setStage, setSize, setFog, dispose, get theme() { return theme; } };
 }

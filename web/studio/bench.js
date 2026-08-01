@@ -29,12 +29,13 @@ const GREY = () => cssVar("--fg") || "#e0e0e0";
 const CYAN = "#6ff0f0", AMBER = "#ffd23f";
 
 export function createBench({ mount, panel, toast, getPolicies }) {
-  // grid:false — the real-drone view uses a bounded 10 m reference room instead of the infinite
-  // course grid, so the hand-flown / hover drone has a fixed metric backdrop. The themed greybox
-  // environment owns the room + scene chrome + the extra room fill light.
+  // grid:false — the real-drone view uses the staged greybox floor instead of the infinite course
+  // grid, so the hand-flown / hover drone has a fixed metric backdrop. The themed environment owns
+  // the floor + scene chrome + the extra fill light. camDist ~3 m: the bench camera watches a
+  // drone hovering around head height from across the desk, and the fog/floor follow from that.
   const view = createScene(mount, { grid: false });
   const env = createEnvironment(view);
-  env.setSize({ footprint: 10, height: 10, floorZ: 0 });
+  env.setStage({ camDist: 3 });
   const $ = (h) => panel.querySelector(`[data-h="${h}"]`);
 
   let ws = null;

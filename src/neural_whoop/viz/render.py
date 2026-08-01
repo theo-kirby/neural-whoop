@@ -600,7 +600,7 @@ def _replay_phase_bands(ax, doc: dict, ep: dict, *, annotate: bool = False) -> N
 
     Where the flight version reads phase windows out of a metrics dict, this one derives them from
     the per-frame channel the scripted sequences already carry, so it works on any replay that
-    sets ``scene.phase`` (this generator and ``hero_takeoff_flip_land.py``). No-op otherwise.
+    sets ``scene.phase`` (this generator and ``takeoff_flip_land.py``). No-op otherwise.
     """
     codes, labels = _replay_phases(doc, ep)
     if not labels or np.all(codes < 0):

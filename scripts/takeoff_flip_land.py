@@ -20,7 +20,7 @@ The drone starts and ends **resting on the floor** (``pos.z == WHOOP_REST_Z_M``,
 airframe half-height) and each frame carries a numeric ``scene.phase`` code whose labels live in
 ``meta.scene_info.phase_labels`` — that is what the renderer turns into on-screen captions.
 
-    uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
+    uv run python scripts/takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
     uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
         --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
         --preset hero --width 1080 --height 1080

@@ -22,41 +22,47 @@
 // after each. There is no requestAnimationFrame and no wall-clock anywhere in this file.
 
 import * as THREE from "three";
-import { createScene } from "../studio/scene.js";
+import { configureKeyLight, createScene, setToneMapping } from "../studio/scene.js";
 import { createEnvironment } from "../studio/environment.js";
 import { Playback } from "../studio/playback.js";
-import { courseBounds } from "../studio/cameras.js";
-import { chooseGridPitch } from "../studio/geometry.js";
 import { TRUE_FOOTPRINT, chassisPrototype, spinProps } from "../studio/drone-model.js";
 
+// These MUST agree, value for value, with scripts/capture_video.py::render()'s keyword defaults —
+// i.e. with src/neural_whoop/video/look.py::VIDEO_LOOK, which is where the reasons behind each
+// number are written down. tests/test_capture_opts_contract.py diffs the two on every run; the
+// throw below catches the other direction. They are only ever a fallback (the driver sends every
+// key), but a fallback that disagrees is exactly how a render silently uses the wrong camera.
 const DEFAULTS = {
   episode: 0,
-  theme: "light",            // the bright "prototype map" look
+  theme: "dark",
   scale: TRUE_FOOTPRINT,     // drone tip-to-tip footprint (m)
-  shot: "fit",               // "fit" | "tripod" | "follow" — see the camera section below
-  roomSize: null,            // greybox room footprint (m); null -> derived from the flight
-  camDir: [0.9, 0.35, 1.0],  // lower + more heroic than the Studio's [0.9, 0.65, 1.0]
+  shot: "follow",            // "fit" | "tripod" | "follow" — see the camera section below
+  track: false,              // deprecated spelling of shot:"tripod" (resolved just below)
+  roomSize: null,            // stage-floor footprint (m); null -> derived from the fog, which is
+                             //   derived from the standoff, so the plane always runs past its fade
+  camDir: [0.85, 0.30, 1.0],
   camDist: 1.15,             // pull-back on the fitted/standoff distance (1.0 = the exact fit)
-  fov: 40,                   // a longer lens than the Studio's 55 — less wide-angle wall bulge
+  fov: 40,                   // a longer lens than the Studio's 55; bought for the flatter
+                             //   perspective, NOT for framing room (measured: it buys none)
   droneFrac: 0.22,           // (tripod/follow) fraction of the frame height the airframe fills
   camAbove: 0.30,            // (tripod) metres the camera sits above the flight's highest point,
                              //          so the shot NEVER tilts upward — level or looking down
-  trackSmooth: 25,           // (tripod/follow) symmetric smoothing half-window, frames
+  trackSmooth: 20,           // (tripod/follow) symmetric smoothing half-window, frames
   trackAmount: 1.0,          // (tripod) 1 = drone locked centre, <1 = camera stays nearer centre
-  subjectY: -0.08,           // (follow) the subject's resting NDC height: <0 sits it below centre,
+  subjectY: -0.06,           // (follow) the subject's resting NDC height: <0 sits it below centre,
                              //          leaving headroom for the climb. 0 = dead centre.
-  maxDrift: 0.30,            // (follow) how far, in NDC, the airframe may lag the camera before the
+  maxDrift: 0.26,            // (follow) how far, in NDC, the airframe may lag the camera before the
                              //          rig gives up smoothing and pulls it back into frame
   frameHeight: null,         // (fit) metres of world the frame spans vertically — the direct
                              //       "how big is the drone" control (drone = scale/frameHeight)
   aim: null,                 // (fit) sim [x,y,z] the shot is centred on; null -> flight centre
   aimZ: null,                // (fit) sim-z only, if `aim` is not given
-  backdrop: "room",          // "room" (walled greybox) | "floor" (cyclorama: floor + fog, no walls)
   gridPitch: null,           // greybox grid pitch (m); null -> chosen from the shot's own framing
   gridMinor: null,           // finer subdivision (m); null -> pitch/5, 0 -> none
-  fog: null,                 // [near, far] in m for the floor backdrop; null -> from the standoff
-  keyDir: null,              // sun direction [x,y,z] (three-frame); null -> the Studio's rig
-  exposure: null,            // ACES tone-mapping exposure; null = no tone mapping at all
+  fog: null,                 // [near, far] in m for the cyclorama; null -> from the standoff
+  keyDir: [0.22, 1.0, 0.15], // sun direction [x,y,z] (three-frame). Steep, so the cast shadow sits
+                             //   UNDER the airframe; null leaves the base rig's aim alone
+  exposure: 0.95,            // ACES tone-mapping exposure; null = no tone mapping at all
   roomLabels: true,          // bake the pitch / "PROTOTYPE" text into the greybox tiles
   propRate: 0.8,             // radians per frame at hover thrust (stylized — see spinProps)
   title: "neural-whoop",
@@ -68,6 +74,17 @@ const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 const doc = window.__REPLAY_DOC__;
 const opts = { ...DEFAULTS, ...(window.__CAPTURE_OPTS__ || {}) };
+// The injected options are a CONTRACT with scripts/capture_video.py::page_options, and the spread
+// above silently swallows a violation: a key renamed on the Python side lands here as a new
+// property nothing reads, the value falls back to the DEFAULT, and a perfectly plausible video is
+// encoded with the wrong camera. Fail loudly instead — the driver forwards page errors to stderr.
+{
+  const unknown = Object.keys(window.__CAPTURE_OPTS__ || {}).filter((k) => !(k in DEFAULTS));
+  if (unknown.length) {
+    throw new Error(`capture: injected option(s) not in DEFAULTS: ${unknown.join(", ")} — ` +
+      "capture_video.py::page_options and this file have drifted apart");
+  }
+}
 if (!doc) throw new Error("capture: window.__REPLAY_DOC__ was not injected");
 if (opts.track && opts.shot === "fit") opts.shot = "tripod";   // legacy `--track` spelling
 
@@ -88,21 +105,11 @@ view.renderer.setPixelRatio(1);
 view.controls.enabled = false;     // nothing may move the camera; we render explicitly below
 view.resize();
 
-// ACES tone mapping, because a close product shot lights very differently from the wide Studio
-// view it inherits: the light theme's near-white gridlines sit at the top of the range and clip to
-// flat white a metre from the lens. Rolling the highlights off keeps the grid readable and gives
-// the chassis's plastics some shape. `--exposure` is the one grading knob — and leaving it unset
-// means NO tone mapping at all, so an existing render (the standard viz pack's video) is untouched.
-if (opts.exposure !== null) {
-  view.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  view.renderer.toneMappingExposure = opts.exposure;
-}
+// ACES tone mapping (scene.js::setToneMapping) — `--exposure` is the one grading knob, and `null`
+// means no tone mapping at all.
+setToneMapping(view.renderer, opts.exposure);
 
-// The sky gradient belongs to the cyclorama: a walled room has a ceiling above the horizon, the
-// floor backdrop has nothing, and flat fill up there reads as an unfinished render.
-const environment = createEnvironment(view, {
-  labels: opts.roomLabels, sky: opts.backdrop === "floor",
-});
+const environment = createEnvironment(view, { labels: opts.roomLabels });
 environment.setTheme(opts.theme);
 document.documentElement.dataset.theme = opts.theme;   // drives the caption-layer palette
 
@@ -163,7 +170,6 @@ const right = new THREE.Vector3(0, 1, 0).cross(dir).normalize();
 const up = dir.clone().cross(right).normalize();
 
 const framesList = playback.actors.map((a) => a.frames);
-const bounds = courseBounds(view.world, framesList, episode.gates || []);
 
 // Component-wise median of the hero's sim-frame track — a robust "where is the drone, mostly?".
 function medianHeroPos() {
@@ -315,79 +321,30 @@ function applyPose(i) {
 }
 applyPose(0);
 
-// --- the backdrop --------------------------------------------------------------------------------
-// Built AFTER the camera, because both variants are sized from where the camera actually stands.
-//
-//   room — the walled greybox. The floor has to be big enough that the CAMERA stands inside it: the
-//     walls are a BackSide box, so a camera outside culls the near wall and you get a hard diagonal
-//     seam where the room simply stops. That is a hard floor on `--room-size`, not a preference.
-//
-//   floor (`--backdrop floor`) — a cyclorama: the floor alone, run out far past the shot, with the
-//     scene fog fading it into the background. No walls and no ceiling means no corner and no seam
-//     can ever sweep through a moving frame, which is the single biggest thing that made the tripod
-//     shot read as "weird" — and the ground (and its shadow) is still there, so the drone is still
-//     visibly IN a place rather than floating on a gradient.
-//
-// The grid keeps its honest METRE pitch — that label is the scale reference, and shrinking it to
-// "10 CM" just moves the problem — but gains a finer mesh matched to the shot. An 82 mm airframe on
-// a bare 1 m grid is 1/12 of a tile with nothing nearby to measure it against; subdivided at the
-// framing's own scale, the drone sits on a mesh it can be read against while the metre lines still
-// say how big a metre is. A wide arena shot resolves the subdivision to "coarser than the tile",
-// i.e. none, and is left exactly as it was.
-const frameSpan = 2 * tanV * camDist;            // metres of world across the frame height
-const gridPitch = opts.gridPitch ?? 1;
-const autoMinor = chooseGridPitch(frameSpan * 2.5, 5);
-const gridMinor = opts.gridMinor ?? (autoMinor <= gridPitch / 2 ? autoMinor : 0);
-let roomSize;
-{
-  const camReach = 2 * (Math.hypot(cam.position.x, cam.position.z) + 0.6);
-  if (opts.backdrop === "floor") {
-    // Big enough to run past the fog, so the plane's own edge is never in shot.
-    const [fogNear, fogFar] = opts.fog || [Math.max(1.0, 1.5 * camDist), Math.max(6.0, 14 * camDist)];
-    roomSize = Math.max(4 * fogFar, camReach);
-    environment.setFog({ near: fogNear, far: fogFar });
-    environment.setSize({ footprint: roomSize, height: 1, floorZ: 0, walls: false,
-                          pitch: gridPitch, minor: gridMinor });
-  } else {
-    const wanted = opts.roomSize || Math.max(4, bounds ? bounds.footprint : 4);
-    roomSize = Math.max(wanted, camReach);
-    environment.setSize({
-      footprint: roomSize,
-      height: clamp((bounds ? bounds.zMax : 2) + 1.2, 2.2, 4),
-      floorZ: 0, walls: true, pitch: gridPitch, minor: gridMinor,
-    });
-  }
-}
+// --- the stage ------------------------------------------------------------------------------------
+// Built AFTER the camera, because the whole thing is derived from where the camera actually stands:
+// setStage takes the subject distance and returns the fog, the floor size and the grid it chose.
+// See environment.js::STAGE_LOOK for what each constant buys. There is one backdrop — a fogged
+// cyclorama — in every view in the repo, so nothing here selects a look.
+const stage = environment.setStage({
+  camDist,
+  camReach: 2 * (Math.hypot(cam.position.x, cam.position.z) + 0.6),
+  frameSpan: 2 * tanV * camDist,               // metres of world across the frame height
+  fog: opts.fog, gridPitch: opts.gridPitch, gridMinor: opts.gridMinor, roomSize: opts.roomSize,
+});
+const roomSize = stage.roomSize;
 
 // --- key light + shadow ---------------------------------------------------------------------------
-// scene.js sizes the sun's shadow ortho for a ±30 m arena, where an 82 mm drone spans ~1.4 texels of
-// the 1024² map — i.e. no contact shadow at all. Refit it to the flight and double the map, which is
-// what makes the airframe look like it's ON the floor rather than pasted over it. Only the DRONE
-// casts (the room is receive-only), so the ortho only has to cover the flight, not the room.
-//
-// `--key-dir` also re-aims the sun. The Studio's rig sits at (10,18,7), i.e. 0.68 of the altitude
-// sideways — at 1.5 m up that throws the shadow 1.0 m clear of the drone, so it reads as a second
-// object rather than as ground contact. A steeper key keeps the shadow under the airframe.
-{
-  const sun = view.lights.sun;
-  const centre = flight.getCenter(new THREE.Vector3()).applyMatrix4(view.world.matrixWorld);
-  if (opts.keyDir) {
-    const k = new THREE.Vector3(...opts.keyDir).normalize().multiplyScalar(20);
-    sun.target.position.copy(centre);
-    view.scene.add(sun.target);              // an unparented target is never updated by three.js
-    sun.position.copy(centre).add(k);
-  }
-  const reach = flight.getSize(new THREE.Vector3()).length() * 0.5 + 0.5;
-  const h = clamp(reach, 1.0, roomSize * 0.75);
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.left = -h; sun.shadow.camera.right = h;
-  sun.shadow.camera.top = h; sun.shadow.camera.bottom = -h;
-  sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 120;
-  sun.shadow.camera.updateProjectionMatrix();
-  sun.shadow.normalBias = 0.002;   // ~2 mm, scaled to a true-size airframe (kills acne, not contact)
-  sun.shadow.map?.dispose();
-  sun.shadow.map = null;           // force a rebuild at the new mapSize
-}
+// Aim the key at the flight and refit its shadow ortho to it (scene.js::configureKeyLight). The
+// base rig's ±30 m ortho is sized for an arena; a true-scale 82 mm airframe inside it resolves to a
+// couple of texels, i.e. no contact shadow, which is the thing that sells the drone as being ON the
+// floor rather than pasted over it.
+configureKeyLight(view, {
+  dir: opts.keyDir,          // null leaves the base rig's aim alone; the shipped look always sets it
+  focus: flight.getCenter(new THREE.Vector3()).applyMatrix4(view.world.matrixWorld),
+  extent: flight.getSize(new THREE.Vector3()).length() * 0.5 + 0.5,
+  roomSize,
+});
 
 // --- captions ---------------------------------------------------------------------------------
 const cardEl = document.getElementById("card");

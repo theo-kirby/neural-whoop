@@ -22,13 +22,22 @@ persists across reloads).
 
 ### Theme + greybox environment
 
-Both tabs render inside the same **greybox reference room** — a bounded "prototype map" box (1 m
-checkerboard tiles, metre gridlines, half-metre dots, baked **"PROTOTYPE"** / **"1 METER"** labels)
-that gives the drone a fixed metric backdrop instead of an infinite void. It is **sized per course**:
-the Simulation room grows/shrinks to the footprint of the loaded course (gates + flown paths), and to
-the arena preset while editing; the Real tab uses a fixed 10 m room. The room's floor is a
-front-facing plane and carries the only labels (the walls/ceiling are a `BackSide` box so near walls
-cull and never occlude the drone as you orbit).
+Both tabs render on the same **greybox stage** — a "prototype map" floor (1 m checkerboard tiles,
+metre gridlines, half-metre dots, baked **"PROTOTYPE"** / **"1 METER"** labels) fading out under
+scene fog into a subtle sky gradient, so the drone has a fixed metric backdrop instead of an
+infinite void. There are **no walls and no ceiling**, in any view, and there is no option for them:
+a walled box put a corner and a ceiling seam in shot the moment the camera moved, and keeping the
+box as a second look meant the dashboard and a rendered clip could show different places.
+
+The stage is **derived, not dialled** (`environment.js::setStage`, `STAGE_LOOK`): give it the
+distance the camera watches from and it picks the fog fade from that standoff, the floor's size
+from the fog (4× the fade, so the plane's own edge always sits well past the point it has faded to
+background), and the grid's fine subdivision from the framing. That chain is what makes "you can
+never see the stage end" true by construction at any scale — a floor sized to the *course* inside
+the palette's fixed 40–150 m fog, which is what the Studio used to do, shows its own edge as a hard
+horizon line the instant the walls come off. The Simulation tab stages for the loaded course
+(gates + flown paths) and for the arena preset while editing; the Real tab stages for a ~3 m bench
+shot. The floor is a front-facing plane, so its baked text reads correctly rather than mirrored.
 
 A **☾/☀ toggle** in the sidebar's top corner switches **light ⇄ dark** — theming the DOM sidebar
 **and** both 3D scenes together (room tiles, scene background/fog, light intensities, and the canvas
@@ -187,7 +196,7 @@ the player (the camera re-frames the loaded replay). Workflow:
 Video capture lives **in this repo** now: `scripts/capture_video.py` + `web/capture/`. The capture
 page is not a second renderer — it *imports the Studio's own* `scene.js` / `environment.js` /
 `geometry.js` / `drone-model.js` / `playback.js`, so the exported clip is the same chassis CAD and
-the same greybox room you're looking at, and the look cannot drift. What it changes is the
+the same greybox stage you're looking at, and the look cannot drift. What it changes is the
 presentation: clean full frame (no PiP cells, no HUD chrome), a precomputed camera track (three
 shots — see below), **true-scale** drone (the real 82 mm airframe, not the Studio's ~7× hero
 glyph), spinning props, and title/phase captions.
@@ -199,32 +208,42 @@ is cached under `.cache/three/` on first use, so subsequent renders are offline 
 
 ```bash
 uv pip install -e '.[capture]' && playwright install chromium     # one-time
-uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/replay.mp4
 uv run python scripts/capture_video.py --replay ... --out ... --stride 40 --width 960 --height 540
 uv run python scripts/capture_video.py --replay ... --out out.png --stills 120,250   # PNG frames
 ```
 
-Flags: `--preset none|hero`, `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`,
-`--theme light|dark`, `--shot fit|tripod|follow`, `--backdrop room|floor`, `--room-size`,
+Flags: `--width/--height/--fps/--crf`, `--stride` (smoke path), `--episode`,
+`--theme light|dark`, `--shot fit|tripod|follow`, `--room-size`,
 `--cam-dir/--cam-dist/--fov`, `--drone-frac/--subject-y/--max-drift/--track-smooth`,
 `--cam-above/--track-amount` (tripod), `--frame-height/--aim/--aim-z` (fit),
 `--grid-pitch/--grid-minor`, `--fog`, `--key-dir`, `--exposure`, `--scale` (drone footprint, m),
 `--prop-rate`, `--title/--title-frames` (`0` disables the cards).
 
-### `--preset hero` — the standardized concept shot
+### The standardized look is the DEFAULT — there is no `--preset`
 
-Reach for this first. It is a bundle of the flags below, and the point of it is that the **same
-invocation gives the same picture on any replay** — a hover, a flip, a gate lap, a real flight log —
-because everything that would otherwise be tuned per clip is derived instead. One line:
+The first line above is the whole invocation, and the point of it is that it **gives the same
+picture on any replay** — a hover, a flip, a gate lap, a two-drone overlay, a real flight log —
+because everything that would otherwise be tuned per clip is derived instead.
 
-```bash
-uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz \
-    --out runs/<run>/hero.mp4 --preset hero --width 1080 --height 1080
-```
+This used to be `--preset hero`, and that shape was a bug rather than a convenience. The two
+callers that matter most, `scripts/viz.py --video` and this Studio's **`/api/export`**, call
+`capture_video.render()` *directly in Python*; a CLI flag could never reach them, so every clip
+either of them produced came out in the **walled greybox room** while the reference and comparison
+clips came out on the cyclorama, and nothing anywhere failed. The look now lives in
+`src/neural_whoop/video/look.py::VIDEO_LOOK` and *is* `render()`'s keyword defaults —
+`tests/test_video_look.py::test_render_defaults_match_the_video_look` compares the two signatures
+on every test run — so those two files carry no look code at all and still render the standard clip.
 
-It selects `--shot follow --backdrop floor --theme dark --drone-frac 0.26 --fov 34
---cam-dir 0.85,0.30,1.0 --track-smooth 14 --subject-y -0.06 --max-drift 0.26
---key-dir 0.22,1.0,0.15 --exposure 0.95 --title-frames 0`. Anything you pass explicitly still wins.
+The values, with the measured reason each has its value, are in `look.py`; in short:
+`shot=follow`, `theme=dark`, `drone_frac=0.22`, `fov=40`, `cam_dir=(0.85, 0.30, 1.0)`,
+`track_smooth=20`, `subject_y=-0.06`, `max_drift=0.26`, `key_dir=(0.22, 1.0, 0.15)`,
+`exposure=0.95`, `title_frames=0`, and `fog`/`grid_pitch`/`grid_minor` left `None` because they are
+derived from the shot's own standoff. Anything you pass explicitly still wins.
+
+For the named clips — `<maneuver> maneuver reference|policy|comparison video` — use
+`neural_whoop.video.render.render_video` (or `scripts/render_examples.py`) rather than this CLI: it
+derives the per-maneuver framing from a measurement and records it in the manifest.
 
 ### Three camera shots
 
@@ -256,17 +275,20 @@ transients and settles back (a box filter is zero-phase: it rounds corners, it d
 climb). `--subject-y` sets its resting NDC height (negative = below centre, headroom above),
 `--max-drift` caps the lead so a 360°/s flip can never carry it out of frame.
 
-### The backdrop
+### The stage
 
-`--backdrop room` is the walled greybox. It is built **after** the camera and is never smaller than
-it needs to be to contain it: the walls are a `BackSide` box, so a camera outside would cull the
-near wall and cut a hard diagonal seam across the frame. A too-small `--room-size` is raised to fit.
+One backdrop, everywhere: a **cyclorama**. The floor alone, run out past the shot, fading into the
+background under fog (`--fog near,far` overrides), with a subtle sky gradient above the horizon so
+the empty upper half reads as space rather than as an unfinished render. No walls and no ceiling
+means no corner and no seam can sweep through a moving frame — the single biggest thing that made a
+travelling shot look wrong — while the ground and its contact shadow are still there, so the drone
+is visibly *in* a place rather than floating on a gradient.
 
-`--backdrop floor` is a **cyclorama**: the floor alone, run out past the shot, fading into the
-background under fog (`--fog near,far`), with a subtle sky gradient above the horizon so the empty
-upper half reads as space rather than as an unfinished render. No walls and no ceiling means no
-corner and no seam can sweep through a moving frame — the single biggest thing that made a travelling
-shot look wrong — while the ground and its contact shadow are still there.
+It is built **after** the camera, because every dimension of it follows from where the camera
+stands (`environment.js::setStage`): fog near/far at 1.5×/14× the standoff, and the floor at 4× the
+fog's far distance, which is the invariant that matters — the plane's edge is always well past the
+point it has faded to background, at any scale, so no shot can catch the stage ending. `--room-size`
+overrides the derived footprint.
 
 **The grid scales to the shot.** The pitch stays an honest **1 m** (that label *is* the scale
 reference), but it gains a finer mesh sized to the framing: an 82 mm airframe on a bare metre grid is
@@ -274,28 +296,32 @@ reference), but it gains a finer mesh sized to the framing: an 82 mm airframe on
 you can read it against while the metre lines still say how big a metre is. A wide arena shot
 resolves the subdivision to "coarser than the tile", i.e. none, and looks exactly as it did.
 `--grid-pitch` / `--grid-minor` override (`--grid-minor 0` disables). `--no-room-labels` drops the
-baked "1 METER" / "PROTOTYPE" text entirely. Walls are never labelled — seen from inside, a
-`BackSide` face flips U, so half of them used to render the text in mirror writing.
+baked "1 METER" / "PROTOTYPE" text entirely.
 
-`--key-dir` re-aims the sun. The Studio's rig sits 0.68 of the altitude sideways, which at 1.5 m up
-throws the shadow a full metre clear of the drone so it reads as a second object; a steep key keeps
-it underneath. `--exposure` turns on ACES tone mapping — the light rig is tuned for the wide Studio
-view, and close up its near-white gridlines clip to flat white without it. Unset means no tone
-mapping at all, so an existing render is untouched.
+`--key-dir` re-aims the sun and refits its shadow ortho to the flight (`scene.js::configureKeyLight`).
+The old base rig sat 0.68 of its altitude sideways, which at 1.5 m up throws the shadow a full metre
+clear of the drone so it reads as a second object; the steep key it now ships with keeps the shadow
+underneath, and a 2048² map refitted to the flight is what resolves it at all — the default ±30 m
+arena ortho gives an 82 mm airframe about 1.4 texels, i.e. no contact shadow. Both moved into the
+base rig, so the **Studio gets the same contact shadow the video does**. `--exposure` turns on ACES
+tone mapping — the light rig is tuned for the wide Studio view, and close up its near-white
+gridlines clip to flat white without it. Unset (`None`) means no tone mapping at all.
 
-Every render prints a **framing check**: the page projects the airframe (padded by its own angular
+Every render prints a **framing check**: the page projects each drone (padded by its own angular
 radius) through the camera it will actually be drawn with, for every frame, and reports the largest
-`|NDC|` on each axis (`1.0` is the frame edge) plus the spread of apparent size. Above 1.0 it warns
-that the drone leaves frame. Use both; a tight locked-off shot of a climbing drone can measure
-**2.5** and you will not notice from a still, and a flat size spread is what tells you the rig is
-holding its framing rather than letting the subject balloon.
+`|NDC|` on each axis (`1.0` is the frame edge) plus the spread of the *subject's* apparent size.
+Above 1.0 it warns that a drone leaves frame. Use both; a tight locked-off shot of a climbing drone
+can measure **2.5** and you will not notice from a still, and a flat size spread is what tells you
+the rig is holding its framing rather than letting the subject balloon. The `|NDC|` figure covers
+**every** drone, not just the camera's subject — on the first two-drone overlay the old
+subject-only check reported a comfortable 0.47 while the policy sat **3.16 outside the frame**, so
+it would have passed a video that hides the thing it exists to show.
 
 The take-off → hover → flip → land concept video uses:
 
 ```bash
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
-    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 \
-    --preset hero --width 1080 --height 1080
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --width 1080 --height 1080
 ```
 
 With a run loaded, **⤓ Export hero MP4** (Simulation sidebar) POSTs to `/api/export`, which runs the

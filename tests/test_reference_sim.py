@@ -221,7 +221,7 @@ def test_yaw_and_yaw_rate_stay_dead_in_the_sim(reference):
     These are the two failures that would silently ruin the reference. ψ ≡ 0 is what makes the
     ``RateController`` frame bug (``controller.py:93``) a no-op; the moment yaw wakes up, the same
     constant CTBR command produces a saturated tumble instead of a clean roll (measured in
-    ``scripts/hero_takeoff_flip_land.py``: 12 rad/s at yaw 0, a 40/40/16 rad/s tumble at yaw −22°).
+    ``scripts/takeoff_flip_land.py``: 12 rad/s at yaw 0, a 40/40/16 rad/s tumble at yaw −22°).
     So this test is a well-aimed tripwire, not a formality.
     """
     model, spec, sol, fine = reference

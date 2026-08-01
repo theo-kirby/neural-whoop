@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Put the hand-authored reference and the trained policy in ONE picture.
 
-``scripts/reference_maneuver.py`` renders the trajectory we *want*; ``scripts/eval.py --record``
-renders what a policy actually *did*. Rendering them as two separate clips and eyeballing them side
-by side is the obvious thing and it is the wrong thing: ``--preset hero``'s follow rig derives its
-camera from each replay's **own** track, so a policy that falls out of the sky gets chased down by
-its own camera and lands in frame looking composed. The two clips are individually honest and the
-comparison between them is not.
+``scripts/reference_maneuver.py`` renders the trajectory we *want* (the **maneuver reference
+video**); ``scripts/eval.py --record`` renders what a policy actually *did* (the **maneuver policy
+video**). Rendering them as two separate clips and eyeballing them side by side is the obvious
+thing and it is the wrong thing: the follow rig derives its camera from each replay's **own**
+track, so a policy that falls out of the sky gets chased down by its own camera and lands in frame
+looking composed. The two clips are individually honest and the comparison between them is not.
 
-So this merges them into a **single replay with two drones** — the reference as ``drones[0]``, the
-policy as ``drones[1]`` — and lets the existing renderer draw both. That needs **no renderer work**:
-``web/studio/playback.js`` has drawn the v2 ``episodes[].drones[]`` group schema since the swarm
-tasks, and ``web/capture/`` imports it verbatim. The merged replay is an ordinary replay; the Studio
-plays it, ``scripts/capture_video.py`` renders it, and ``--preset hero`` still applies.
+So this builds the third kind — the **maneuver comparison video** — by merging them into a
+**single replay with two drones**: the reference as ``drones[0]``, the policy as ``drones[1]``,
+drawn by the existing renderer. That needs **no renderer work**: ``web/studio/playback.js`` has
+drawn the v2 ``episodes[].drones[]`` group schema since the swarm tasks, and ``web/capture/``
+imports it verbatim. The merged replay is an ordinary replay; the Studio plays it and
+``scripts/capture_video.py`` renders it in the standard look.
 
 Two deliberate choices make the comparison honest rather than flattering:
 
@@ -50,41 +51,34 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from neural_whoop.reference.track import _rotmat_xyzw, load_reference_track  # noqa: E402
+from neural_whoop.video.framing import (  # noqa: E402
+    AIRFRAME_M, GLYPH_SCALE, derive_drone_frac, plan_framing,
+)
+from neural_whoop.video.names import MANEUVERS  # noqa: E402
+from neural_whoop.video.render import render_video  # noqa: E402
 from neural_whoop.viz.replay import RunRecorder, load_run  # noqa: E402
 
-
-#: True airframe footprint (m), tip to tip — what ``--preset hero`` scales the glyph to.
-AIRFRAME_M = 0.082
-#: ``hero``'s resting subject height in NDC (negative sits the subject below centre).
-HERO_SUBJECT_Y = -0.06
-
-
-#: Glyph exaggeration for the overlay. The true 82 mm airframe against a divergence of order 1 m
-#: is an 11:1 ratio, so a frame containing both drones renders each at ~3 % of frame height (~30 px
-#: at 1080) — too small to read which way either one is rotating, which is most of what the clip is
-#: for. Drawing the airframe larger is what the Studio already does (~7x) for the same reason.
-#: POSITIONS ARE UNTOUCHED: only the glyph is scaled, so every gap you see is the real gap.
-GLYPH_SCALE = 3.0
+# The airframe size, the glyph exaggeration, the follow rig's resting subject height and the
+# framing derivation all live in `neural_whoop.video.framing` now. They used to be copied into
+# this file — `HERO_SUBJECT_Y = -0.06` hand-transcribed out of the preset, with nothing
+# cross-checking the two — which is precisely the drift the video package exists to prevent:
+# retune the look and this script would have gone on framing for the old one, silently.
 
 
-def derive_drone_frac(separation_m: float, *, glyph_scale: float = 1.0,
-                      margin: float = 1.15) -> float:
-    """``--drone-frac`` that keeps BOTH drones in frame, derived from their worst separation.
+def sniff_maneuver(reference_json: Path) -> str:
+    """Which maneuver a ``reference.json`` is, from the file itself.
 
-    ``--preset hero`` frames a single subject: it holds the airframe at 22 % of the frame height,
-    which spans ~0.37 m of world — a tenth of what an overlay needs. Rather than eyeball a number
-    per clip (the failure mode ``docs/REFERENCE_MANEUVER.md``'s video contract exists to prevent),
-    derive it: the follow rig parks the subject at NDC ``HERO_SUBJECT_Y``, so a drone ``sep`` metres
-    away sits at ``HERO_SUBJECT_Y - sep / (frame_height / 2)`` and has to stay inside |NDC| < 1
-    once padded by the airframe's own angular radius.
-
-    Everything else still comes from ``hero``. Only the framing room is clip-dependent, because
-    only it depends on a quantity — how badly the policy diverges — that is the result itself.
+    The document carries its own ``maneuver`` field (``emit.build_reference_doc``), so the honest
+    answer is in the data and ``--maneuver`` is only an override. Falling back to the path would
+    guess from a directory name someone chose (``flip_roll_z09_deployable``), which is exactly the
+    kind of inference that goes quietly wrong.
     """
-    pad_ndc = 0.08 * glyph_scale        # the drawn airframe's own half-width, in NDC
-    room = max(0.15, 1.0 - abs(HERO_SUBJECT_Y) - pad_ndc)
-    frame_height = margin * 2.0 * max(separation_m, 1e-3) / room
-    return round(AIRFRAME_M * glyph_scale / frame_height, 4)
+    name = json.loads(Path(reference_json).read_text()).get("maneuver")
+    if name not in MANEUVERS:
+        raise SystemExit(
+            f"{reference_json} declares maneuver {name!r}, which is not one of {list(MANEUVERS)}; "
+            f"pass --maneuver explicitly")
+    return name
 
 
 def _rpy_from_quat(q: np.ndarray) -> np.ndarray:
@@ -371,8 +365,11 @@ def main() -> None:
     ap.add_argument("--reference", required=True, type=Path, help="the reference.json DATA artifact")
     ap.add_argument("--out", required=True, type=Path, help="output directory")
     ap.add_argument("--episode", type=int, default=1, help="which hero episode (1-based)")
+    ap.add_argument("--maneuver", choices=MANEUVERS, default=None,
+                    help="which maneuver this is, for the video's name and its per-maneuver "
+                         "framing. Default: sniffed from the reference file")
     ap.add_argument("--video", action="store_true",
-                    help="also render the overlay MP4 through the standard hero contract")
+                    help="also render the <maneuver> maneuver COMPARISON video")
     args = ap.parse_args()
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -398,19 +395,17 @@ def main() -> None:
         print(f"[chart]   skipped (needs the viz extra): {exc}")
 
     if args.video:
-        import subprocess
-        mp4 = args.out / "vs_reference.mp4"
-        # `hero` minus its single-subject framing: everything else (follow rig, fogged cyclorama,
-        # steep key, true-scale airframe) is the standard look, and an explicit flag beats the
-        # preset. reference.video's pinned invocation is deliberately NOT reused — it is the
-        # contract for a one-drone concept shot and must stay untouched.
-        cmd = [sys.executable, str(Path(__file__).parent / "capture_video.py"),
-               "--replay", str(overlay), "--out", str(mp4),
-               "--preset", "hero", "--width", "1080", "--height", "1080",
-               "--drone-frac", str(comparison["drone_frac"]),
-               "--scale", str(comparison["render_scale_m"])]
-        print("[video]   " + " ".join(cmd))
-        subprocess.run(cmd, check=True)
+        maneuver = args.maneuver or sniff_maneuver(args.reference)
+        # The standard look plus this maneuver's DERIVED framing — no hand-typed flag anywhere.
+        # The plan is built from the separation measured just above, and the same plan is what
+        # scripts/render_examples.py reuses for the maneuver's reference and policy clips, so all
+        # three show the airframe at one size with the horizon in one place.
+        plan = plan_framing(maneuver, comparison["max_separation_m"])
+        record = render_video(overlay, args.out, maneuver=maneuver, kind="comparison",
+                              framing=plan)
+        (args.out / "video.json").write_text(json.dumps(record, indent=2))
+        if record["returncode"] != 0:
+            raise SystemExit(f"video render failed (rc={record['returncode']})")
 
 
 if __name__ == "__main__":

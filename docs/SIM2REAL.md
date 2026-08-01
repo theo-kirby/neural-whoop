@@ -412,7 +412,7 @@ optimum is a *coast*, i.e. near-zero throttle mid-flip, and the real drone will 
 Fix: `contract.ActionLimits.min_thrust_normed`, applied in `action_to_diffaero`, wired through an
 `act:` config section by `experiment.py::build_env`, and set to `0.25` in `configs/acro_flip_v2.yaml`
 — the same number, in the same normed units, as the deploy clamp. Default `0.0` keeps every other
-task bit-identical. `scripts/hero_takeoff_flip_land.py` uses the same floor, so the rendered
+task bit-identical. `scripts/takeoff_flip_land.py` uses the same floor, so the rendered
 sequence cannot show a maneuver the drone cannot fly.
 
 > **Deploy prerequisite, flagged not fixed: enable Betaflight AIRMODE before the first real v2

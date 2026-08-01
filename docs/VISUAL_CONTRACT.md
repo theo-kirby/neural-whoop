@@ -49,6 +49,16 @@ A consumer needs no external doc; everything to interpret the frames is here.
 | `scene_info` | **(v2, optional)** static descriptors for the `scene` channel — see below |
 
 ### `episodes[]` — one recorded **hero** flight (or one swarm group) each
+
+> **"hero" here means the recorded subject drone, and it stays.** The word was retired from the
+> *video* vocabulary on 2026-08-01 — there is no `--preset hero`, no `hero.mp4`, and no
+> `hero_takeoff_flip_land.py` any more; clips are named `<maneuver> maneuver <kind> video`
+> (`neural_whoop.video.names`). That rename stops at the schema. **Hero drone**, **hero episode**,
+> `heroFrames`, `--n-heroes` and `select_heroes` are this document's own term for "the drone whose
+> full per-step frames we kept", they are load-bearing in `eval/rollout.py`, `viz/replay.py` and
+> `web/studio/playback.js`, and renaming them would change a wire format to fix a word that is not
+> broken here. Please do not "finish" the rename.
+
 Recording is **hero-subset**: full per-step frames are kept only for a small set of hero drones;
 aggregate metrics still cover the full population. Each hero records its **first** episode — from
 rollout start to its first `done` (crash / time-limit) or the window end. Tensors accumulate on GPU
@@ -106,7 +116,7 @@ have **no gates** — they chase a moving target/anchor instead — so each fram
 | `command` | `gesture_follow` (0/1), `command_follow` (0/1/2) | raw command index — label via `scene_info.command_labels` |
 | `anchor` | `swarm_formation` | world position of the shared moving anchor (same for the env's agents) |
 | `slot` | `swarm_formation` | this drone's assigned ring slot (world position) |
-| `phase` | scripted sequences (`hero_takeoff_flip_land.py`) | **numeric** flight-phase code — label via `scene_info.phase_labels` |
+| `phase` | scripted sequences (`takeoff_flip_land.py`) | **numeric** flight-phase code — label via `scene_info.phase_labels` |
 
 `meta.scene_info` carries the static descriptors a viewer needs to label/scale those markers without
 hardcoding task names: `standoff` / `fov_deg` (follow), `command_labels` (e.g. `["STOP","NEAR","FAR"]`),

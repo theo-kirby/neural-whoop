@@ -4,8 +4,15 @@
 This replaces the sibling ``../nw-viz`` Node project as the video seam. The scene is not a
 reimplementation: ``web/capture/`` imports ``web/studio/``'s scene / environment / geometry /
 drone-model / playback modules verbatim, so what you get is exactly the chassis CAD and the
-"1 METER / PROTOTYPE" greybox room the dashboard shows, rendered clean and full-frame with a
+"1 METER / PROTOTYPE" greybox floor the dashboard shows, rendered clean and full-frame with a
 fixed camera, true-scale airframe, spinning props and phase captions.
+
+**There is no ``--preset``.** The standardized look (follow rig, fogged cyclorama, scale-matched
+grid, steep key) is the *default* — ``neural_whoop.video.look.VIDEO_LOOK`` — because the two
+callers that matter most, ``scripts/viz.py`` and the Studio's ``/api/export``, call ``render()``
+directly and a flag could never have reached them. Reach for
+``neural_whoop.video.render.render_video`` rather than this CLI when the clip is one of the named
+kinds (reference / policy / comparison); it derives the per-maneuver framing and records it.
 
 The driver is deliberately four small moving parts (the same shape ``capture.mjs`` had, in Python):
 
@@ -42,49 +49,20 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = REPO_ROOT / "web"
 CAPTURE_PAGE = "capture/index.html"
 
+sys.path.insert(0, str(REPO_ROOT / "src"))
+
+from neural_whoop.video.look import VIDEO_LOOK  # noqa: E402
+
 #: Where the pinned three.js bundles are cached so a render needs no network after the first one.
 CDN_CACHE = REPO_ROOT / ".cache" / "three"
 #: The only external host the page touches (the importmap in web/*/index.html).
 CDN_HOST = "cdn.jsdelivr.net"
 
-#: The plain (preset-free) look — every flag that a preset is allowed to fill in. These match the
-#: ``render()`` signature defaults; they live here so ``--preset`` can override a flag you did not
-#: pass while an explicit flag still wins (see ``main``).
-LOOK_DEFAULTS: dict[str, Any] = {
-    "theme": "light", "shot": "fit", "cam_dir": "0.9,0.35,1.0", "cam_dist": 1.15, "fov": 40.0,
-    "drone_frac": 0.22, "cam_above": 0.30, "track_smooth": 25, "track_amount": 1.0,
-    "subject_y": -0.08, "max_drift": 0.30, "backdrop": "room", "grid_pitch": None,
-    "grid_minor": None, "fog": None, "key_dir": None, "exposure": None, "room_labels": True,
-    "title_frames": 40,
-}
-
-#: Named looks. ``hero`` is the standardized concept/product shot — the point of it is that the
-#: SAME flags give the same picture on any replay (hover, flip, gate lap, real flight log), because
-#: every quantity that would otherwise be tuned per clip is derived instead:
-#:   * ``follow`` holds the airframe at a fixed fraction of the frame height and never re-orients,
-#:     so apparent size and the horizon are constant by construction;
-#:   * ``floor`` drops the walls and ceiling for a fogged cyclorama, so nothing in the background
-#:     can sweep through frame as the camera travels;
-#:   * the grid pitch is chosen from the framing, so the drone reads as ~one tile rather than 1/12
-#:     of a metre square, and the tile is labelled with what it actually is;
-#:   * a steep key puts the cast shadow under the airframe, which is what sells ground contact.
-PRESETS: dict[str, dict[str, Any]] = {
-    "none": {},
-    "hero": {
-        "shot": "follow", "backdrop": "floor", "theme": "dark",
-        # drone_frac is the ONLY lever on framing room (measured): at fixed drone_frac the standoff
-        # is 1/tan(fov/2), so tan(fov/2)*dist — the world-metres one NDC unit spans at the subject —
-        # is constant and a wider FOV buys nothing. Worst |NDC| across 34/40/46 deg: 0.54 -> 0.56
-        # -> 0.58 here (0.64 -> 0.68 -> 0.73 under the old box+hard-clamp filter) — it slightly
-        # WORSENS either way. So the room comes from 0.26 -> 0.22 (a slight zoom-out); fov 34 -> 40
-        # is bought purely for the flatter, less telephoto perspective, and track_smooth 14 -> 20
-        # for a calmer rig — modest, because smoothing is what SPENDS the room (14 -> 28 costs
-        # |NDC| 0.54 -> 0.68 under Hann, and cost 0.64 -> 0.91 under the box window).
-        "drone_frac": 0.22, "fov": 40.0, "cam_dir": "0.85,0.30,1.0",
-        "track_smooth": 20, "subject_y": -0.06, "max_drift": 0.26,
-        "key_dir": "0.22,1.0,0.15", "exposure": 0.95, "title_frames": 0,
-    },
-}
+#: The look is not a preset any more — it is the default. ``VIDEO_LOOK`` lives in the package
+#: (``neural_whoop.video.look``) rather than here, because ``scripts/viz.py`` and the Studio's
+#: ``/api/export`` call ``render()`` directly and never see this CLI; pinning ``render()``'s
+#: keyword defaults against it is what gives those two the same picture as everything else.
+#: ``tests/test_video_look.py`` holds both halves of that lock.
 
 #: SwiftShader — this bench Mac has no CUDA and headless Chromium has no GPU; ANGLE's software
 #: rasterizer is the only path that gives the page a WebGL2 context.
@@ -153,6 +131,66 @@ def _ffmpeg_writer(out: Path, fps: float, crf: int, quiet: bool) -> subprocess.P
     )
 
 
+def page_options(
+    *,
+    episode: int,
+    theme: str,
+    cam_dir: tuple[float, float, float],
+    cam_dist: float,
+    prop_rate: float,
+    title: str,
+    title_frames: int,
+    fov: float,
+    shot: str,
+    track: bool,
+    drone_frac: float,
+    cam_above: float,
+    track_smooth: int,
+    track_amount: float,
+    subject_y: float,
+    max_drift: float,
+    frame_height: float | None,
+    aim_z: float | None,
+    room_labels: bool,
+    aim: tuple[float, float, float] | None,
+    grid_pitch: float | None,
+    grid_minor: float | None,
+    fog: tuple[float, float] | None,
+    key_dir: tuple[float, float, float] | None,
+    exposure: float | None,
+    room_size: float | None = None,
+    scale: float | None = None,
+) -> dict[str, Any]:
+    """Translate a resolved look into the ``window.__CAPTURE_OPTS__`` the capture page reads.
+
+    This is the ONE seam between Python and ``web/capture/capture.js`` — snake_case here,
+    camelCase there — and nothing about it is checked by the runtime: a renamed key simply
+    falls back to the page's own ``DEFAULTS`` and still encodes a perfectly plausible video
+    with the wrong camera. It is a pure function (no playwright, no browser) precisely so
+    ``tests/test_capture_opts_contract.py`` can diff it against ``DEFAULTS`` on every run.
+
+    ``room_size`` and ``scale`` are the only conditional keys: omitting them leaves the page on
+    its own derivation (footprint from the flight's bounds; the true 82 mm airframe).
+    """
+    opts: dict[str, Any] = {
+        "episode": episode, "theme": theme, "camDir": list(cam_dir), "camDist": cam_dist,
+        "propRate": prop_rate, "title": title, "titleFrames": title_frames,
+        "fov": fov, "shot": shot, "track": track, "droneFrac": drone_frac,
+        "camAbove": cam_above, "trackSmooth": track_smooth, "trackAmount": track_amount,
+        "subjectY": subject_y, "maxDrift": max_drift,
+        "frameHeight": frame_height, "aimZ": aim_z, "roomLabels": room_labels,
+        "aim": list(aim) if aim else None,
+        "gridPitch": grid_pitch, "gridMinor": grid_minor,
+        "fog": list(fog) if fog else None, "keyDir": list(key_dir) if key_dir else None,
+        "exposure": exposure,
+    }
+    if room_size is not None:
+        opts["roomSize"] = room_size
+    if scale is not None:
+        opts["scale"] = scale
+    return opts
+
+
 def render(
     replay: Path,
     out: Path,
@@ -163,33 +201,35 @@ def render(
     crf: int = 18,
     stride: int = 1,
     episode: int = 0,
-    theme: str = "light",
-    shot: str = "fit",
+    # --- the standardized look. These defaults ARE neural_whoop.video.look.VIDEO_LOOK, field for
+    # field, and a test asserts it. That is what makes scripts/viz.py and the Studio's /api/export —
+    # which call render() directly, never main() — render the same picture as everything else.
+    theme: str = "dark",
+    shot: str = "follow",
     room_size: float | None = None,
-    cam_dir: tuple[float, float, float] = (0.9, 0.35, 1.0),
+    cam_dir: tuple[float, float, float] = (0.85, 0.30, 1.0),
     cam_dist: float = 1.15,
     fov: float = 40.0,
     track: bool = False,
     drone_frac: float = 0.22,
     cam_above: float = 0.30,
-    track_smooth: int = 25,
+    track_smooth: int = 20,
     track_amount: float = 1.0,
-    subject_y: float = -0.08,
-    max_drift: float = 0.30,
+    subject_y: float = -0.06,
+    max_drift: float = 0.26,
     frame_height: float | None = None,
     aim: tuple[float, float, float] | None = None,
     aim_z: float | None = None,
-    backdrop: str = "room",
     grid_pitch: float | None = None,
     grid_minor: float | None = None,
     fog: tuple[float, float] | None = None,
-    key_dir: tuple[float, float, float] | None = None,
-    exposure: float | None = None,
+    key_dir: tuple[float, float, float] | None = (0.22, 1.0, 0.15),
+    exposure: float | None = 0.95,
     room_labels: bool = True,
     scale: float | None = None,
     prop_rate: float = 0.8,
     title: str = "neural-whoop",
-    title_frames: int = 40,
+    title_frames: int = 0,
     stills: list[int] | None = None,
     quiet: bool = False,
 ) -> Path | None:
@@ -210,7 +250,8 @@ def render(
             concept render: apparent size is fixed by construction (``drone_frac`` of the frame
             height in every frame of every clip) and the camera's orientation never changes, so the
             horizon stays put and only the ground parallaxes past.
-        room_size: Greybox room footprint (m); ``None`` -> derived from the flight's own bounds.
+        room_size: Stage-floor footprint (m); ``None`` -> derived from the fog, which is derived
+            from the camera standoff — so the plane always runs past its own fade.
         cam_dir/cam_dist/fov: Fixed camera direction, distance multiplier, lens.
         track: Deprecated spelling of ``shot="tripod"``.
         drone_frac: With ``follow``/``tripod``, the fraction of the frame height the airframe
@@ -229,15 +270,12 @@ def render(
         aim: ``fit`` aim point, sim ``(x, y, z)`` in metres; ``None`` -> the median hero position.
             With a level ``cam_dir`` the camera sits at the aim's height, i.e. dead straight-on.
         aim_z: Aim height only (sim z, m), when ``aim`` is not given.
-        backdrop: ``room`` (the walled greybox) or ``floor`` — a cyclorama with the floor alone,
-            fading into the background under fog. ``floor`` is what stops a room corner or ceiling
-            seam sweeping through a moving shot, while keeping the ground and its contact shadow.
         grid_pitch: Greybox grid pitch (m); ``None`` -> chosen from the shot's own framing, so an
             82 mm airframe lands at roughly one tile instead of 1/12 of a metre square.
         grid_minor: Finer subdivision (m); ``None`` -> ``grid_pitch / 5``, ``0`` -> none.
-        fog: ``(near, far)`` in m for the floor backdrop; ``None`` -> from the camera standoff.
-        key_dir: Sun direction ``(x, y, z)`` in three-frame (Y up); ``None`` -> the Studio's rig.
-            A steep key keeps the cast shadow under the airframe instead of a metre away.
+        fog: ``(near, far)`` in m for the cyclorama; ``None`` -> from the camera standoff.
+        key_dir: Sun direction ``(x, y, z)`` in three-frame (Y up); ``None`` leaves the base rig's
+            aim alone. A steep key keeps the cast shadow under the airframe instead of a metre away.
         exposure: ACES tone-mapping exposure. The scene's light rig is tuned for the wide
             Studio view; a close shot needs the highlights rolled off or the near gridlines
             clip to flat white. ``None`` disables tone mapping entirely (the legacy look).
@@ -264,22 +302,15 @@ def render(
     fps = fps / max(1, stride)
     width, height = (width // 2) * 2, (height // 2) * 2
 
-    page_opts = {
-        "episode": episode, "theme": theme, "camDir": list(cam_dir), "camDist": cam_dist,
-        "propRate": prop_rate, "title": title, "titleFrames": title_frames,
-        "fov": fov, "shot": shot, "track": track, "droneFrac": drone_frac,
-        "camAbove": cam_above, "trackSmooth": track_smooth, "trackAmount": track_amount,
-        "subjectY": subject_y, "maxDrift": max_drift,
-        "frameHeight": frame_height, "aimZ": aim_z, "roomLabels": room_labels,
-        "aim": list(aim) if aim else None,
-        "backdrop": backdrop, "gridPitch": grid_pitch, "gridMinor": grid_minor,
-        "fog": list(fog) if fog else None, "keyDir": list(key_dir) if key_dir else None,
-        "exposure": exposure,
-    }
-    if room_size is not None:
-        page_opts["roomSize"] = room_size
-    if scale is not None:
-        page_opts["scale"] = scale
+    page_opts = page_options(
+        episode=episode, theme=theme, cam_dir=cam_dir, cam_dist=cam_dist, prop_rate=prop_rate,
+        title=title, title_frames=title_frames, fov=fov, shot=shot, track=track,
+        drone_frac=drone_frac, cam_above=cam_above, track_smooth=track_smooth,
+        track_amount=track_amount, subject_y=subject_y, max_drift=max_drift,
+        frame_height=frame_height, aim_z=aim_z, room_labels=room_labels, aim=aim,
+        grid_pitch=grid_pitch, grid_minor=grid_minor, fog=fog,
+        key_dir=key_dir, exposure=exposure, room_size=room_size, scale=scale,
+    )
 
     httpd, base = _serve(WEB_ROOT)
     try:
@@ -357,10 +388,6 @@ def main() -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--replay", required=True, help="replay.json[.gz] to render")
     p.add_argument("--out", required=True, help="output .mp4")
-    p.add_argument("--preset", choices=sorted(PRESETS), default="none",
-                   help="a named look — a bundle of the flags below. 'hero' is the standardized "
-                        "concept/product shot (follow rig, cyclorama floor, scale-matched grid, "
-                        "steep key). Anything you pass explicitly still wins")
     p.add_argument("--width", type=int, default=1920)
     p.add_argument("--height", type=int, default=1080)
     p.add_argument("--fps", type=float, default=None, help="default: the replay's control_hz")
@@ -372,7 +399,9 @@ def main() -> int:
                    help="fit: locked off, whole flight in frame. tripod: fixed position, pans to "
                         "follow. follow: constant offset from a smoothed subject track — the "
                         "standardized hero rig (fixed apparent size, fixed horizon)")
-    p.add_argument("--room-size", type=float, default=None, help="greybox room footprint (m)")
+    p.add_argument("--room-size", type=float, default=None,
+                   help="stage-floor footprint in m (default: derived from the fog, so the plane "
+                        "always runs past its own fade)")
     p.add_argument("--cam-dir", help="fixed camera direction (three-frame)")
     p.add_argument("--cam-dist", type=float,
                    help="pull-back on the exact box fit (1.0 = the flight touches the frame edges)")
@@ -398,9 +427,6 @@ def main() -> int:
                    help="--shot fit: aim point as sim x,y,z (m) — default the median hero position")
     p.add_argument("--aim-z", type=float, default=None,
                    help="--shot fit: sim-z the shot is centred on (default: the flight's centre)")
-    p.add_argument("--backdrop", choices=["room", "floor"],
-                   help="room: the walled greybox. floor: a cyclorama — floor only, fading out "
-                        "under fog, so no wall corner or ceiling seam sweeps through the shot")
     p.add_argument("--grid-pitch", type=float,
                    help="greybox grid pitch in m (default: chosen from the shot's own framing, so "
                         "the airframe reads as about one tile)")
@@ -428,16 +454,24 @@ def main() -> int:
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args()
 
-    # Resolve the look: an explicit flag wins, else the preset, else the plain default. The
-    # preset-able flags all declare no argparse default, so `None` here means "you didn't say".
-    look = {**LOOK_DEFAULTS, **PRESETS[a.preset]}
+    # Resolve the look: an explicit flag wins, else the standard value. Every look flag declares
+    # NO argparse default, so `None` here means "you didn't say" — a flag with its own default
+    # would silently outrank VIDEO_LOOK and nothing would notice. Pinned by
+    # tests/test_video_look.py::test_every_look_flag_declares_no_argparse_default.
+    look = dict(VIDEO_LOOK)
     for key, value in look.items():
         if getattr(a, key) is None:
             setattr(a, key, value)
     if a.track and a.shot == "fit":
         a.shot = "tripod"
 
-    vec = lambda s: tuple(float(v) for v in str(s).split(",")) if s else None   # noqa: E731
+    def vec(s):
+        """A 3-vector from either `--flag x,y,z` or a VIDEO_LOOK tuple that fell through."""
+        if not s:
+            return None
+        if isinstance(s, (tuple, list)):
+            return tuple(float(v) for v in s)
+        return tuple(float(v) for v in str(s).split(","))
 
     render(
         Path(a.replay), Path(a.out),
@@ -448,7 +482,7 @@ def main() -> int:
         track_smooth=a.track_smooth, track_amount=a.track_amount,
         subject_y=a.subject_y, max_drift=a.max_drift,
         frame_height=a.frame_height, aim_z=a.aim_z, room_labels=a.room_labels,
-        backdrop=a.backdrop, grid_pitch=a.grid_pitch, grid_minor=a.grid_minor,
+        grid_pitch=a.grid_pitch, grid_minor=a.grid_minor,
         fog=vec(a.fog), key_dir=vec(a.key_dir), exposure=a.exposure,
         aim=vec(a.aim),
         scale=a.scale, prop_rate=a.prop_rate, title=a.title, title_frames=a.title_frames,

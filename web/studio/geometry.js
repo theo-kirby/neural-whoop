@@ -129,7 +129,7 @@ export function chooseGridPitch(span, want = 5) {
 // gridlines every `pitch` metres, optional finer `minor` lines inside them, intersection dots at
 // the half-pitch, and "<pitch>" / "PROTOTYPE" labels baked along the lines. `palette`
 // (tileA/tileB/line/dot/label, optional minorLine) themes it; `repeatX`/`repeatY` tile it to cover
-// a face (per-axis so walls stay square when height != footprint). All feature sizes are fractions
+// the surface (per-axis, though the only surface left is the square floor). All feature sizes are fractions
 // of the block, so a 5 cm grid looks exactly like a 1 m grid, just smaller. Returns a
 // THREE.CanvasTexture (RepeatWrapping, sRGB).
 function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, labels = true,
@@ -194,47 +194,33 @@ function greyboxTexture(palette = FALLBACK_TILE, repeatX = 1, repeatY = 1, label
   return tex;
 }
 
-// A bounded reference room (sim frame): a `size`×`size` footprint × `height` tall greybox resting on
-// z=floorZ, tiled into "prototype map" squares at `pitch` metres (see greyboxTexture). Returns a
-// THREE.Group (added under `world`) holding:
-//   - a FRONT-facing (DoubleSide) floor plane just above z=floorZ — the surface people read, so its
-//     baked "PROTOTYPE" / pitch text reads correctly (not mirrored);
-//   - the four walls + ceiling as a BackSide box, so near walls cull and never occlude the drone
-//     (hovering inside) as you orbit. Per-face texture repeats keep every square `pitch` even when
-//     the height differs from the footprint. `walls: false` builds the floor ALONE — the cyclorama
-//     backdrop the concept renders use, where scene fog fades the ground out instead of a wall, so
-//     no room corner or ceiling seam ever sweeps through a moving shot. Dispose the whole group
-//     (geometry + per-face textures) to tear it down.
-export function buildRoom(world, { size = 10, height = size, floorZ = 0, palette = FALLBACK_TILE,
-                                   labels = true, pitch = 1, minor = 0, walls = true } = {}) {
+// The stage floor (sim frame): a single `size`×`size` greybox plane resting on z=floorZ, tiled into
+// "prototype map" squares at `pitch` metres (see greyboxTexture). Returns a THREE.Group (added
+// under `world`) holding one FRONT-facing (DoubleSide) plane a hair above z=floorZ — the surface
+// people read, so its baked "PROTOTYPE" / pitch text reads correctly rather than mirrored. Dispose
+// the group (geometry + texture) to tear it down.
+//
+// There are no walls and no ceiling, anywhere, in any view. This used to be a bounded room with a
+// BackSide box over it and a `walls: false` escape hatch for the concept renders; the box is gone
+// because a corner or a ceiling seam sweeping through a moving frame was the single biggest thing
+// that made a travelling shot read as wrong, and keeping two backdrops meant the Studio and the
+// video could drift apart. The floor alone, run out past the scene fog (environment.js::setStage
+// sizes it from the fade), is a cyclorama: the ground and its contact shadow are still there, so
+// the drone is visibly IN a place, and nothing bounds the frame.
+export function buildStageFloor(world, { size = 10, floorZ = 0, palette = FALLBACK_TILE,
+                                         labels = true, pitch = 1, minor = 0 } = {}) {
   const group = new THREE.Group();
-  const rH = size / (2 * pitch), rV = height / (2 * pitch);   // block is 2·pitch -> repeat = m/block
-  const grid = { pitch, minor };
+  const repeat = size / (2 * pitch);          // block is 2·pitch -> repeat = metres / block
 
-  // Floor: its own DoubleSide plane (sim XY, normal +Z), sitting a hair above the box bottom face
-  // so there's no z-fight and the readable text isn't on a mirrored BackSide.
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
-    new THREE.MeshStandardMaterial(
-      { map: greyboxTexture(palette, rH, rH, labels, grid), roughness: 1, metalness: 0, side: THREE.DoubleSide }));
+    new THREE.MeshStandardMaterial({
+      map: greyboxTexture(palette, repeat, repeat, labels, { pitch, minor }),
+      roughness: 1, metalness: 0, side: THREE.DoubleSide,
+    }));
   floor.position.set(0, 0, floorZ + 0.003);
   floor.receiveShadow = true;
   group.add(floor);
-
-  if (walls) {
-    // Walls + ceiling: a BackSide box. BoxGeometry(size,size,height) face order is
-    // [+X,-X,+Y,-Y,+Z,-Z]; ±X/±Y are walls (repeat height×footprint / footprint×height), ±Z the
-    // ceiling/floor faces (footprint×footprint). The -Z face is hidden under the floor plane above.
-    // The walls are NEVER labelled: seen from inside, a BackSide face flips U, so half of them
-    // rendered the baked text in mirror writing. The floor is the surface that carries the scale.
-    const wall = (rx, ry) => new THREE.MeshStandardMaterial(
-      { map: greyboxTexture(palette, rx, ry, false, grid), roughness: 1, metalness: 0, side: THREE.BackSide });
-    const mats = [wall(rV, rH), wall(rV, rH), wall(rH, rV), wall(rH, rV), wall(rH, rH), wall(rH, rH)];
-    const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, height), mats);
-    box.position.set(0, 0, floorZ + height / 2);
-    box.receiveShadow = true;
-    group.add(box);
-  }
 
   world.add(group);
   return group;

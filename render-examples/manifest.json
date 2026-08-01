@@ -1,0 +1,621 @@
+{
+  "generator": "scripts/render_examples.py",
+  "video_args": [
+    "--width",
+    "1080",
+    "--height",
+    "1080"
+  ],
+  "kinds": {
+    "reference": "the hand-authored trajectory alone \u2014 no policy and no simulator",
+    "policy": "what the trained policy actually flew (the zero-RSI eval twin)",
+    "comparison": "both in one frame: ghost reference + solid policy, camera on the reference"
+  },
+  "publish": {
+    "size": 720,
+    "crf": 26,
+    "note": "the checked-in clips are 720x720 CRF-26 transcodes; the 1080x1080 masters stay in runs/"
+  },
+  "note": "One framing plan per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips. All three replays are cut from the one overlay, so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size, same horizon.",
+  "maneuvers": [
+    {
+      "maneuver": "flip",
+      "note": "the v2 arm \u2014 the one that completes the maneuver",
+      "policy_run": "runs/reference_track_flip_v2/replay.json.gz",
+      "policy_config": "configs/reference_track_flip_v2_eval.yaml",
+      "reference": "runs/reference/flip_roll_z09_deployable/reference.json",
+      "framing_plan": {
+        "maneuver": "flip",
+        "separation_m": 0.5449,
+        "drone_frac": 0.1374,
+        "render_scale_m": 0.246,
+        "glyph_scale_x": 3.0,
+        "airframe_m": 0.082,
+        "track_smooth": 20,
+        "track_smooth_reason": "the standard look's track_smooth (20)",
+        "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+      },
+      "tracking": {
+        "completed_fraction": 1.0,
+        "policy_ended": "max_steps",
+        "pos_err_m_mean": 0.4199,
+        "att_err_deg_mean": 2.4378,
+        "rate_err_rps_mean": 0.288,
+        "max_separation_m": 0.5449,
+        "reference_steps": 110,
+        "compared_steps": 110,
+        "phases_never_reached": []
+      },
+      "clips": [
+        {
+          "video": "flip_maneuver_reference.mp4",
+          "title": "flip maneuver reference video",
+          "maneuver": "flip",
+          "kind": "reference",
+          "kind_is": "the hand-authored trajectory alone \u2014 no policy and no simulator",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/flip_reference.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/flip_reference.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_reference.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.1374",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "flip",
+            "separation_m": 0.5449,
+            "drone_frac": 0.1374,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_reference.mp4",
+          "framing": {
+            "worst_ndc": 0.25,
+            "ndc_x": 0.14,
+            "ndc_y": 0.25,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.11699999999999999,
+            "apparent_size_max_frac": 0.121,
+            "apparent_size_spread": 0.03418803418803422
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "flip_maneuver_policy.mp4",
+          "title": "flip maneuver policy video",
+          "maneuver": "flip",
+          "kind": "policy",
+          "kind_is": "what the trained policy actually flew (the zero-RSI eval twin)",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/flip_policy.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/flip_policy.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_policy.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.1374",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "flip",
+            "separation_m": 0.5449,
+            "drone_frac": 0.1374,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_policy.mp4",
+          "framing": {
+            "worst_ndc": 0.22,
+            "ndc_x": 0.17,
+            "ndc_y": 0.22,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.11800000000000001,
+            "apparent_size_max_frac": 0.122,
+            "apparent_size_spread": 0.03389830508474564
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "flip_maneuver_comparison.mp4",
+          "title": "flip maneuver comparison video",
+          "maneuver": "flip",
+          "kind": "comparison",
+          "kind_is": "both in one frame: ghost reference + solid policy, camera on the reference",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/flip_overlay.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/flip_overlay.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_comparison.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.1374",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "flip",
+            "separation_m": 0.5449,
+            "drone_frac": 0.1374,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/flip_maneuver_comparison.mp4",
+          "framing": {
+            "worst_ndc": 0.66,
+            "ndc_x": 0.23,
+            "ndc_y": 0.66,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.11699999999999999,
+            "apparent_size_max_frac": 0.121,
+            "apparent_size_spread": 0.03418803418803422
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        }
+      ]
+    },
+    {
+      "maneuver": "swing",
+      "note": "flatness-authored, no shoot; closes on its own start point at machine precision",
+      "policy_run": "runs/reference_track_swing/replay.json.gz",
+      "policy_config": "configs/reference_track_swing_eval.yaml",
+      "reference": "runs/reference/swing_roll/reference.json",
+      "framing_plan": {
+        "maneuver": "swing",
+        "separation_m": 0.2014,
+        "drone_frac": 0.3717,
+        "render_scale_m": 0.246,
+        "glyph_scale_x": 3.0,
+        "airframe_m": 0.082,
+        "track_smooth": 20,
+        "track_smooth_reason": "the standard look's track_smooth (20)",
+        "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+      },
+      "tracking": {
+        "completed_fraction": 1.0,
+        "policy_ended": "max_steps",
+        "pos_err_m_mean": 0.1136,
+        "att_err_deg_mean": 1.9221,
+        "rate_err_rps_mean": 0.1198,
+        "max_separation_m": 0.2014,
+        "reference_steps": 268,
+        "compared_steps": 268,
+        "phases_never_reached": []
+      },
+      "clips": [
+        {
+          "video": "swing_maneuver_reference.mp4",
+          "title": "swing maneuver reference video",
+          "maneuver": "swing",
+          "kind": "reference",
+          "kind_is": "the hand-authored trajectory alone \u2014 no policy and no simulator",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/swing_reference.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/swing_reference.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_reference.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.3717",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "swing",
+            "separation_m": 0.2014,
+            "drone_frac": 0.3717,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_reference.mp4",
+          "framing": {
+            "worst_ndc": 0.49,
+            "ndc_x": 0.49,
+            "ndc_y": 0.45,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.307,
+            "apparent_size_max_frac": 0.34700000000000003,
+            "apparent_size_spread": 0.13029315960912063
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "swing_maneuver_policy.mp4",
+          "title": "swing maneuver policy video",
+          "maneuver": "swing",
+          "kind": "policy",
+          "kind_is": "what the trained policy actually flew (the zero-RSI eval twin)",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/swing_policy.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/swing_policy.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_policy.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.3717",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "swing",
+            "separation_m": 0.2014,
+            "drone_frac": 0.3717,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_policy.mp4",
+          "framing": {
+            "worst_ndc": 0.49,
+            "ndc_x": 0.49,
+            "ndc_y": 0.46,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.306,
+            "apparent_size_max_frac": 0.34700000000000003,
+            "apparent_size_spread": 0.13398692810457521
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "swing_maneuver_comparison.mp4",
+          "title": "swing maneuver comparison video",
+          "maneuver": "swing",
+          "kind": "comparison",
+          "kind_is": "both in one frame: ghost reference + solid policy, camera on the reference",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/swing_overlay.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/swing_overlay.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_comparison.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.3717",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "20"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "swing",
+            "separation_m": 0.2014,
+            "drone_frac": 0.3717,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 20,
+            "track_smooth_reason": "the standard look's track_smooth (20)",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": -11,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/swing_maneuver_comparison.mp4",
+          "framing": {
+            "worst_ndc": 0.71,
+            "ndc_x": 0.49,
+            "ndc_y": 0.71,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.307,
+            "apparent_size_max_frac": 0.34700000000000003,
+            "apparent_size_spread": 0.13029315960912063
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        }
+      ]
+    },
+    {
+      "maneuver": "orbit",
+      "note": "the first genuinely 3D maneuver; needs the post-fix rate loop and track_smooth 6",
+      "policy_run": "runs/reference_track_orbit/replay.json.gz",
+      "policy_config": "configs/reference_track_orbit_eval.yaml",
+      "reference": "runs/reference/orbit_z_fixed/reference.json",
+      "framing_plan": {
+        "maneuver": "orbit",
+        "separation_m": 0.3171,
+        "drone_frac": 0.2361,
+        "render_scale_m": 0.246,
+        "glyph_scale_x": 3.0,
+        "airframe_m": 0.082,
+        "track_smooth": 6,
+        "track_smooth_reason": "0.898 s revolution vs the look's +-0.4 s smoothing window: at track_smooth 20 the smoothed track collapses to the circle's centre and the follow rig degenerates into a tripod (apparent size swings 117%). 6 is +-0.12 s, ~13% of a revolution.",
+        "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+      },
+      "tracking": {
+        "completed_fraction": 1.0,
+        "policy_ended": "max_steps",
+        "pos_err_m_mean": 0.1718,
+        "att_err_deg_mean": 6.8231,
+        "rate_err_rps_mean": 0.1833,
+        "max_separation_m": 0.3171,
+        "reference_steps": 223,
+        "compared_steps": 223,
+        "phases_never_reached": []
+      },
+      "clips": [
+        {
+          "video": "orbit_maneuver_reference.mp4",
+          "title": "orbit maneuver reference video",
+          "maneuver": "orbit",
+          "kind": "reference",
+          "kind_is": "the hand-authored trajectory alone \u2014 no policy and no simulator",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/orbit_reference.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_reference.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_reference.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.2361",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "6"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "orbit",
+            "separation_m": 0.3171,
+            "drone_frac": 0.2361,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 6,
+            "track_smooth_reason": "0.898 s revolution vs the look's +-0.4 s smoothing window: at track_smooth 20 the smoothed track collapses to the circle's centre and the follow rig degenerates into a tripod (apparent size swings 117%). 6 is +-0.12 s, ~13% of a revolution.",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_reference.mp4",
+          "framing": {
+            "worst_ndc": 0.26,
+            "ndc_x": 0.26,
+            "ndc_y": 0.22,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.20199999999999999,
+            "apparent_size_max_frac": 0.209,
+            "apparent_size_spread": 0.03465346534653462
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "orbit_maneuver_policy.mp4",
+          "title": "orbit maneuver policy video",
+          "maneuver": "orbit",
+          "kind": "policy",
+          "kind_is": "what the trained policy actually flew (the zero-RSI eval twin)",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/orbit_policy.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_policy.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_policy.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.2361",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "6"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "orbit",
+            "separation_m": 0.3171,
+            "drone_frac": 0.2361,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 6,
+            "track_smooth_reason": "0.898 s revolution vs the look's +-0.4 s smoothing window: at track_smooth 20 the smoothed track collapses to the circle's centre and the follow rig degenerates into a tripod (apparent size swings 117%). 6 is +-0.12 s, ~13% of a revolution.",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_policy.mp4",
+          "framing": {
+            "worst_ndc": 0.26,
+            "ndc_x": 0.26,
+            "ndc_y": 0.22,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.20199999999999999,
+            "apparent_size_max_frac": 0.209,
+            "apparent_size_spread": 0.03465346534653462
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        },
+        {
+          "video": "orbit_maneuver_comparison.mp4",
+          "title": "orbit maneuver comparison video",
+          "maneuver": "orbit",
+          "kind": "comparison",
+          "kind_is": "both in one frame: ghost reference + solid policy, camera on the reference",
+          "replay": "/home/theo/neural-whoop/runs/render_examples/orbit_overlay.json.gz",
+          "command": [
+            "/home/theo/neural-whoop/.venv/bin/python3",
+            "/home/theo/neural-whoop/scripts/capture_video.py",
+            "--replay",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_overlay.json.gz",
+            "--out",
+            "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_comparison.mp4",
+            "--width",
+            "1080",
+            "--height",
+            "1080",
+            "--drone-frac",
+            "0.2361",
+            "--scale",
+            "0.246",
+            "--track-smooth",
+            "6"
+          ],
+          "args": [
+            "--width",
+            "1080",
+            "--height",
+            "1080"
+          ],
+          "framing_plan": {
+            "maneuver": "orbit",
+            "separation_m": 0.3171,
+            "drone_frac": 0.2361,
+            "render_scale_m": 0.246,
+            "glyph_scale_x": 3.0,
+            "airframe_m": 0.082,
+            "track_smooth": 6,
+            "track_smooth_reason": "0.898 s revolution vs the look's +-0.4 s smoothing window: at track_smooth 20 the smoothed track collapses to the circle's centre and the follow rig degenerates into a tripod (apparent size swings 117%). 6 is +-0.12 s, ~13% of a revolution.",
+            "note": "one framing per maneuver, derived from that maneuver's COMPARISON shot and reused by all three of its clips \u2014 so the reference clip is literally the comparison with the policy removed: same camera path, same airframe size"
+          },
+          "returncode": 0,
+          "output_path": "/home/theo/neural-whoop/runs/render_examples/orbit_maneuver_comparison.mp4",
+          "framing": {
+            "worst_ndc": 0.46,
+            "ndc_x": 0.46,
+            "ndc_y": 0.31,
+            "left_frame": false,
+            "apparent_size_min_frac": 0.20199999999999999,
+            "apparent_size_max_frac": 0.209,
+            "apparent_size_spread": 0.03465346534653462
+          },
+          "note": "One render entry point and one look: every MP4 in this repo comes out of this invocation, so the clips are comparable pictures rather than separate tunes. framing.worst_ndc is the worst distance from frame centre over EVERY drone (1.0 = the frame edge); apparent_size_spread is how much the subject's on-screen height varied (a follow rig should be ~flat)."
+        }
+      ]
+    }
+  ],
+  "published": [
+    "flip_maneuver_reference.mp4",
+    "flip_maneuver_policy.mp4",
+    "flip_maneuver_comparison.mp4",
+    "swing_maneuver_reference.mp4",
+    "swing_maneuver_policy.mp4",
+    "swing_maneuver_comparison.mp4",
+    "orbit_maneuver_reference.mp4",
+    "orbit_maneuver_policy.mp4",
+    "orbit_maneuver_comparison.mp4"
+  ]
+}

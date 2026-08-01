@@ -9,6 +9,16 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+// The key light's direction, as a three-frame (Y up) vector. STEEP on purpose: the old rig sat at
+// (10, 18, 7), i.e. 0.68 of its altitude sideways, which at 1.5 m up throws an 82 mm drone's shadow
+// a full metre clear of it — so the shadow reads as a second object instead of as ground contact.
+// 0.22/0.15 of the altitude puts it under the airframe. environment.js re-exports this as
+// STAGE_LOOK.keyDir so the video look and the Studio cannot pick different suns.
+export const KEY_DIR = [0.22, 1.0, 0.15];
+//: How far along KEY_DIR the sun is parked (m). Only the direction matters to a DirectionalLight;
+//: the distance just has to clear the scene so the shadow frustum's `near` doesn't cut into it.
+export const KEY_DISTANCE = 20;
+
 // `preserveDrawingBuffer` keeps the colour buffer readable after a render — needed only by the
 // headless capture page (web/capture/), which screenshots the page between explicit render() calls
 // instead of inside a rAF; the Studio leaves it off (the default) so the driver can discard.
@@ -35,10 +45,15 @@ export function createScene(mount, { grid = true, preserveDrawingBuffer = false 
   // `lights` handles), so hold references.
   const hemi = new THREE.HemisphereLight(0xffffff, 0x383838, 1.75);
   scene.add(hemi);
+  // The key. Steep (KEY_DIR) and 2048² shadowed in the BASE rig, not just on the capture page:
+  // both were cinematic-only refinements, and the reason to hoist them is that the Studio and the
+  // video are meant to be the same picture. A 1024² map stretched over a ±30 m ortho gives an
+  // 82 mm drone ~1.4 texels — i.e. no contact shadow at all — which is exactly what made the
+  // dashboard's airframe look pasted over the floor rather than standing on it.
   const sun = new THREE.DirectionalLight(0xffffff, 2.7);
-  sun.position.set(10, 18, 7);
+  sun.position.set(...KEY_DIR).setLength(KEY_DISTANCE);
   sun.castShadow = true;
-  sun.shadow.mapSize.set(1024, 1024);
+  sun.shadow.mapSize.set(2048, 2048);
   sun.shadow.camera.near = 1; sun.shadow.camera.far = 90;
   sun.shadow.camera.left = -30; sun.shadow.camera.right = 30;
   sun.shadow.camera.top = 30; sun.shadow.camera.bottom = -30;
@@ -106,4 +121,41 @@ export function createScene(mount, { grid = true, preserveDrawingBuffer = false 
     scene, camera, renderer, controls, world, resize, render, renderInset, mount, THREE,
     ground, lights: { hemi, sun, fill },
   };
+}
+
+// Aim the key at `focus` and refit its shadow ortho to `extent` metres around it.
+//
+// The default ±30 m ortho is sized for an arena; a true-scale 82 mm airframe inside it is a couple
+// of texels, so the contact shadow — the thing that sells the drone as being ON the floor — simply
+// isn't resolved. Refitting the frustum to the flight is what buys it back. Only the drone casts
+// (the floor is receive-only), so the ortho only ever has to cover the subject, not the stage.
+//
+// `roomSize` caps the extent: a frustum wider than the floor is spending texels on nothing.
+export function configureKeyLight(view, { dir = KEY_DIR, focus, extent = 1.0, roomSize = 40 } = {}) {
+  const sun = view.lights.sun;
+  if (dir && focus) {
+    sun.target.position.copy(focus);
+    view.scene.add(sun.target);          // an unparented target is never updated by three.js
+    sun.position.copy(focus).add(
+      new THREE.Vector3(...dir).normalize().multiplyScalar(KEY_DISTANCE));
+  }
+  const h = Math.min(Math.max(extent, 1.0), roomSize * 0.75);
+  sun.shadow.camera.left = -h; sun.shadow.camera.right = h;
+  sun.shadow.camera.top = h; sun.shadow.camera.bottom = -h;
+  sun.shadow.camera.near = 0.5; sun.shadow.camera.far = 120;
+  sun.shadow.camera.updateProjectionMatrix();
+  sun.shadow.normalBias = 0.002;   // ~2 mm, scaled to a true-size airframe (kills acne, not contact)
+  sun.shadow.map?.dispose();
+  sun.shadow.map = null;           // force a rebuild at the current mapSize
+  return sun;
+}
+
+// ACES tone mapping at `exposure`. The light rig is tuned for a wide view; close up, the light
+// theme's near-white gridlines already sit at the top of the range and clip to flat white a metre
+// from the lens. Rolling the highlights off keeps the grid readable and gives the chassis's
+// plastics some shape. `null` disables tone mapping entirely (the legacy, ungraded look).
+export function setToneMapping(renderer, exposure) {
+  renderer.toneMapping = exposure === null || exposure === undefined
+    ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
+  if (exposure !== null && exposure !== undefined) renderer.toneMappingExposure = exposure;
 }

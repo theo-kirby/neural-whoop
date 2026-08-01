@@ -131,20 +131,24 @@ full population) and the training path stays render-free. The same JSON shape fe
 capturer**: `web/capture/` + `scripts/capture_video.py` (the `capture` extra: playwright +
 imageio-ffmpeg). The capture page is *not* a second renderer — it imports the Studio's own
 `scene.js` / `environment.js` / `geometry.js` / `drone-model.js` / `playback.js`, so the video is
-the dashboard's look (CAD chassis, greybox room) and cannot drift; what it adds is the cinematic
+the dashboard's look (CAD chassis, greybox stage) and cannot drift; what it adds is the cinematic
 mode: clean full frame, a precomputed camera track (`--shot fit|tripod|follow`), **true-scale**
 airframe (82 mm, vs the Studio's ~7× hero glyph), spinning props, and title/phase captions.
-**`--preset hero` is the standardized concept shot** — the same invocation gives the same picture on
-any replay, because everything that would otherwise be tuned per clip is derived: `follow` holds a
+**There is ONE environment and ONE look, and both are the default** (`video/look.py::VIDEO_LOOK`,
+`environment.js::STAGE_LOOK` + `setStage`) — the same invocation gives the same picture on any
+replay, because everything that would otherwise be tuned per clip is derived: `follow` holds a
 constant offset from a smoothed subject track (so apparent size and the horizon are fixed *by
-construction*, vs a tripod's 3× size swing), `--backdrop floor` swaps the walled box for a fogged
-cyclorama (nothing can sweep through frame), the 1 m grid gains a framing-sized fine mesh, and a
-steep key puts the shadow under the airframe. The Python
+construction*, vs a tripod's 3× size swing), the stage is a **fogged cyclorama sized from the
+camera's own standoff** so the floor always runs past its fade and nothing can sweep through frame,
+the 1 m grid gains a framing-sized fine mesh, and a steep key puts the shadow under the airframe.
+The walled greybox room is **gone everywhere**, Studio included — it was a second look that only
+the un-flagged callers ever got. The Python
 driver serves `web/` on loopback, drives headless Chromium (SwiftShader) with `renderFrame(i)` →
 screenshot (the **frame index is the only clock**), and pipes PNGs to ffmpeg — same shape the
 sibling `../nw-viz` Node project had, which is now only a fallback. `scripts/viz.py --video` and
-the Studio's `/api/export` both route through it. `render_depth` is a documented stub for the
-future DiffAero Taichi renderer (deferred — Blackwell camera path).
+the Studio's `/api/export` both route through it, and since the look is `render()`'s own default
+they need no look code at all. `render_depth` is a documented stub for the future DiffAero Taichi
+renderer (deferred — Blackwell camera path).
 
 **Studio (`web/studio/` + `src/neural_whoop/studio/`).** An interactive browser viewer with **two
 tabs** (a sim-to-real pair) and a **draggable scene/sidebar divider** (width persisted):
@@ -246,10 +250,10 @@ step cap against a 110/268/223-step reference, so a full-horizon mean blends the
 hold-station tail — and blends it *differently* for a policy that crashed early than for one that
 survived. `scripts/reference_vs_policy.py` is what reports over the window.
 
-**Reference vs policy in ONE frame (`scripts/reference_vs_policy.py`).** Two hero clips side by
-side is the wrong comparison: `--preset hero`'s follow rig derives its camera from each replay's
-*own* track, so a policy that falls out of the sky is chased by its own camera and lands in frame
-looking composed. Instead the authored reference and the policy are merged into a **single replay
+**Reference vs policy in ONE frame (`scripts/reference_vs_policy.py`).** Two separate clips side by
+side is the wrong comparison: the follow rig derives its camera from each replay's *own* track, so
+a policy that falls out of the sky is chased by its own camera and lands in frame looking composed.
+Instead the authored reference and the policy are merged into a **single replay
 with two drones** — no renderer work, since `playback.js` has drawn `episodes[].drones[]` since the
 swarm tasks — with the reference as `drones[0]` (so the camera flies the *ideal* path and deviation
 is visible) drawn as a translucent **ghost** via the new additive per-drone `style` render hint, and
@@ -259,17 +263,37 @@ and `capture.js`'s framing check now measures **every** drone: on the first over
 hero-only check reported a comfortable |NDC| 0.47 while the policy was **3.16 outside the frame** —
 it would have passed a video that hides its own subject.
 
+**The video vocabulary (`video/names.py`) and `render-examples/`.** A clip is named
+`<maneuver> maneuver <kind> video` and nothing else: maneuver ∈ `flip|swing|orbit`, kind ∈
+`reference` (hand-authored, no policy and no simulator) · `policy` (the zero-RSI eval twin) ·
+`comparison` (the two-drone overlay). Filenames follow — `flip_maneuver_reference.mp4`. **"hero" is
+retired from the *video* vocabulary only**: the replay schema's *hero drone* / *hero episode* /
+`heroFrames` / `--n-heroes` mean "the recorded subject drone", are documented in
+`docs/VISUAL_CONTRACT.md`, and deliberately **stay** — do not "finish" the rename into the schema.
+`scripts/render_examples.py` renders the checked-in nine (`render-examples/`, 720²/CRF-26; 1080²
+masters in gitignored `runs/`) — one framing plan per maneuver, derived from that maneuver's
+*comparison* shot and reused by all three of its clips, so the reference clip is literally the
+comparison with the policy removed: same camera path, same airframe size, same horizon.
+
 **Two standing findings from this package, both durable rather than filed in a commit message:**
 
-1. **The reference video contract.** `--preset hero` is the deliverable, not a flag someone typed.
-   The one standard invocation lives in `reference/video.py`, `--video` shells out to it and takes
-   no camera flags, `tests/test_capture_preset.py` pins the preset field by field, and the
-   capturer's framing check (worst |NDC|, apparent-size spread) is captured into `run.json`.
-   *Measured limit:* the orbit stays in frame (|NDC| 0.65) but its apparent size swings **117%** —
-   `hero`'s `track_smooth = 20` is a ±0.4 s window against a 0.898 s revolution, so the smoothed
-   track collapses to the circle's centre and the follow rig degenerates into a tripod.
-   `--track-smooth 6` fixes it (10% spread); the preset is **not** retuned, since that is a decision
-   about every other clip in the repo.
+1. **The video contract — and why a preset was the wrong shape for it.** The look is the
+   deliverable, not a flag someone typed. It was `--preset hero` until 2026-08-01, and that was the
+   bug: `scripts/viz.py` and the Studio's `/api/export` call `capture_video.render()` *directly*,
+   so a CLI flag could never reach them and every clip they made came out in a **different
+   environment** (the walled room) with nothing failing. The look is now `render()`'s own default
+   (`video/look.py::VIDEO_LOOK`); the one invocation lives in `video/render.py` and is **size
+   only** — `--width 1080 --height 1080`, no camera flag; `tests/test_video_look.py` pins the look
+   field by field *and* asserts `render()`'s defaults equal it; and the capturer's framing check
+   (worst |NDC|, apparent-size spread) is recorded into `run.json` / `manifest.json`.
+   The guarantee is no longer "no per-clip flag ever" — a two-drone comparison genuinely needs more
+   framing room, and how much *is* the result — it is **no hand-typed flag ever: every flag is
+   derived from one measured quantity and recorded** (`video/framing.py::FramingPlan`).
+   *Measured limit:* the orbit stays in frame but its apparent size swings **117%** at the standard
+   `track_smooth = 20` — a ±0.4 s window against a 0.898 s revolution, so the smoothed track
+   collapses to the circle's centre and the follow rig degenerates into a tripod. `track_smooth 6`
+   fixes it (10% spread); the *look* is *not* retuned, since that is a decision about every other
+   clip in the repo — the exception lives in `framing.py::TRACK_SMOOTH` with its reason attached.
 2. **DiffAero's vendored rate loop was unstable past 90° of attitude — found here, FIXED
    2026-08-01.** `controller.py` used `R_i2b @ w` as the *measured* body rate while `w` is already
    body-frame, so the closed loop was `ω̇ = K(u − R·ω)` with eigenvalues `−K` and `−K·e^{±iθ}` —
@@ -366,26 +390,33 @@ loop attaches to each empirical node. `scripts/eval.py --record` writes just the
 events → no curves; no `--baseline` → no comparison).
 
 ```bash
-# Hero / concept MP4 — the IN-REPO headless capturer (web/capture/ imports web/studio/'s scene
-# modules verbatim, so the video is the Studio's look). One-time: playwright install chromium.
+# Concept MP4 — the IN-REPO headless capturer (web/capture/ imports web/studio/'s scene modules
+# verbatim, so the video is the Studio's look). One-time: playwright install chromium.
 uv pip install -e '.[capture]'
-# --preset hero is the standardized concept look; run it on ANY replay and get the same picture.
-uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz --out runs/<run>/hero.mp4 \
-    --preset hero --width 1080 --height 1080
+# There is NO --preset: the standardized look is the default, so this is the whole invocation and
+# it gives the same picture on ANY replay.
+uv run python scripts/capture_video.py --replay runs/<run>/replay.json.gz \
+    --out runs/<run>/replay.mp4 --width 1080 --height 1080
 uv run python scripts/viz.py --config configs/gate_race.yaml --from runs/<run>/ckpt_final.pt --no-dr --video
 # The take-off -> hover -> flip -> land concept sequence. BOTH halves are shipped policies: the
 # deployed 1.0 m hover_tof policy owns take-off/hover/land, trained acro_flip owns the flip.
 # Why `follow` and not a locked-off or tripod camera: a fixed frame holding the whole flight caps an
 # 82 mm drone at ~7% of frame height, and a tripod that pans to follow lets it balloon 6.7 -> 20.8%
-# while the room corner sweeps past. Every render prints a framing check (worst |NDC|, 1.0 = frame
-# edge) AND the apparent-size spread, so both are measured rather than eyeballed.
-uv run python scripts/hero_takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
+# while the background sweeps past. Every render prints a framing check (worst |NDC| over EVERY
+# drone, 1.0 = frame edge) AND the apparent-size spread, so both are measured rather than eyeballed.
+uv run python scripts/takeoff_flip_land.py --axis roll --out runs/acro_flip/hero_seq
 uv run python scripts/capture_video.py --replay runs/acro_flip/hero_seq/replay.json.gz \
-    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --preset hero --width 1080 --height 1080
+    --out runs/acro_flip/hero_seq/takeoff_flip_land.mp4 --width 1080 --height 1080
+
+# The nine checked-in example clips (render-examples/): <maneuver> maneuver <kind> video, one
+# derived framing per maneuver shared by all three of its kinds. runs/ is gitignored, so a missing
+# input is reported with the exact command that produces it.
+uv run python scripts/render_examples.py --dry-run          # nine argv lines, render nothing
+uv run python scripts/render_examples.py --publish          # 1080 masters + the 720 checked-in copies
 
 # The HAND-AUTHORED reference maneuvers — "this is the one we want", as data, not a rollout
 # (docs/REFERENCE_MANEUVER.md). Pure numpy: no policy, no training, no simulator in the loop.
-# --video takes NO camera flags: it shells out to the one standard hero invocation.
+# --video takes NO camera flags: it shells out to the one standard invocation.
 uv run python scripts/reference_maneuver.py --maneuver swing --out runs/reference/swing_roll --video
 uv run python scripts/reference_maneuver.py --maneuver orbit --out runs/reference/orbit_z  --video
 uv run python scripts/reference_maneuver.py --maneuver flip --z-entry 0.9 \

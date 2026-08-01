@@ -28,12 +28,14 @@ mechanisms:
 
 Outputs ``replay.json.gz`` (the **video** artifact, 50 Hz), ``reference.json`` (the **data**
 artifact, 1 kHz), ``reference_telemetry.png``, ``reference_envelope.png``, ``verify.json`` and
-``run.json`` — plus, with ``--video``, the MP4.
+``run.json`` — plus, with ``--video``, the **``<maneuver>`` maneuver reference video**
+(``flip_maneuver_reference.mp4`` and friends; see ``neural_whoop.video.names``).
 
-**``--video`` takes no flags on purpose.** It shells out to the one standardized invocation
-(``--preset hero --width 1080 --height 1080``, see ``neural_whoop.reference.video``) so no per-clip
-camera tuning can creep in and the three maneuvers stay comparable *pictures*. The framing check the
-capturer prints is captured into ``run.json`` rather than left in a terminal scrollback.
+**``--video`` takes no camera flags on purpose.** It shells out to the one standardized invocation
+(``--width 1080 --height 1080`` and nothing else, see ``neural_whoop.video.render``) — the look is
+the renderer's own default, so no per-clip tuning can creep in and the three maneuvers stay
+comparable *pictures*. The framing check the capturer prints is captured into ``run.json`` rather
+than left in a terminal scrollback.
 
 ``scripts/reference_flip.py`` remains as a thin alias for the flip, so every command already
 documented keeps working.
@@ -53,9 +55,8 @@ from neural_whoop.reference.maneuvers import FlipSpec, ManeuverSpec, RateEnvelop
 from neural_whoop.reference.maneuvers_orbit import OrbitSpec
 from neural_whoop.reference.maneuvers_swing import SwingSpec
 from neural_whoop.reference.model import RefModel
-from neural_whoop.reference.video import HERO_VIDEO_ARGS, render_hero_video
-
-MANEUVERS = ("flip", "swing", "orbit")
+from neural_whoop.video.names import MANEUVERS
+from neural_whoop.video.render import BASE_VIDEO_ARGS, render_video
 
 
 def build_spec(args) -> ManeuverSpec:
@@ -103,9 +104,11 @@ def run_meta(args, spec: ManeuverSpec, model: RefModel, extra: dict | None = Non
         "spec": {k: v for k, v in vars(spec).items()},
         "model": model.to_dict(),
         "video_contract": {
-            "args": list(HERO_VIDEO_ARGS),
-            "note": ("every reference maneuver's MP4 comes out of this one invocation, so the "
-                     "clips are comparable pictures rather than separate camera tunes"),
+            "args": list(BASE_VIDEO_ARGS),
+            "note": ("every MP4 in this repo comes out of this one invocation — size only, no "
+                     "camera flag, because the look is the renderer's default "
+                     "(neural_whoop.video.look.VIDEO_LOOK). The clips are therefore comparable "
+                     "pictures rather than separate camera tunes"),
         },
         **(extra or {}),
     }
@@ -146,8 +149,9 @@ def add_arguments(ap: argparse.ArgumentParser, *, maneuver_flag: bool = True) ->
     ap.add_argument("--dt-replay", type=float, default=0.02, help="replay step (s)")
     ap.add_argument("--no-charts", action="store_true", help="skip the PNGs (no viz extra needed)")
     ap.add_argument("--video", action="store_true",
-                    help="also render the MP4 through the STANDARD hero invocation "
-                         f"({' '.join(HERO_VIDEO_ARGS)}). Takes no camera flags on purpose")
+                    help="also render the <maneuver> maneuver REFERENCE video through the standard "
+                         f"invocation ({' '.join(BASE_VIDEO_ARGS)}). Takes no camera flags on "
+                         "purpose — the look is the renderer's default")
     ap.add_argument("--out", default=None, help="output dir (default: runs/reference/<name>)")
     # --- flip ---------------------------------------------------------------------------
     ap.add_argument("--axis", choices=["roll", "pitch"], default="roll", help="flip: rotation axis")
@@ -314,14 +318,18 @@ def generate(args) -> int:
     # --- the video, through the ONE standard invocation ------------------------------------
     video = None
     if args.video:
-        print(f"\n[video] the reference video contract: {' '.join(HERO_VIDEO_ARGS)}")
-        video = render_hero_video(replay_path, out / f"reference_{spec.name}.mp4")
+        print(f"\n[video] the video contract: {' '.join(BASE_VIDEO_ARGS)} (no camera flags)")
+        # No framing plan here: a reference generated on its own has no policy to be separated
+        # from, so the standard single-subject framing is the right one. The per-maneuver plan
+        # that render-examples/ ships comes from the COMPARISON shot — see
+        # neural_whoop.video.framing and scripts/render_examples.py.
+        video = render_video(replay_path, out, maneuver=spec.name, kind="reference")
         fr = video.get("framing") or {}
         if fr.get("left_frame"):
-            print(f"[video] FRAMING FAILURE: worst |NDC| {fr.get('worst_ndc')} — the hero preset "
+            print(f"[video] FRAMING FAILURE: worst |NDC| {fr.get('worst_ndc')} — the standard look "
                   f"could not hold this shot. Report the measurement and the fallback taken "
-                  f"(--drone-frac, then --max-drift, then --shot fit); do NOT silently retune the "
-                  f"preset.", file=sys.stderr)
+                  f"(--drone-frac, then --max-drift, then --track-smooth, then --shot fit); do NOT "
+                  f"silently retune the look.", file=sys.stderr)
         elif fr:
             print(f"[video] framing: worst |NDC| {fr['worst_ndc']:.2f}, apparent size "
                   f"{fr.get('apparent_size_min_frac', 0)*100:.1f}-"

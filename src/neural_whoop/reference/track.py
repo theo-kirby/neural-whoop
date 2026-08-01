@@ -14,7 +14,7 @@ Two decisions live here rather than in the task, because they are properties of 
 the maneuver — a ``CLIMB`` from the floor, a ``HOVER`` beat, a ``LAND`` — because it is also a
 video. Training a policy to fly those is a different (and already-solved) problem: the deploy split
 has the ``hover_tof`` policy own take-off/hover/land and the acro policy own the bounded maneuver
-window, and ``scripts/hero_takeoff_flip_land.py`` stitches exactly that handoff. So the default
+window, and ``scripts/takeoff_flip_land.py`` stitches exactly that handoff. So the default
 window drops the phases named in :data:`STAGECRAFT_PHASES`, which picks out the right beats for all
 three shipped maneuvers without naming any of them:
 

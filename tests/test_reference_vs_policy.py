@@ -19,6 +19,10 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import reference_vs_policy as rvp  # noqa: E402
 
+# The framing constants moved out of the script into the video package (they used to be
+# hand-copied out of the camera preset, with nothing cross-checking the two). The geometry the
+# tests below assert is unchanged — only where the numbers live.
+from neural_whoop.video.framing import AIRFRAME_M, GLYPH_SCALE, SUBJECT_Y  # noqa: E402
 from neural_whoop.viz.replay import REPLAY_FORMAT, REPLAY_VERSION, RunRecorder, load_run  # noqa: E402
 
 
@@ -162,16 +166,16 @@ def test_phases_never_reached_names_where_the_policy_stopped(tmp_path, refs):
 def test_derived_framing_actually_keeps_both_drones_inside_the_frame(tmp_path):
     """The framing is derived from the measured separation, not tuned per clip — so check it works.
 
-    ``--preset hero`` frames ONE subject at 22 % of frame height (~0.37 m of world). An overlay
+    The standard look frames ONE subject at 22 % of frame height (~0.37 m of world). An overlay
     whose drones separate by a metre needs ~6x that, and the failure is silent: the clip renders,
     and the drone the comparison exists to show is simply not in it.
     """
     for sep in (0.1, 0.5, 0.925, 2.0):
-        for glyph in (1.0, rvp.GLYPH_SCALE):
+        for glyph in (1.0, GLYPH_SCALE):
             frac = rvp.derive_drone_frac(sep, glyph_scale=glyph)
-            frame_height = rvp.AIRFRAME_M * glyph / frac
+            frame_height = AIRFRAME_M * glyph / frac
             # Where the far drone lands in NDC, given the follow rig's resting subject height.
-            ndc = abs(rvp.HERO_SUBJECT_Y) + sep / (frame_height / 2)
+            ndc = abs(SUBJECT_Y) + sep / (frame_height / 2)
             assert ndc < 1.0, f"sep={sep} glyph={glyph}: worst |NDC| {ndc:.2f} leaves frame"
 
 

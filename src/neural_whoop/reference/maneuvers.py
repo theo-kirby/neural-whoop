@@ -204,7 +204,7 @@ def assert_within_envelope(
 # The flip
 # =============================================================================================
 #: Caption labels for the numeric ``scene.phase`` channel, index == code. Same mechanism
-#: ``scripts/hero_takeoff_flip_land.py`` uses, so ``web/capture/capture.js`` picks these up as
+#: ``scripts/takeoff_flip_land.py`` uses, so ``web/capture/capture.js`` picks these up as
 #: on-screen captions with no renderer change. **The flip's** — every spec now carries its own,
 #: which is what lets one renderer caption three different maneuvers.
 PHASE_LABELS = ["CLIMB", "HOVER", "POP", "ROLL-IN", "COAST", "CATCH", "RECOVER", "LAND"]

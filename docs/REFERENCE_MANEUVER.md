@@ -35,8 +35,8 @@ uv run python scripts/reference_flip.py --axis roll --omega 9.0 --deployable \
 
 Two deliverables, and it matters which is which:
 
-- **`replay.json.gz`** (50 Hz) is the **video** artifact — Studio-playable, and `--preset hero`
-  renders it with *no changes to the capturer*.
+- **`replay.json.gz`** (50 Hz) is the **video** artifact — Studio-playable, and the capturer renders
+  it with *no changes and no flags*.
 - **`reference.json`** (1 kHz) is the **data** artifact — the fine stream, the model verbatim, the
   shooting record with its final residuals, and the headline metrics.
 
@@ -46,23 +46,69 @@ event as a one-frame spike.
 
 ---
 
-## The reference video contract
+## The video contract
 
-`--preset hero` is the **deliverable**, not a flag someone happened to type. Every reference
-maneuver's MP4 comes out of exactly this invocation and no other, so the three clips are
-comparable *pictures* rather than three separate camera tunes that happen to look similar:
+The **look** is the deliverable, not a flag someone happened to type. Every MP4 in this repo comes
+out of exactly this invocation and no other, so the clips are comparable *pictures* rather than
+separately-tuned shots that happen to look similar:
 
 ```
-scripts/capture_video.py --replay <replay.json.gz> --out <out.mp4>
-    --preset hero --width 1080 --height 1080
+scripts/capture_video.py --replay <replay.json.gz> --out <out.mp4> --width 1080 --height 1080
 ```
 
-It is written down once, in `src/neural_whoop/reference/video.py`, and
+Note what is **not** in it: no camera flag at all. This used to read `--preset hero`, and that
+shape was the bug. `scripts/viz.py --video` and the Studio's `/api/export` both call
+`capture_video.render()` *directly in Python* — a CLI flag could never reach them — so every clip
+either of them produced came out in a **walled greybox room** while the reference and comparison
+clips came out on a fogged cyclorama, and nothing failed. The look is now `render()`'s own keyword
+defaults, `src/neural_whoop/video/look.py::VIDEO_LOOK`, so those two files need no look code and
+still render the standard clip.
+
+The invocation is written down once, in `src/neural_whoop/video/render.py`, and
 `scripts/reference_maneuver.py --video` shells out to it. **`--video` takes no camera flags on
-purpose.** `tests/test_capture_preset.py` pins the preset field by field — with the measured reason
-each value has its value — and additionally asserts that every preset-able flag declares *no*
-argparse default, because a flag with its own default would silently outrank the preset and nothing
-else would notice.
+purpose.** `tests/test_video_look.py` pins the look field by field — with the measured reason each
+value has its value — asserts `render()`'s defaults *equal* it, and asserts that every look flag
+declares *no* argparse default, because a flag with its own default would silently outrank
+`VIDEO_LOOK` and nothing else would notice.
+
+### The naming, and one word that is deliberately **not** renamed
+
+A clip is `<maneuver> maneuver <kind> video` — nothing else (`neural_whoop/video/names.py`):
+
+| kind | what is in it |
+|---|---|
+| `reference` | the hand-authored trajectory alone. No policy, no simulator: pure numpy. |
+| `policy` | what a trained policy actually flew (the zero-RSI eval twin). |
+| `comparison` | both, in one two-drone replay: ghost reference + solid policy. |
+
+Filenames follow directly: `flip_maneuver_reference.mp4`, `orbit_maneuver_comparison.mp4`. This
+replaced `flip.mp4` / `flip_policy.mp4` / `vs_reference.mp4` / `hero.mp4`, four ad-hoc names in four
+directories, none of which said what the clip was.
+
+**"hero" is retired from the *video* vocabulary only.** The replay schema's **hero drone** / **hero
+episode** / `heroFrames` / `--n-heroes` mean "the recorded subject drone", are documented in
+`docs/VISUAL_CONTRACT.md`, and stay exactly as they are — see the note there before "finishing" the
+rename into the schema.
+
+### One flag exception, with a rule attached
+
+The old guarantee was "no per-clip flag, ever". The two-drone comparison broke it honestly: it
+genuinely needs more framing room than a one-drone shot, and *how much* is the result being
+reported. So the guarantee became:
+
+> **No hand-typed flag ever. Every flag is derived from one measured quantity and recorded in the
+> manifest.**
+
+That is `video/framing.py::FramingPlan` — `--drone-frac` from the measured worst separation between
+reference and policy, `--scale` from the glyph exaggeration, `--track-smooth` from the maneuver's
+own periodicity. One plan per maneuver, built from that maneuver's **comparison** shot and reused
+by all three of its clips, which is what makes the reference clip literally the comparison with the
+policy removed: same camera path, same airframe size, same horizon.
+
+If a maneuver defeats the follow rig, the answer is still not a bespoke tune — walk the documented
+fallback ladder (lower `--drone-frac`, then raise `--max-drift`, then lower `--track-smooth`, then
+`--shot fit`), record which rung was taken **and its measurement**, and treat that as a finding
+about the look's reach.
 
 **What the framing check must report.** Every render prints two measured numbers, and the generator
 copies both into `run.json`:
@@ -74,45 +120,68 @@ copies both into `run.json`:
   even though the subject never left frame. A rig that keeps the drone in frame by letting it shrink
   has not held the shot, and only the second number notices.
 
-Measured on the three shipped clips:
+Measured on the **nine shipped clips** (`render-examples/`, re-measured after the framing rework —
+one plan per maneuver, so the three clips of a maneuver share a size by construction):
 
 | clip | worst \|NDC\| | apparent size | spread |
 |---|---|---|---|
-| `flip_roll_z09` | 0.47 | 17.8–20.2% | **13%** |
-| `swing_roll` | 0.44 | 17.5–21.8% | 25% |
-| `orbit_z` | 0.65 | 13.9–30.2% | **117%** |
+| `flip_maneuver_reference` | 0.25 | 11.7–12.1% | **3%** |
+| `flip_maneuver_policy` | 0.22 | 11.8–12.2% | **3%** |
+| `flip_maneuver_comparison` | 0.66 | 11.7–12.1% | **3%** |
+| `swing_maneuver_reference` | 0.49 | 30.7–34.7% | 13% |
+| `swing_maneuver_policy` | 0.49 | 30.6–34.7% | 13% |
+| `swing_maneuver_comparison` | 0.71 | 30.7–34.7% | 13% |
+| `orbit_maneuver_reference` | 0.26 | 20.2–20.9% | **3%** |
+| `orbit_maneuver_policy` | 0.26 | 20.2–20.9% | **3%** |
+| `orbit_maneuver_comparison` | 0.46 | 20.2–20.9% | **3%** |
 
-### The orbit found a limit of the preset's reach, and it is not the documented one
+Read the comparison rows against their siblings, not against the others: the `|NDC|` figure covers
+**every** drone, so a comparison's larger number is the ghost-to-policy gap, which is the result
+being shown. The identical size columns within each maneuver are the shared framing plan doing its
+job.
+
+### The orbit found a limit of the look's reach, and it is not the one the ladder names
 
 The fallback ladder was written for "the subject leaves frame": lower `--drone-frac`, then raise
-`--max-drift`, then `--shot fit`. **The orbit does not leave frame** (0.65, comfortably inside), so
-no rung was taken and the shipped clip is plain `--preset hero`. What it fails is the *other*
-guarantee — apparent size swings 117%.
+`--max-drift`, then `--shot fit`. **The orbit does not leave frame** — 0.65 at the standard
+single-subject framing, comfortably inside — so no rung applies. What it fails is the *other*
+guarantee: apparent size swings **117%**.
 
-Measured, rather than reasoned about:
+Measured on the orbit reference clip, rather than reasoned about:
 
 | variant | worst \|NDC\| | apparent size | spread |
 |---|---|---|---|
-| `hero` (shipped) | 0.65 | 13.9–30.2% | 117% |
+| standard single-subject framing, `track_smooth 20` | 0.65 | 13.9–30.2% | **117%** |
+| the maneuver's framing plan, `track_smooth 20` | 0.46 | 18.1–23.7% | 31% |
+| **the plan, `track_smooth 6`** (shipped) | 0.26 | **20.2–20.9%** | **3%** |
+
+and, at the single-subject framing, the rungs the ladder does name:
+
+| ladder rung | worst \|NDC\| | apparent size | spread |
+|---|---|---|---|
 | `--drone-frac 0.15` | 0.47 | 10.4–17.4% | 67% |
 | `--drone-frac 0.10` | 0.36 | 7.4–10.4% | 41% |
 | `--max-drift 0.45` | 0.83 | 13.9–30.2% | **117% — no effect** |
-| **`--track-smooth 6`** | 0.32 | **18.2–20.1%** | **10%** |
 | `--shot fit` | 0.52 | 3.3–4.7% (tiny) | 42% |
 
-**The lever is `track_smooth`, which the ladder does not mention.** The mechanism: the follow rig
-holds a constant offset from a *smoothed* subject track, and `hero`'s `track_smooth = 20` is a
+**The lever is `track_smooth`, which the ladder did not mention.** The mechanism: the follow rig
+holds a constant offset from a *smoothed* subject track, and the look's `track_smooth = 20` is a
 ±0.4 s window. The orbit's revolution period is 0.898 s, so that window averages very nearly a whole
 revolution — the smoothed track collapses onto the circle's centre and the rig degenerates into a
-**tripod**, with the drone circling toward and away from a stationary camera. At `--track-smooth 6`
-(±0.12 s, ~13% of a revolution) the track actually follows the circle and the spread drops to 10%,
-better than the swing's.
+**tripod**, with the drone circling toward and away from a stationary camera. At `track_smooth 6`
+(±0.12 s, ~13% of a revolution) the track actually follows the circle.
 
-So the honest statement of the preset's reach is: **`hero` assumes the subject's motion is slow
-compared to its smoothing window. A periodic maneuver whose period is comparable to
-`2 × track_smooth` frames defeats it** — not by losing the subject, but by silently turning the
-follow rig into a tripod. The preset is **not** retuned here; that is a decision about every other
-clip in the repo, and it is recorded with its numbers so it can be made deliberately.
+Note that the overlay's wider framing *masks* the problem without fixing it: standing further back
+shrinks the relative depth swing, so the same `track_smooth 20` measures 31% instead of 117% — bad
+but no longer obviously bad. That is a good argument for keeping the number attached to the
+maneuver rather than to whichever clip happened to expose it.
+
+So the honest statement of the look's reach is: **it assumes the subject's motion is slow compared
+to its smoothing window. A periodic maneuver whose period is comparable to `2 × track_smooth`
+frames defeats it** — not by losing the subject, but by silently turning the follow rig into a
+tripod. The look is **not** retuned; that is a decision about every other clip in the repo. The
+exception lives in `video/framing.py::TRACK_SMOOTH` with its reason attached, so it travels with
+the maneuver and lands in every manifest instead of in someone's shell history.
 
 ---
 
@@ -214,7 +283,7 @@ between them are exact to the last bit — they are labels, not seams.
 **No "props spooling on the ground" beat.** At rest a `PathSegment` yields `normed_thrust = 1.0`,
 which lifts off — the model has no contact. Start at liftoff, end at touchdown, and leave the
 spool-up to the video's title card. That is strictly better than
-`scripts/hero_takeoff_flip_land.py`'s `ground_contact()` clamp, which exists only because a PD
+`scripts/takeoff_flip_land.py`'s `ground_contact()` clamp, which exists only because a PD
 asymptotes toward its setpoint and never arrives.
 
 ### `AnalyticPathSegment` — why not just use a septic?
@@ -643,12 +712,17 @@ directly comparable (see `docs/VISUAL_CONTRACT.md`).
 | `reference/imu.py` | `specific_force_body` — what the accelerometer reads |
 | `reference/emit.py` | `Samples` → replay + `reference.json`, against the protocol |
 | `reference/verify.py` | residual / limit / allocation / continuity / **rate-loop-stability** checks |
-| `reference/video.py` | the **video contract** — the one hero invocation, and its framing check |
+| `video/look.py` | **`VIDEO_LOOK`** — the standardized look, and `render()`'s own defaults |
+| `video/names.py` | the vocabulary: `<maneuver> maneuver <kind> video`, and the filename rule |
+| `video/framing.py` | `FramingPlan` — one derived framing per maneuver, shared by its three clips |
+| `video/render.py` | the **video contract** — the one invocation, and its framing check |
 | `scripts/reference_maneuver.py` | the generator (`--maneuver flip\|swing\|orbit`) |
 | `scripts/reference_flip.py` | a thin alias for `--maneuver flip` |
 | `tests/test_reference.py` | 50 pure-numpy tests (no simulator) |
 | `tests/test_reference_sim.py` | the open-loop sim replays + the orbit control experiment (the torch tests) |
-| `tests/test_capture_preset.py` | pins `--preset hero` field by field |
+| `scripts/render_examples.py` | renders the checked-in nine (`render-examples/`) |
+| `tests/test_video_look.py` | pins the look field by field, and `render()`'s defaults against it |
+| `tests/test_capture_opts_contract.py` | pins the Python -> `capture.js` options seam |
 
 Charts live in `viz/render.py`: `plot_reference_telemetry` (six shared-x panels) and
 `plot_reference_envelope` (the "maneuver strip" — a body-z tick every few frames, in a **side

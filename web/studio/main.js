@@ -18,7 +18,6 @@ import { loadRunByPath } from "./run-loader.js";
 
 const $ = (h) => document.querySelector(`[data-h="${h}"]`);
 const MAX_FPV = 6;                  // cap on FPV sub-cells in the grid (busy swarms get a "+N more")
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
 // ---- theme (light / dark) -----------------------------------------------------------
@@ -429,13 +428,12 @@ function showRun(doc, summary) {
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
   const ep = doc.episodes[0];
   playback.setEpisode(ep, dt);
-  // Size the greybox room to the course (footprint from all gates + flown paths, capped height so
-  // big spread courses don't get an absurd ceiling); centred at the origin like the arena.
+  // Stage the scene for a shot of this course: fog, floor size and grid all follow from the camera
+  // distance a course of this size is watched from (~0.9x its footprint). Not `setSize` — with no
+  // walls, a floor sized to the course inside the palette's fixed 40-150 m fog shows its own edge
+  // as a hard horizon; setStage derives the floor FROM the fade so that can't happen.
   const b = courseBounds(view.world, playback.actors.map((a) => a.frames), ep.gates || []);
-  if (b) {
-    const footprint = b.footprint + 4;   // ~2 m breathing room each side
-    simEnv.setSize({ footprint, height: clamp(b.zMax + 1.5, 4, footprint), floorZ: 0 });
-  }
+  if (b) simEnv.setStage({ camDist: 0.9 * (b.footprint + 4) });
   const n = playback.maxFrames;
   $("scrub").max = String(Math.max(0, n - 1));
   $("scrub").value = "0";
@@ -460,13 +458,12 @@ const editor = createEditor({
     $("course").value = stem;            // option value == saved stem; refreshCourses ran first
     $("run").click();
   },
-  // Size the greybox room to the arena preset while editing (the flat arena ring stays as an
-  // in-room floor marker). Guarded to edit mode so the editor's async preset-init can't shrink a
-  // course-sized room in play mode.
+  // Stage the scene for the arena preset while editing (the flat arena ring stays as a floor
+  // marker). Guarded to edit mode so the editor's async preset-init can't restage a course-sized
+  // scene in play mode.
   onArena: (radius) => {
     if (simMode !== "edit") return;
-    const footprint = 2 * radius + 2;
-    simEnv.setSize({ footprint, height: clamp(2 * radius, 4, footprint), floorZ: 0 });
+    simEnv.setStage({ camDist: 2 * radius });
   },
 });
 
