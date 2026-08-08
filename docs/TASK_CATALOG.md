@@ -297,6 +297,20 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   under the 0.30 ceiling. Full-DR survival is **not** comparable across the two, since each ran on
   its own training config (±0.6 m desk vs ±6.0 m arena). This is a **bounded-duration hold**, not a
   station-keep: drift is open-loop and is 0.186 m on m1live over 30 s.
+- **Arm 2 — `vxy_penalty` 0 → 0.5, ONE factor (NO-GO).** It *works on its own target*: clean
+  pure-hold drift **0.0472 → 0.0356 m (−25%)**, `hold_rate` 0.913 → **1.000**, and `mean_z_error`
+  improves under noise (m1live 0.0178 → 0.0128). But the gain lives **only in the clean condition**
+  — under every noise twin the drift is *worse* (purehold+noise 0.1336 → 0.1634, m1live 0.1857 →
+  0.2069) — and it is paid for in the direction with 8 cm of room: `mean_height` 0.0824 → **0.0786**
+  (flips gate 2 by 1.4 mm), **floor exits 98 → 311** (m2sensor 29 → 120), m2sensor survival 0.9834 →
+  **0.9380**. Battery **2 of 4**. *Mechanism, and why a bigger weight won't fix it:* the corrective
+  move a hovering policy makes against perceived drift **is** horizontal speed, so the penalty is
+  nearly free when the attitude estimate is clean and actively suppresses the needed corrections
+  once it is noisy; and pressing toward stillness biases the hover lower. **Arm 1 stays the
+  recommended Desk-Hover policy.**
+- **Named arm 3, not run:** `upright_scale` 1.5 → 2.5, the control the parent's own `probes.json`
+  verdict asks for. Arm 2's mechanism argues *for* it — if drift is a leveling-quality problem
+  before it is a velocity one, attacking leveling directly avoids the proxy trap that sank arm 2.
 - **Not done, deliberately:** the parent idea node asks to *refit the gyro DR* from flight-2
   calibration (props-on sd 0.091/0.108/0.082 rad/s) before training; these configs keep the ladder's
   `[1.25, 1.1, 0.75]`, ~10–14× larger. Orthogonal to everything above and the obvious next probe.
