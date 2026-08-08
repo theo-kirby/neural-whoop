@@ -221,7 +221,14 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   no-DR `mean_z_error` **0.651 → 0.043 m** (−93% vs the parent), no-DR pure-hold 30 s survival
   **100%** (parent 0% — its noise-tuned trim fails a clean world), M2-sensor 29.8→**42.1%**, and
   **zero floor/ceiling exits anywhere in the probe battery** (`scripts/exit_probe.py`) — the
-  vertical loop is closed. BUT M1-live leveling robustness regressed: 99.9→**75.2%** at 1.0×
+  vertical loop is closed. **⚠️ UNEARNED AS STATED — `exit_probe.py` was broken until 2026-08-08**
+  (it classified the *respawn* position, so `floor`/`ceiling` were structurally unreachable and
+  every exit fell through to `xy`; see the script's docstring). Re-measured with the fix, the
+  claim *holds on the noise twins* — m1live 100% survival, m2sensor 3 exits all horizontal, 0
+  floor — but **fails on the full-DR config: 72 floor / 3 ceiling / 718 xy** of a 793-crash cohort
+  (38.7% crashed). So "zero vertical exits" is true where survival is ~100% and false where it
+  isn't, and the original battery could not have told the difference either way. `survivor_mean_z_err`
+  read 0.0 (junk) for the same reason; it is really **0.198–0.218 m** across those three probes. BUT M1-live leveling robustness regressed: 99.9→**75.2%** at 1.0×
   (curve 99.9/82/75/69% at 0.5/0.8/1.0/1.2×), ALL failures fast horizontal departures (median
   1.68 s); knockouts exonerate the ToF channel and its noise — the gyro/attitude-noise response
   is what regressed (hypothesis: the 6th channel × stack 8 grew the input 40→48 on the same
@@ -238,6 +245,7 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   is the first m2sensor pass (**50.1%**) but loses the setpoint (z err 0.120 m); the amp-curriculum
   arm (`obs_noise_amp_curriculum`, RED) collapses nominal to 69.7% with no tail gain — easing into
   the noise prevents the amplitude-invariant trim from forming. Zero floor/ceiling exits in every
+  <!-- see the ⚠️ above: exit_probe.py could not report a floor/ceiling exit before 2026-08-08 -->
   probe of every arm: the ToF altitude win is robust to all of it. **Shipped (user decision):
   `hover_tof_air65_w128u15`** as best compromise — deploy target 1.0 m (pilot default), weights +
   selftest parity 6.4e-08 + fake-bridge full flight OK; the ≥1.2×-amplitude tail risk is covered by

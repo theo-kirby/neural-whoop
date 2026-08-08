@@ -502,7 +502,10 @@ tumble garbage, not altitude.
   its true altitude trace.
 - **Obs-channel retrain result (3.2B, same day): ALTITUDE SOLVED in sim** — no-DR `mean_z_error`
   0.651→0.043 m vs d50var_s8, no-DR survival 100% (parent 0%), M2-sensor 29.8→42.1%, zero
-  floor/ceiling exits across the whole probe battery. Regression found + attributed: M1-live
+  floor/ceiling exits across the whole probe battery (**that last clause is unearned —
+  `exit_probe.py` was structurally unable to report a vertical exit until 2026-08-08; re-measured,
+  it holds on the noise twins but the full-DR config shows 72 floor / 3 ceiling / 718 xy. See
+  docs/TASK_CATALOG.md**). Regression found + attributed: M1-live
   leveling 99.9→75.2% at 1.0×, all fast horizontal exits; ToF channel/noise exonerated by
   knockouts (gyro-noise response regressed — capacity contention suspected). **Do not fly this
   checkpoint**; see `docs/TASK_CATALOG.md` + `runs/hover_tof_air65/probes.json`.
@@ -575,9 +578,57 @@ because in the sim the drone does not routinely leave sensor range. The faded va
 *and* what is logged (CSV col 26), so `sim_vs_real.py` replay stays byte-exact. A large
 `--tof-blind-grace` restores the legacy hold-forever path.
 
-Still open, and not addressed by any of the above: `tof_rate_hz: 40.0` in the training config vs
-the bridge's real **25 Hz** — hold windows are 1.6× longer in the air than in training. The `_r25`
-eval twins exist (`84e254e`); no r25-trained run does yet.
+The `tof_rate_hz: 40.0` vs the bridge's real **25 Hz** gap (hold windows 1.6× longer in the air
+than in training) has since been closed on the training side too:
+`configs/hover_tof_air65_w128u15_r25.yaml` is the one-factor retrain and
+`runs/hover_tof_air65_w128u15_r25/probes.json` has its battery (3 of the 4 deploy gates, the first
+arm of the ladder to pass all three *noise* gates — and the first to break the clean-tracking one).
+
+#### Desk-Hover: moving the operating point instead of the sensor suite (2026-08-08)
+
+Every mitigation above is a way to survive a 1.0 m hover. **Desk-Hover** (`configs/desk-hover.yaml`,
+still `task: hover_tof`) asks a different question: hold **0.10 m over a desk**. The whole
+saturate-and-hold failure chain above is then *structurally absent* rather than mitigated — the
+same measured 0.37 m overshoot reaches 0.47 m, **13× inside the 1.3 m sensor ceiling**, so steps
+3–5 of the mechanism cannot occur. And the worst case is a 10 cm drop onto a desk, not a 1.4 m drop
+onto a floor at ~2 m/s. That makes it the right regime to iterate in while the bridge is rewired.
+
+**The dangerous direction flips from up to down**, and the deploy-side consequence is a sensor
+finding rather than a policy one:
+
+- The measured ToF **static offset is +23.9 mm** (σ 2.4 mm, 629 pre-liftoff samples — see the
+  characterization above). At a 1.0 m setpoint that is 2.4% and nobody noticed. **At 0.10 m it is
+  24% of the setpoint**, against only 8 cm of floor margin (`bound_z_min 0.010` ≈ the
+  `WHOOP_REST_Z_M` 0.0092 at which the airframe is touching the desk). A drone that trusts the
+  reading sits ~2.4 cm low — most of its margin — before any control error at all.
+- **Therefore the highest-value follow-up is a pilot-side `tof_cal`, not a sim change.** The pilot
+  already learns `az_cal` and `lvl_cal` during the on-floor countdown
+  (`pilot/controller.py`); a ToF zero-offset learned in the same branch is the exact analogue and
+  is worth more than anything in the training config. **Not yet implemented.**
+- **The takeoff handover is above the desk setpoint.** `RISE_THRUST 1.06` for `RISE_S 0.5` from
+  `LIFT_VZ 0.20` (`pilot/config.py`) hands to the policy at ~0.20–0.25 m climbing at ~0.5 m/s —
+  **2× the setpoint**. `spawn_offset 0.15` + `spawn_vel 0.6` cover that state in *training*, but
+  those are module constants with **no `FlightParams` override**, so there is no per-flight knob
+  for a sub-0.3 m target. Known deploy gap.
+- **A near-range validity gate (`tof_min_m`) was considered and rejected as actively dangerous.**
+  The measurement is a *stable* 23.9 mm mean with σ 2.4 mm at rest — the sensor reads fine at
+  near-zero range, so there is no near-range invalidity to model. A 0.04 m gate against
+  `bound_z_min 0.010` would create a 3 cm dead band **exactly where the drone dies**: below it the
+  height channel freezes and tells the policy "you're at target" while it descends into the desk.
+  That is the identical confidently-wrong-held-channel shape as the crash above, pointed at the
+  floor instead of the ceiling.
+
+Desk-Hover is also the first hover config to set `act.min_thrust_normed: 0.25`, mirroring the
+pilot's `min_thrust_frac` from the table above. That gap had been open the whole ladder: the pilot
+has clamped at 0.25 since 2026-07-31 and **no hover config mirrored it**, so every hover policy to
+date learned a throttle profile the deploy path silently rewrites.
+
+**Honest scope: this is a bounded-duration hold, not an indefinite station-keep.** The obs has no
+position or velocity channel and there is no flow deck, so horizontal drift is *open-loop*, set
+entirely by leveling quality. The parent's own numbers (`runs/hover_tof_air65_w128u15_r25/probes.json`):
+clean pure-hold drift 0.069 m (`w128u15`) vs 0.787 m (`w128u15_r25`) over 30 s, and under **sensor
+noise alone** both arms drift 0.55–0.77 m. On a ±0.6 m desk that is the whole box. **Fly at
+`--target-height 0.10` only after `pilot.py selftest` parity and a full fake-bridge flight.**
 
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).

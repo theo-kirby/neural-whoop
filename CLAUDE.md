@@ -487,3 +487,17 @@ for the roadmap and each task's loose sim2real basis.
 - Keep policies tiny and export-clean (the whoop runs them on a microcontroller).
 - Pure modules (contract, course, reward, perception, target) carry the validated sim2real design
   and are unit-tested without the simulator.
+- **Naming (new 2026-08-08, `Desk-Hover` is the first).** Two namespaces, deliberately different:
+  - **Task names stay snake_case Python identifiers** (`hover_tof`, `gate_race`, `acro_flip`) —
+    they are `@register_task` keys *and* they key the deploy path, so they are not cosmetic. The
+    pilot reads the 6th obs channel's semantics off `meta["task"] == "hover_tof"` **exactly**
+    (`pilot/policy.py`); renaming or forking a task string would silently make the deployed drone
+    interpret `vz` where the policy means `h_err`.
+  - **Policy / run names are `word-word[-word]`**, lowercase-hyphenated on disk and Title-Cased in
+    prose and Flywheel nodes: `Desk-Hover` → `runs/desk-hover/`, `configs/desk-hover.yaml`.
+    **Config filename == `run.name` == run dir**, always. The third word is reserved for
+    "iterating on the one before" (`desk-hover-drift`), and eval twins take a suffix
+    (`desk-hover-purehold`).
+  - A new operating point of an existing task is therefore a **config with a policy name**, not a
+    new task — which is exactly what Desk-Hover is (`configs/desk-hover.yaml`, `task: hover_tof`).
+  - The 163 pre-existing runs keep their `snake_case_ladder_style` names; this is forward-only.
