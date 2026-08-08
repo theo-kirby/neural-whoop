@@ -35,9 +35,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 SWARM_TASKS = frozenset({"swarm_race", "swarm_formation"})
 #: Tasks with no gate course — they supply their own arena and a moving target/anchor instead, so
 #: course resolution + gate sizing is skipped (the ``scene`` channel carries what they track).
+#: The whole ``hover`` line belongs here: a hover setpoint is a ``scene`` target, not a course.
+#: ``hover_blind_v2``/``hover_tof`` were missing and so fell through to ``gate``, which resolved a
+#: course they never fly and hid the setpoint marker in the viewer.
 GATELESS_TASKS = frozenset(
     {"target_follow", "hand_follow", "gesture_follow", "command_follow", "swarm_formation",
-     "hover", "hover_blind"}
+     "hover", "hover_blind", "hover_blind_v2", "hover_tof"}
 )
 
 
