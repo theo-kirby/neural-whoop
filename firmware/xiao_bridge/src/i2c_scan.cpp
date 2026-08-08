@@ -13,8 +13,8 @@
 //      0x08..0x77. A VL53L1X answers at 0x29 by default. Any hit prints the pin pair that
 //      found it, which is the wiring you should put in initTof()/Wire.begin().
 //
-// D9/D10 are deliberately excluded: they are the FC UART pair, and clocking them would drive
-// signals into a flight controller that is usually unpowered on the bench.
+// D2/D3 are deliberately excluded: they are the FC UART pair (rewired 2026-08-08, was D0/D1,
+// before that D9/D10), and clocking them would drive signals into the flight controller.
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -26,10 +26,10 @@ struct Pin {
   const char *name;
 };
 
-// XIAO ESP32-S3 broken-out pins, minus D9/D10 (FC UART).
+// XIAO ESP32-S3 broken-out pins, minus D2/D3 (FC UART).
 constexpr Pin kPins[] = {
-    {1, "D0"},  {2, "D1"},  {3, "D2"},  {4, "D3"},  {5, "D4"},
-    {6, "D5"},  {43, "D6"}, {44, "D7"}, {7, "D8"},
+    {1, "D0"},  {2, "D1"},  {5, "D4"},  {6, "D5"},  {43, "D6"},
+    {44, "D7"}, {7, "D8"},  {8, "D9"},  {9, "D10"},
 };
 constexpr size_t kNumPins = sizeof(kPins) / sizeof(kPins[0]);
 
@@ -97,6 +97,46 @@ void scanAllPairs() {
   }
 }
 
+// Clock sweep on the expected pair. Precedent (initTof(), 2026-07-29 rewire): this bus already
+// dropped from 400 kHz to 100 kHz once — harness capacitance vs the breakout's ~10k pull-ups.
+// If 0x29 ACKs only at a slow clock, the chip is alive and the fault is rise time (wire length /
+// joint quality), not wiring order. If it ACKs at nothing down to 10 kHz, the chip itself (or
+// its ground return) is the fault.
+void clockSweep(uint8_t sda, uint8_t scl, const char *sda_name, const char *scl_name) {
+  Serial.printf("\n--- clock sweep, SDA=%s SCL=%s, addr 0x29 ---\n", sda_name, scl_name);
+  constexpr uint32_t kClocks[] = {400000, 100000, 50000, 10000};
+  for (uint32_t hz : kClocks) {
+    Wire.begin(sda, scl, hz);
+    Wire.beginTransmission(0x29);
+    const uint8_t err = Wire.endTransmission();
+    Serial.printf("  %6lu Hz : %s (Wire err %u)\n", static_cast<unsigned long>(hz),
+                  err == 0 ? "ACK  <- sensor alive at this speed" : "no ACK", err);
+    Wire.end();
+    pinMode(sda, INPUT);
+    pinMode(scl, INPUT);
+  }
+}
+
+// Short test: drive one line LOW, read the other. Independent lines each have their own ~10k
+// pull-up, so the undriven one stays HIGH; if it follows LOW, the two are bridged (solder short
+// at either end of the harness). This is the fault that matches "idles HIGH, times out under
+// traffic, never ACKs at any speed".
+void shortTest(uint8_t a, uint8_t b, const char *a_name, const char *b_name) {
+  Serial.printf("\n--- short test, %s <-> %s ---\n", a_name, b_name);
+  for (int dir = 0; dir < 2; dir++) {
+    const uint8_t drv = dir == 0 ? a : b, sense = dir == 0 ? b : a;
+    const char *dn = dir == 0 ? a_name : b_name, *sn = dir == 0 ? b_name : a_name;
+    pinMode(sense, INPUT);
+    pinMode(drv, OUTPUT);
+    digitalWrite(drv, LOW);
+    delay(2);
+    const bool follows = digitalRead(sense) == LOW;
+    Serial.printf("  drive %s LOW -> %s reads %s %s\n", dn, sn, follows ? "LOW" : "HIGH",
+                  follows ? "<- BRIDGED (solder short)" : "(independent, ok)");
+    pinMode(drv, INPUT);
+  }
+}
+
 }  // namespace
 
 void setup() {
@@ -105,6 +145,9 @@ void setup() {
   Serial.println("\n=== i2c_scan: XIAO ESP32-S3 bus probe ===");
   idleLevels();
   scanAllPairs();
+  shortTest(6, 43, "D5", "D6");
+  clockSweep(6, 43, "D5", "D6");   // the wiring initTof() expects
+  clockSweep(43, 6, "D6", "D5");   // and swapped, in case the harness crossed them
   Serial.println("\ndone. (reset the board to run again)");
 }
 
