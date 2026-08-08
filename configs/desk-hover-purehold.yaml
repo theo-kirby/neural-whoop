@@ -1,0 +1,109 @@
+# desk-hover-purehold — the Desk-Hover PURE-HOLD precision twin.
+#
+# The M1-live twin restricted to the pure-hold cohort (hold_fraction 1.0: every drone spawns ON
+# the setpoint, level, at rest) with the setpoint band collapsed onto the single deploy altitude
+# (z_min == z_max == 0.10). This is the config the four-gate battery's first two bars are read
+# from — clean drift and mean height — because the standard eval blends station-keeping with
+# fly-in transients and a sampled band blurs "hovered high" into the band width.
+#
+# Run it BOTH ways: --no-dr for the clean-trim number, DR on for the sensor-noise number.
+#
+# Reachable only because spawn_z_margin exists: with the old hard-coded 0.2 m clamp this cohort
+# would spawn at 0.21 m, i.e. 0.11 m above the setpoint it is defined to start on.
+#
+# THE TASK GEOMETRY AND `act:` BLOCK BELOW ARE desk-hover.yaml's, VERBATIM. That is load-bearing,
+# not tidiness: scripts/survival_probe.py only overrides `hold_fraction`, so any bound / setpoint /
+# throttle-floor mismatch between a twin and the training config silently measures a DIFFERENT
+# ARENA than the policy trained in, and reports the difference as a policy result.
+#
+# The h_err obs noise is the desk value (0.010, not the ladder's 0.02 datasheet placeholder) so
+# "1.0x the trained amplitude" means what it says.
+
+run:
+  name: desk-hover-purehold
+
+task:
+  name: hover_tof
+  episode_len: 1500
+  # --- the desk-scale reward rescale ---
+  # The parent's length scales are all ~10x too big for this setpoint. At pos_sigma 0.6 a 5 cm
+  # upward bias costs 0.017/step against a ~2.6/step reward (0.65%), while a mid-episode crash
+  # costs ~1960 return — so with only 8 cm of floor under the setpoint the policy would learn to
+  # hover at 0.2-0.3 m and EVERY REWARD NUMBER WOULD STILL LOOK FINE. At pos_sigma 0.10 the same
+  # bias costs 0.231/step.
+  pos_sigma: 0.10              # was 0.6
+  pos_scale: 1.0
+  dist_penalty: 2.0            # was 0.2 — the per-metre gain scales inversely with the arena
+  upright_scale: 1.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.08            # was 0.35 — == pos_sigma, as at 1 m scale
+  # --- the desk ---
+  # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
+  # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
+  # box asymmetric about it — at 3.5 m radius in a 6 m box that is a detail, at 0.6 m it is the
+  # whole margin. And the setpoint's xy is invisible to this obs anyway, so sampling it is pure
+  # unlearnable noise.
+  arena_radius: 0.0            # was 3.5
+  z_min: 0.10                  # <-- pinned: the single deploy altitude
+  z_max: 0.10                  # <-- pinned (training band: 0.08-0.16)
+  hold_fraction: 1.0           # <-- pure station-keeping cohort only
+  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+                               # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
+                               # ~0.20-0.25 m climbing at ~0.5 m/s — 2x the setpoint. spawn_offset
+                               # + spawn_vel 0.6 cover that state in training; note that those are
+                               # module constants with NO FlightParams override, so there is no
+                               # per-flight knob for a sub-0.3 m target (docs/SIM2REAL.md).
+  spawn_vel: 0.6
+  spawn_tilt_deg: 20.0
+  spawn_rate: 1.5
+  spawn_z_margin: 0.005        # NEW knob. The old hard-coded 0.2 would clamp every spawn to
+                               # >= 0.21 m — above the whole band — and silently delete the
+                               # pure-hold cohort.
+  bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
+  bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
+  bound_z_max: 0.60
+  band_ceiling_m: 0.30         # NEW, METRIC ONLY (no reward, no termination)
+  vxy_penalty: 0.0             # deliberately 0.0 in ALL THREE twins, for BOTH arms: this is
+                               # a measuring stick, and a reward weight that changes with the
+                               # policy under test would make mean_reward incomparable. The
+                               # gates read metrics, which the term does not touch.
+  tof_rate_hz: 25.0            # the honest measured rate (24.8-27.1 Hz, 2026-07-30)
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+
+act:
+  # Closes a sim/deploy gap that has been open the whole hover ladder: the pilot has enforced
+  # `min_thrust_frac 0.25` since 2026-07-31 and NO hover config mirrors it, so every hover policy
+  # to date learned a throttle profile the deploy path silently rewrites. acro_flip already sets
+  # the deploy value; this is the first hover config to.
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 2048
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  wind_accel_mps2: 0.0
+  rate_gain_frac: 0.0
+  thrust_scale_frac: 0.0
+  obs_noise_std: 0.0
+  #                        [roll,  pitch, p,     q,    r,    h_err]  (rad, rad/s, m)
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010]
+  obs_bias_channels:      [0.0,   0.0,   0.0,   0.0,  0.0,  0.0]
+  action_latency_steps: 0
+  impulse_prob: 0.0
+  impulse_vel_mps: 0.5
+  impulse_rate_rps: 2.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]

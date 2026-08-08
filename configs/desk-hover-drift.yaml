@@ -1,0 +1,151 @@
+# Desk-Hover-Drift — Desk-Hover arm 2. ONE FACTOR vs configs/desk-hover.yaml: vxy_penalty 0.0 -> 0.5.
+#
+# HYPOTHESIS. Horizontal drift is the failure mode this operating point actually has. The obs has
+# no position or velocity channel and there is no flow deck, so drift is open-loop and set entirely
+# by leveling quality — and the parent measures 0.55-0.77 m of it over 30 s under sensor noise
+# ALONE. On a +/-0.6 m desk that is the whole box. `vxy_penalty` gives PPO a direct gradient
+# against commanding sideways velocity, which is the only lever available.
+#
+# MAGNITUDE, calibrated rather than guessed. Against the observed 0.205 m/s M1-live drift, 0.5
+# costs 0.10/step — ~2.4x the ENTIRE dynamic range of the upright term over realistic tilts
+# (0.042). It also matches R4's vz_penalty 0.5, the only calibrated privileged-term precedent in
+# this repo.
+#
+# THE PRECEDENT, HONESTLY. docs/TASK_CATALOG.md records R4 (vz_penalty + thrust_const_penalty) at
+# 0.0% M1 — a flat failure on its headline number. But its hold time improved MONOTONICALLY
+# 2.96 -> 5.18 -> 12.84 s median, the best of that ladder, and the 0.0% was the ladder-wide
+# open-loop-trim floor that the ToF channel has since closed. So the precedent is "the term helped
+# the thing it was aimed at, on a substrate that failed for an unrelated reason", not "it worked".
+#
+# CAVEAT THE TERM ITSELF. This re-weights the horizontal axis of the existing isotropic
+# `vel_penalty` rather than adding a new kind of signal, and it is PRIVILEGED (ground-truth
+# velocity the deployed policy cannot observe) — legitimate as training-only shaping, like every
+# other term in this reward. Drift credit assignment is episode-level and high-variance: the drift
+# that kills an episode was seeded hundreds of steps earlier. Expect a weak, noisy gradient.
+#
+# IF THIS DISAPPOINTS, the named arm 3 is `upright_scale 1.5 -> 2.5` — the control the parent's own
+# probes.json verdict asks for (drift is a leveling-quality problem before it is a velocity one).
+#
+# --- everything below is desk-hover.yaml verbatim except run.name and vxy_penalty ---
+
+run:
+  name: desk-hover-drift
+
+task:
+  name: hover_tof
+  episode_len: 1500
+  # --- the desk-scale reward rescale ---
+  # The parent's length scales are all ~10x too big for this setpoint. At pos_sigma 0.6 a 5 cm
+  # upward bias costs 0.017/step against a ~2.6/step reward (0.65%), while a mid-episode crash
+  # costs ~1960 return — so with only 8 cm of floor under the setpoint the policy would learn to
+  # hover at 0.2-0.3 m and EVERY REWARD NUMBER WOULD STILL LOOK FINE. At pos_sigma 0.10 the same
+  # bias costs 0.231/step.
+  pos_sigma: 0.10              # was 0.6
+  pos_scale: 1.0
+  dist_penalty: 2.0            # was 0.2 — the per-metre gain scales inversely with the arena
+  upright_scale: 1.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.08            # was 0.35 — == pos_sigma, as at 1 m scale
+  # --- the desk ---
+  # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
+  # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
+  # box asymmetric about it — at 3.5 m radius in a 6 m box that is a detail, at 0.6 m it is the
+  # whole margin. And the setpoint's xy is invisible to this obs anyway, so sampling it is pure
+  # unlearnable noise.
+  arena_radius: 0.0            # was 3.5
+  z_min: 0.08
+  z_max: 0.16                  # narrow desk band; the purehold twin pins 0.10
+  hold_fraction: 0.5
+  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+                               # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
+                               # ~0.20-0.25 m climbing at ~0.5 m/s — 2x the setpoint. spawn_offset
+                               # + spawn_vel 0.6 cover that state in training; note that those are
+                               # module constants with NO FlightParams override, so there is no
+                               # per-flight knob for a sub-0.3 m target (docs/SIM2REAL.md).
+  spawn_vel: 0.6
+  spawn_tilt_deg: 20.0
+  spawn_rate: 1.5
+  spawn_z_margin: 0.005        # NEW knob. The old hard-coded 0.2 would clamp every spawn to
+                               # >= 0.21 m — above the whole band — and silently delete the
+                               # pure-hold cohort.
+  bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
+  bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
+  bound_z_max: 0.60
+  band_ceiling_m: 0.30         # NEW, METRIC ONLY (no reward, no termination)
+  vxy_penalty: 0.5             # <-- THE ONE FACTOR (arm 1: 0.0)
+  tof_rate_hz: 25.0            # the honest measured rate (24.8-27.1 Hz, 2026-07-30)
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+
+act:
+  # Closes a sim/deploy gap that has been open the whole hover ladder: the pilot has enforced
+  # `min_thrust_frac 0.25` since 2026-07-31 and NO hover config mirrors it, so every hover policy
+  # to date learned a throttle profile the deploy path silently rewrites. acro_flip already sets
+  # the deploy value; this is the first hover config to.
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  # THE LOAD-BEARING CHANGE. The inherited wind DR alone makes any desk-sized bound unsurvivable,
+  # and this is an HONESTY FIX rather than a concession. Drag is acc = -(D_xy/m)*v
+  # (third_party/diffaero/dynamics/quadrotor.py), D_xy ~ 0.10, m ~ 0.030 -> tau = 0.30 s. The
+  # parent's 1.0 m/s^2 draws U(0,1), i.e. 0.15-0.30 m/s of TERMINAL drift the policy cannot see
+  # and cannot fight (no position/velocity obs) — out of a +/-0.6 m box in 4-8 s. A desk indoors
+  # has no wind.
+  wind_accel_mps2: 0.15        # was 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  # h_err noise 0.02 -> 0.010. The 0.02 was a documented DATASHEET PLACEHOLDER. The measurement
+  # gives a 2.4 mm static sigma AND an airborne trace monotone in ~10 mm steps — i.e. QUANTIZATION,
+  # not Gaussian. 0.010 with amp_range [0.5, 2.0] spans 5-20 mm and brackets both readings.
+  # NOTE: there is NO quantization seam in randomization.py. That is a real modeling gap, not
+  # something a Gaussian fixes; recording it here rather than pretending 0.010 closes it.
+  #                        [roll,  pitch, p,     q,    r,    h_err]  (rad, rad/s, m)
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010]
+  obs_noise_amp_range:    [0.5, 2.0]
+  # The h_err BIAS stays at 0.03: the +23.9 mm static ToF offset is real, and at a 0.10 m setpoint
+  # it is a first-order effect (24% of the setpoint) rather than a rounding error.
+  obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05, 0.03]
+  action_latency_steps: 5
+  # A 2.5 m/s shove at desk scale is unrecoverable BY CONSTRUCTION (it crosses the whole +/-0.6 m
+  # box in 0.24 s), so at the parent's magnitudes the impulse channel injects nothing but
+  # unattributable variance. Scaled to the arena instead of deleted.
+  impulse_prob: 0.01           # was 0.02
+  impulse_vel_mps: 0.5         # was 2.5
+  impulse_rate_rps: 2.0        # was 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

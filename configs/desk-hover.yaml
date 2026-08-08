@@ -1,0 +1,160 @@
+# Desk-Hover — a 0.10 m station-hold on the desk. Arm 1.
+#
+# NOT AN ABLATION. This is ~12 factors from its parent (hover_tof_air65_w128u15_r25) and carries
+# no clean single-factor attribution: it is a NEW OPERATING POINT. Every hover policy in this lab
+# has been trained and flown at 1.0 m in a 3.5 m arena; this one holds 0.10 m over a desk.
+# The task is still `hover_tof` — Desk-Hover is a CONFIG, deliberately, because the pilot keys the
+# 6th obs channel's semantics off `meta["task"] == "hover_tof"` exactly (pilot/policy.py), so a new
+# task string would silently make the deployed drone read vz where the policy expects h_err.
+#
+# WHY the operating point moved. The 2026-07-31 flights ended in gnarly crashes and the mechanism
+# is measured (docs/SIM2REAL.md): the climb overshoots its setpoint by ~0.37 m, so a 1.0 m target
+# peaks past the VL53L1X's 1.3 m ceiling, h_err pins negative, and the policy commands motors-off
+# open-loop until it falls back into range — a 1.4 m drop onto a floor at ~2 m/s. At 0.10 m the
+# same 0.37 m overshoot reaches 0.47 m, 13x inside the sensor ceiling: **the entire saturate-and-
+# hold failure is structurally absent at desk scale.** The worst case becomes a 10 cm drop onto a
+# desk. That makes this the right regime to iterate in while the bridge is rewired, and the
+# natural launchpad for desk-scale acro later.
+#
+# THE DANGEROUS DIRECTION FLIPPED FROM UP TO DOWN. What matters now is the floor: 8 cm of margin
+# under the setpoint, a measured +23.9 mm ToF static offset (24% of the setpoint!), and an h_err
+# bias DR of +/-0.03. A pilot-side ToF zero-offset calibration is the highest-value follow-up and
+# is deliberately NOT in this config (see docs/SIM2REAL.md "Deferred").
+#
+# HONEST SCOPE — this is a BOUNDED-DURATION HOLD, not an indefinite station-keep. The obs has no
+# position or velocity channel and there is no flow deck, so horizontal drift is OPEN-LOOP, set
+# entirely by leveling quality. The parent's own probes.json: clean pure-hold drift 0.069 m
+# (w128u15) vs 0.787 m (w128u15_r25) over 30 s; under SENSOR NOISE ALONE (m1live, no wind /
+# impulses / latency) both arms drift 0.55-0.77 m. Saying otherwise would be dishonest.
+#
+# NOT DOING: a `tof_min_m` near-range validity gate. It sounds prudent and it would ship a crash.
+# The measurement (docs/SIM2REAL.md) is a STABLE 23.9 mm mean, sigma 2.4 mm at rest — the sensor
+# reads fine at near-zero range, so there is no near-range invalidity to model. A 0.04 m gate
+# against bound_z_min 0.010 would create a 3 cm dead band EXACTLY where the drone dies: below it
+# the height channel freezes and tells the policy "you're at target" while it descends into the
+# desk. That is the identical confidently-wrong-held-channel shape as the 2026-07-31 crash,
+# pointed at the floor instead of the ceiling.
+#
+# env: / whoop: / ppo: are UNCHANGED from the parent ([128,128], obs_stack 8, n_envs 8192, 3.2e9).
+
+run:
+  name: desk-hover
+
+task:
+  name: hover_tof
+  episode_len: 1500
+  # --- the desk-scale reward rescale ---
+  # The parent's length scales are all ~10x too big for this setpoint. At pos_sigma 0.6 a 5 cm
+  # upward bias costs 0.017/step against a ~2.6/step reward (0.65%), while a mid-episode crash
+  # costs ~1960 return — so with only 8 cm of floor under the setpoint the policy would learn to
+  # hover at 0.2-0.3 m and EVERY REWARD NUMBER WOULD STILL LOOK FINE. At pos_sigma 0.10 the same
+  # bias costs 0.231/step.
+  pos_sigma: 0.10              # was 0.6
+  pos_scale: 1.0
+  dist_penalty: 2.0            # was 0.2 — the per-metre gain scales inversely with the arena
+  upright_scale: 1.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.08            # was 0.35 — == pos_sigma, as at 1 m scale
+  # --- the desk ---
+  # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
+  # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
+  # box asymmetric about it — at 3.5 m radius in a 6 m box that is a detail, at 0.6 m it is the
+  # whole margin. And the setpoint's xy is invisible to this obs anyway, so sampling it is pure
+  # unlearnable noise.
+  arena_radius: 0.0            # was 3.5
+  z_min: 0.08
+  z_max: 0.16                  # narrow desk band; the purehold twin pins 0.10
+  hold_fraction: 0.5
+  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+                               # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
+                               # ~0.20-0.25 m climbing at ~0.5 m/s — 2x the setpoint. spawn_offset
+                               # + spawn_vel 0.6 cover that state in training; note that those are
+                               # module constants with NO FlightParams override, so there is no
+                               # per-flight knob for a sub-0.3 m target (docs/SIM2REAL.md).
+  spawn_vel: 0.6
+  spawn_tilt_deg: 20.0
+  spawn_rate: 1.5
+  spawn_z_margin: 0.005        # NEW knob. The old hard-coded 0.2 would clamp every spawn to
+                               # >= 0.21 m — above the whole band — and silently delete the
+                               # pure-hold cohort.
+  bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
+  bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
+  bound_z_max: 0.60
+  band_ceiling_m: 0.30         # NEW, METRIC ONLY (no reward, no termination)
+  vxy_penalty: 0.0             # arm 1 (desk-hover-drift.yaml is the one-factor arm at 0.5)
+  tof_rate_hz: 25.0            # the honest measured rate (24.8-27.1 Hz, 2026-07-30)
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+
+act:
+  # Closes a sim/deploy gap that has been open the whole hover ladder: the pilot has enforced
+  # `min_thrust_frac 0.25` since 2026-07-31 and NO hover config mirrors it, so every hover policy
+  # to date learned a throttle profile the deploy path silently rewrites. acro_flip already sets
+  # the deploy value; this is the first hover config to.
+  min_thrust_normed: 0.25
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  # THE LOAD-BEARING CHANGE. The inherited wind DR alone makes any desk-sized bound unsurvivable,
+  # and this is an HONESTY FIX rather than a concession. Drag is acc = -(D_xy/m)*v
+  # (third_party/diffaero/dynamics/quadrotor.py), D_xy ~ 0.10, m ~ 0.030 -> tau = 0.30 s. The
+  # parent's 1.0 m/s^2 draws U(0,1), i.e. 0.15-0.30 m/s of TERMINAL drift the policy cannot see
+  # and cannot fight (no position/velocity obs) — out of a +/-0.6 m box in 4-8 s. A desk indoors
+  # has no wind.
+  wind_accel_mps2: 0.15        # was 1.0
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  # h_err noise 0.02 -> 0.010. The 0.02 was a documented DATASHEET PLACEHOLDER. The measurement
+  # gives a 2.4 mm static sigma AND an airborne trace monotone in ~10 mm steps — i.e. QUANTIZATION,
+  # not Gaussian. 0.010 with amp_range [0.5, 2.0] spans 5-20 mm and brackets both readings.
+  # NOTE: there is NO quantization seam in randomization.py. That is a real modeling gap, not
+  # something a Gaussian fixes; recording it here rather than pretending 0.010 closes it.
+  #                        [roll,  pitch, p,     q,    r,    h_err]  (rad, rad/s, m)
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010]
+  obs_noise_amp_range:    [0.5, 2.0]
+  # The h_err BIAS stays at 0.03: the +23.9 mm static ToF offset is real, and at a 0.10 m setpoint
+  # it is a first-order effect (24% of the setpoint) rather than a rounding error.
+  obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05, 0.03]
+  action_latency_steps: 5
+  # A 2.5 m/s shove at desk scale is unrecoverable BY CONSTRUCTION (it crosses the whole +/-0.6 m
+  # box in 0.24 s), so at the parent's magnitudes the impulse channel injects nothing but
+  # unattributable variance. Scaled to the arena instead of deleted.
+  impulse_prob: 0.01           # was 0.02
+  impulse_vel_mps: 0.5         # was 2.5
+  impulse_rate_rps: 2.0        # was 4.0
+
+# Air65 II + XIAO companion, tightened to the weighed/spec ~30 g AUW band.
+whoop:
+  mass: [0.030, 0.028, 0.032]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800
