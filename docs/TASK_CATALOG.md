@@ -252,6 +252,55 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   bridge IMU oversampling (effective noise <1.0×) plus the `tof_lost` abort and radio kill. First
   real ToF flight recalibrates the placeholder h-noise DR from CSV cols 25/26.
 
+#### `desk_hover` — **Desk-Hover**, the 0.10 m desk operating point (2026-08-08, a CONFIG not a task)
+- **What:** `configs/desk-hover.yaml`, still `task: hover_tof`. Hold **0.10 m over a desk** instead
+  of 1.0 m in a 3.5 m arena. It stays a config *deliberately*: the pilot keys the 6th obs channel's
+  semantics off `meta["task"] == "hover_tof"` **exactly** (`pilot/policy.py`), so a new task string
+  would silently make the deployed drone read `vz` where the policy means `h_err`. First user of the
+  new policy-naming convention (`CLAUDE.md`): run name == config name == run dir, hyphenated.
+- **Why:** the 2026-07-31 crash chain is *structurally absent* here, not mitigated. The measured
+  ~0.37 m climb overshoot reaches 0.47 m from a 0.10 m setpoint — **13× inside the 1.3 m sensor
+  ceiling** — so the "exit the band → hold `h_err` → motors-off open-loop" steps cannot occur, and
+  the worst case is a 10 cm drop onto a desk. **The dangerous direction flips from up to down:**
+  8 cm of floor margin (`bound_z_min 0.010` ≈ `WHOOP_REST_Z_M`) against the measured **+23.9 mm**
+  static ToF offset, which is 2.4% of a 1.0 m setpoint but **24%** of this one.
+- **Deltas vs `hover_tof_air65_w128u15_r25`** (~12, so **not an ablation** — a new operating point):
+  `pos_sigma` 0.6→0.10, `dist_penalty` 0.2→2.0, `hold_radius` 0.35→0.08, `arena_radius` 3.5→0.0,
+  `z 0.5–1.1`→`0.08–0.16`, `bound_xy` 6.0→0.60, `bound_z` `0.15–4.0`→`0.010–0.60`,
+  `spawn_z_margin 0.005` (new), `band_ceiling_m 0.30` (new, metric only),
+  **`act.min_thrust_normed 0.25`** (the first hover config to mirror the pilot's `min_thrust_frac`,
+  a gap open the whole ladder), `wind_accel_mps2` 1.0→**0.15**, impulses 2.5→0.5 m/s @ prob 0.01,
+  `h_err` noise 0.02→0.010.
+- **`wind_accel_mps2` 1.0 → 0.15 is the load-bearing change, and it is an honesty fix.** Drag gives
+  `τ = D_xy/m = 0.30 s`, so `U(0,1)` m/s² is 0.15–0.30 m/s of terminal drift the policy has no
+  channel to see or fight. Measured on a fixed weight-cancelling action: median time-to-horizontal-
+  exit **4.5 s at 1.0 → 20.7 s at 0.15 (4.6×)**.
+- **Metric:** the desk four-gate battery, bars fixed before any result (`runs/desk-hover/probes_desk_*.json`):
+  clean pure-hold `mean_xy_error` ≤ 0.10 m · clean `mean_height` 0.10 ± 0.02 · `ep_peak_z_m` ≤ 0.30
+  **and zero floor exits** (hard) · m1live 30 s survival ≥ 0.98.
+- **Result (arm 1, 3.2B — GREEN, 3 of 4; the 1.0 m parent scores 0 of 4 on the same battery):**
+  clean pure-hold drift **0.2986 → 0.0472 m (−84%)**, `hold_rate` **0.150 → 0.913**, tilt
+  1.017→**0.391°**, `mean_z_error` 0.0576→**0.0177 m**; m1live 30 s survival **0.0625 → 0.9995**,
+  m2sensor **0.0396 → 0.9834**. The parent dropped onto a 0.10 m setpoint does not just underperform
+  — it **sinks into the desk** (`mean_height` 0.042 m, 598 floor exits).
+- **The gate-3 miss is the useful part.** 98 floor exits, and they localize exactly: **0** on clean,
+  **0** on m1live, **29** on m2sensor, **69** under full DR — i.e. *every one* appears only once the
+  ±0.03 m `h_err` **bias** is on. That is the sim pricing the uncalibrated +23.9 mm ToF offset
+  against 8 cm of margin, and it makes a **pilot-side `tof_cal`** (the exact analogue of the
+  existing `az_cal`/`lvl_cal`) the blocking item for a real 0.10 m flight — a deploy fix, not a
+  sim one.
+- **Honesty:** the design premise that a coarse `pos_sigma` would make a policy hover *high*
+  (0.2–0.3 m) is **refuted** — the parent sinks to 0.042 m and arm 1 settles 1.8 cm *below* its
+  setpoint (0.0824). The rescale is still right on reward-*resolution* grounds, but the bias at desk
+  scale runs downward, toward the 8 cm margin. `ep_peak_z_m` is uninformative on the pure-hold twin
+  (z is pinned); the meaningful peaks are 0.124/0.127/0.200 on m1live/m2sensor/full-DR, all well
+  under the 0.30 ceiling. Full-DR survival is **not** comparable across the two, since each ran on
+  its own training config (±0.6 m desk vs ±6.0 m arena). This is a **bounded-duration hold**, not a
+  station-keep: drift is open-loop and is 0.186 m on m1live over 30 s.
+- **Not done, deliberately:** the parent idea node asks to *refit the gyro DR* from flight-2
+  calibration (props-on sd 0.091/0.108/0.082 rad/s) before training; these configs keep the ladder's
+  `[1.25, 1.1, 0.75]`, ~10–14× larger. Orthogonal to everything above and the obvious next probe.
+
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,
   with the **shape** metrics next to it: `mean_altitude_loss` (max `z0 − z`), `max_lateral_drift`,
