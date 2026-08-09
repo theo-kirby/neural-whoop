@@ -206,3 +206,30 @@ def test_no_unprefixed_episode_windowed_name_leaks_into_metrics(task):
         )
     assert "peak_z_m" not in env.task.metrics(env)
     assert "ep_peak_z_m" in env.task.metrics(env)
+
+
+# --- 4. the setpoint marker scales with the arena ---
+
+def test_scene_info_marker_radius_scales_with_the_arena():
+    """A fixed marker size is a real bug at desk scale, and it hid the subject in the first video.
+
+    ``geometry.js::buildMarker`` defaults to a 0.16 m RADIUS sphere, chosen against this task's
+    default ``bound_xy 6.0``. On the desk config (``bound_xy 0.60``) that is a 32 cm ball marking a
+    setpoint the policy holds to 4.7 cm, next to an 82 mm airframe — it fills the frame. The task
+    now derives the radius from its own arena, keeping the ratio the historical default implies.
+    """
+    from neural_whoop.envs.registry import make_task
+
+    # The 6.0 m default arena reproduces the renderer's historical 0.16 EXACTLY (no regression).
+    assert make_task("hover").scene_info()["marker_radius"] == pytest.approx(0.16)
+
+    # The desk shrinks it proportionally: small enough to never dwarf an 82 mm airframe.
+    desk = make_task("hover_tof", **DESK).scene_info()["marker_radius"]
+    assert desk == pytest.approx(0.60 * 0.16 / 6.0)
+    assert desk < 0.082 / 2, "the marker must stay under the airframe's half-footprint at desk scale"
+
+    # It rides meta.scene_info, the documented seam, on every inherited task.
+    for name in ("hover", "hover_blind", "hover_blind_v2", "hover_tof"):
+        info = make_task(name, **DESK).scene_info()
+        assert info["standoff"] == 0.0
+        assert info["marker_radius"] > 0.0

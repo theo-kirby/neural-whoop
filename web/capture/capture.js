@@ -119,7 +119,7 @@ playback.droneOptions = { footprint: opts.scale, axes: false, marker: false };
 // The chassis GLB swaps in from a promise inside makeDrone. Await it BEFORE signalling ready or
 // frame 0 captures the procedural placeholder glyph instead of the CAD.
 await chassisPrototype();
-playback.setEpisode(episode, dt);
+playback.setEpisode(episode, dt, (doc.meta || {}).scene_info || {});
 await chassisPrototype();          // flush the swap callback makeDrone queued a moment ago
 playback.setTrailVisible(false);   // cinematic: the airframe, not the analysis overlay
 

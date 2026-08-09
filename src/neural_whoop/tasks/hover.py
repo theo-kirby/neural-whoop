@@ -304,8 +304,18 @@ class HoverTask(DroneTask):
         return {"target": self.setpoint}
 
     def scene_info(self) -> dict:
-        """Zero standoff (the setpoint is the point to sit on, not a distance to hold)."""
-        return {"standoff": 0.0}
+        """Zero standoff (the setpoint is the point to sit on, not a distance to hold), plus the
+        setpoint marker's radius **derived from the arena** rather than left at the renderer's
+        hard-coded default.
+
+        The default (``geometry.js::buildMarker`` radius ``0.16``) was chosen against this task's
+        default ``bound_xy 6.0`` and is fine there. It does not scale: on the Desk-Hover config
+        (``bound_xy 0.60``) a 0.16 m-radius sphere is a **32 cm ball marking a setpoint held to
+        4.7 cm, next to an 82 mm airframe** — it fills the frame and hides the drone. Keeping the
+        ratio the historical default implies makes the marker correct at every scale and leaves the
+        1.0 m / 6.0 m arena renders bit-identical (``6.0 * 0.16/6.0 == 0.16``).
+        """
+        return {"standoff": 0.0, "marker_radius": self.cfg.bound_xy * (0.16 / 6.0)}
 
     def metrics(self, env) -> dict:
         """Log-cadence scalars. Every ``mean_*``/``*_rate`` name here also rides ``info["metrics"]``

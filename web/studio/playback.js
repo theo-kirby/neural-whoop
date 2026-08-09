@@ -97,9 +97,13 @@ export class Playback {
   get heroFrames() { return this.actors[this.heroIdx]?.frames || []; }
   get maxFrames() { return this.actors.reduce((m, a) => Math.max(m, a.frames.length), 0); }
 
-  setEpisode(episode, dt) {
+  // `sceneInfo` is the replay's `meta.scene_info` (optional). Today it supplies `marker_radius`,
+  // which the task DERIVES from its arena — a fixed 0.16 m sphere marks a 1 m-scale setpoint fine
+  // and swallows a 0.10 m desk one. Absent -> the historical default.
+  setEpisode(episode, dt, sceneInfo = null) {
     this.episode = episode;
     this.dt = dt > 0 ? dt : 1 / 50;
+    this.sceneInfo = sceneInfo || {};
     this._clear();
 
     this.gateLines = buildGates(this.view.world, episode.gates || []);
@@ -126,9 +130,13 @@ export class Playback {
       const sc0 = frames[0] && frames[0].scene;
       const markers = {};
       if (sc0) {
-        if (sc0.target !== undefined) markers.target = buildMarker(this.view.world, SCENE_COLORS.target);
-        if (sc0.anchor !== undefined) markers.anchor = buildMarker(this.view.world, SCENE_COLORS.anchor, 0.2);
-        if (sc0.slot !== undefined) markers.slot = buildSlot(this.view.world);
+        const mr = Number(this.sceneInfo.marker_radius);
+        const r = Number.isFinite(mr) && mr > 0 ? mr : null;
+        if (sc0.target !== undefined)
+          markers.target = buildMarker(this.view.world, SCENE_COLORS.target, r ?? undefined);
+        if (sc0.anchor !== undefined)
+          markers.anchor = buildMarker(this.view.world, SCENE_COLORS.anchor, r ? r * 1.25 : 0.2);
+        if (sc0.slot !== undefined) markers.slot = buildSlot(this.view.world, r ? r * 1.125 : undefined);
       }
       return { glyph, frames, trail, tint, fpvCamera, markers };
     });

@@ -427,7 +427,7 @@ function showRun(doc, summary) {
   $("ndrones").textContent = String(summary.drone_count);
   const dt = Number(meta.dt) > 0 ? Number(meta.dt) : 1 / (Number(meta.control_hz) || 50);
   const ep = doc.episodes[0];
-  playback.setEpisode(ep, dt);
+  playback.setEpisode(ep, dt, sceneInfo);
   // Stage the scene for a shot of this course: fog, floor size and grid all follow from the camera
   // distance a course of this size is watched from (~0.9x its footprint). Not `setSize` — with no
   // walls, a floor sized to the course inside the palette's fixed 40-150 m fog shows its own edge
