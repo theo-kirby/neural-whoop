@@ -14,6 +14,12 @@ origin:
   slug: soft-moon-6755
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 88003cba-c7ec-5a98-9da6-5e2aa694a660
+  slug: dark-tooth-6172
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: c8826d91835811efc0afb0e74f048639ae2d01ad402e6153fd1d62a4facdc6bf
 ---
 # O-3: hybrid-obs split-latency retrain — what onboard execution is worth before buying hardware
 

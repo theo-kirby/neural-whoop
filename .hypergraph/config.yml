@@ -22,6 +22,17 @@ cache_dir: .hypergraph/cache
 state_md: STATE.md
 graph_dir: .hypergraph/graph
 
+# Optional one-way mirror (backend/mirror.md). Declared 2026-08-09 so `doctor` and
+# `roots --mint` can run; NOTE the fallback in `mirror_root_ids` resolves to the
+# record/state roots, which here ARE the frozen `archive:` roots — so this project
+# CANNOT push until `mirror_roots:` is minted below.
+mirror: flywheel
+
+# The account that owns the mirror roots. Pinned so a run with a key from another
+# account reports "wrong account" instead of "the graph is missing" — the same
+# symptom as a deleted graph, and not the same thing. From `mirror doctor`.
+mirror_account_id: be9833b0-502f-477a-ad2d-07dd5c871e10
+
 # The frozen pre-adoption graph (SPEC: Adoption epochs). This project forked it on
 # 2026-08-09 and never writes to it again. The whole 189-node subgraph reachable
 # from the root below was imported verbatim with `hypergraph import --fork`, so
@@ -49,3 +60,12 @@ archive:
 # before this marker are legacy history, exempt from I2 in `check`.
 epoch:
   marker: wandering-water-2720
+
+# Mirror roots minted by `hypergraph mirror roots --mint`.
+mirror_roots:
+  record:
+    node_id: 7534283d-96d1-5dab-8a12-f06479b79fe4
+    slug: red-paper-7848
+  state:
+    node_id: 206586a9-e7c6-5aaa-a79c-66ea20435820
+    slug: white-wind-2737

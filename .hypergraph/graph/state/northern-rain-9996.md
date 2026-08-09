@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:33+00:00'
 parents:
 - modest-raven-7153
 summary: 'The C export needs 79.3 KB flash and 1.0 KB RAM at 4.8e-7 parity on the Air65 II''s own STM32G473, refuting the ''RAM-tight'' deferral. Path B (a gram-class MSP companion) is the recommended first step and its deploy recipe is 3-seed GREEN in sim. BLOCKED: the ~$40-55 BOM awaits the user''s approval and nothing has been ordered.'
+flywheel:
+  node_id: 3b3eac35-0b26-58fd-9968-ebcc6ef276d8
+  slug: super-snowflake-7200
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: e8f4bb518531c2cf79948f669dd05f718d6ea824a05a257d7766970b0c9ae34a
 ---
 Status: blocked
 

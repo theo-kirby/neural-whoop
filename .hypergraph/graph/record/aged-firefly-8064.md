@@ -14,6 +14,12 @@ origin:
   slug: aged-firefly-8064
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 71ff0845-9bee-54b2-bfe8-fb15eed64945
+  slug: polished-king-8412
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: d9b1befb0a3379363e6147969332c2061261208f11eee1e04544e4ec0bcbc944
 ---
 # Measured height: VL53L1X (CJMCU-531) on the MSP bridge
 

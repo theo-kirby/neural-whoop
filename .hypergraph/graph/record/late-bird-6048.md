@@ -13,6 +13,12 @@ origin:
   slug: late-bird-6048
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f19c500d-0e5a-56ec-9f76-e81073c8bb62
+  slug: damp-glade-2512
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: f86f4e6d2d7b624a545b14edce62eab082863010e1c9f2b7b66eea6e890bd4db
 ---
 # Idea: off-drone hardware triage
 

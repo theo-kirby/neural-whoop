@@ -14,6 +14,12 @@ origin:
   slug: holy-art-9938
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0b4b6a57-a535-5a98-ba42-f4eaa760a8a6
+  slug: silent-shadow-5456
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 25f3b0f9573c483a6b65a3cef3a3b9aac746fac76a25b9da63ffa8c3afc95d0c
 ---
 # Calibrate-view latency, the dead hz knob, and the "frozen" yaw
 

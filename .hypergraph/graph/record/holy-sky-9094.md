@@ -13,6 +13,12 @@ origin:
   slug: holy-sky-9094
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f97beb81-01f5-505d-a86c-a3128c3e1d03
+  slug: winter-breeze-6580
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: a4b4797df4eb47b7b3edc3c98d140ccbb78640c7bcff9b8bef07a5946e1040e0
 ---
 ## The gap (why this was needed)
 Every course this repo ever generated was tight by construction: `ArenaSpec` defaulted `step_min/step_max = 1.5/2.8 m`, and `GateRaceConfig` didn't even surface those knobs — so the gate hop fell back to the ArenaSpec default regardless of arena size. There was literally no config that could place gates farther apart. The user wants bigger, more spread-out courses (and to watch policies fly them in the Studio `e0d57844`).

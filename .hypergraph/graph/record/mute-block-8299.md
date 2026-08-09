@@ -12,6 +12,12 @@ origin:
   slug: mute-block-8299
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 61cb1387-d560-5530-ad5f-85d686b56411
+  slug: autumn-shape-3478
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 9f2a4d10ad1fb06d7fc15f45afc02b631343eb94da5e6c21ee32a76b1bc90657
 ---
 ## Setup
 The hop-19 measurement (`divine-mud-3368`) found the perception-aware (noisy-anchor + EMA) formation scaling looked non-monotonic across N (0.47-0.85, single seed) and flagged it as probably training variance. This hop tests that directly: 3 seeds each at the two extremes -- **n=6** (the worst-looking, 0.469) and **n=12** (the best, 0.848) -- using the same `swarm_formation_pscale{6,12}.yaml` (detector ON + EMA 0.85, slot spacing ~0.6m), [128,128]@120M, eval 2048x1500 seed 12345.

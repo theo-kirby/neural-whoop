@@ -12,6 +12,12 @@ origin:
   slug: cold-pond-1089
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 2fdb8098-027f-51fb-9bf7-f19765204699
+  slug: still-credit-2213
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 7dba693cb900174deb3fa6322c79a6711fe137b6147c6e3d4bf1ea3193975fbc
 ---
 # Stack capacity + training budget: [128,128] @ 80M / 120M (empirical node, RESOLVED — GREEN)
 

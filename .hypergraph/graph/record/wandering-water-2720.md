@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:43:42+00:00'
 parents:
 - soft-breeze-8148
 summary: 'Mode-A adoption. The whole 189-node Flywheel DAG reachable from morning-feather-7342 (2026-06-26 to 2026-08-08) imported verbatim with import --fork: slugs, node_ids and multi-parent topology preserved, archive identity filed under origin:. Artifacts (765 across 137 nodes) and the kind/outcome/cluster tag taxonomy did NOT travel and stay on the frozen Flywheel archive, which this project never writes to again. Full import rather than epoch-split (189 << 1000), so this marker parents on the newest legacy node rather than becoming a rival root. Seeds a 16-node state graph: 6 architecture components + 10 frontier claims, 4 broken / 3 blocked / 3 open. The author interview was NOT run and no brain-dump substituted for it - every claim here and in the state graph is derived from the imported node bodies, the twelve repo docs and git history alone.'
+flywheel:
+  node_id: 6903f577-ceaf-5c37-af34-41566cf15063
+  slug: round-dust-9846
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 23286bb729a4b8b293889af95ec6aa207a378f193f253e72086170dc582830fa
 ---
 ## What
 

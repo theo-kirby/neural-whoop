@@ -14,6 +14,12 @@ origin:
   slug: odd-hat-1222
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: bd29e82d-9c89-5351-8901-c4006ce5aa03
+  slug: young-unit-4988
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 4bfad511b8004128b439d8d3e058cfc71d5ac2846d7b033bf9e1ed8804e183dd
 ---
 # Baseline gyro-noise dose-response + M2 metric decomposition
 

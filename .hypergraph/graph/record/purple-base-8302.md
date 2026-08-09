@@ -14,6 +14,12 @@ origin:
   slug: purple-base-8302
   revision: 7
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: aeeeb33a-75a4-559c-84e5-3f0c9695f1bc
+  slug: billowing-butterfly-9449
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 313535c5008efb001da53e22a112c61a511c8e24406244a20497f4597b5e0fb1
 ---
 ## Hypothesis
 B3 (dawn-hill-4820) showed the [128,128] net traded tight for giant when trained on the full 4.5->18 m range — a **capacity bottleneck**. Prediction: a wider [256,256] net on the SAME giant range holds tight>=0.90 AND keeps the big/giant gains, dominating instead of trading.

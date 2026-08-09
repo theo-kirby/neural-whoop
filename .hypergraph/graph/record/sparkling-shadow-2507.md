@@ -12,6 +12,12 @@ origin:
   slug: sparkling-shadow-2507
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 27e74eca-d206-54d5-a9a3-e1ef7e9e9881
+  slug: blue-credit-0734
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 35f53409be59a8b58766c95ff6b6ed32ec3614e6d790753e3b027c36721f2832
 ---
 ## Hypothesis
 None — characterization gate for the onboard-compute track (O-0): does the real deployed policy actually fit MCU-class hardware, and is the SIM2REAL.md "RAM-tight on the G473" assumption right?

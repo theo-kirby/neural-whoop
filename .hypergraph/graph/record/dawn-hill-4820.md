@@ -13,6 +13,12 @@ origin:
   slug: dawn-hill-4820
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e081c9b1-3b08-51c6-8b9c-b2da1834d56d
+  slug: royal-cherry-0688
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 5f2cb4229e22a00ea3b00edf5c53c2e8e5a53403a09dcbc629e4b527757e88b9
 ---
 ## Hypothesis
 B1's giant completion (0.57) was pure EXTRAPOLATION — it trained radius 4.5->12 but giant is 18 m. Making giant in-distribution (train the full 4.5->18 range) should lift giant (and big), with an unknown cost to tight/spread from spreading the distribution thinner.

@@ -6,6 +6,12 @@ created_at: '2026-08-09T19:03:20+00:00'
 parents:
 - golden-banner-2676
 summary: Scope decision from the 2026-08-09 interview. Swarm, racing and multi-drone work with other sensors are deliberately not being worked on — parked, not declined, and not gaps. The frontier is lowest latency, a hover that settles, and acro on the real airframe.
+flywheel:
+  node_id: fc61a8c7-cadc-5264-bb17-cc6e73c8d0f3
+  slug: aged-bird-6565
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 9c3139d7d2922b619f83126961b934f002fd48ac8dc2c62bb1fb524d6479a19a
 ---
 ## What
 

@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - dusty-pine-0511
 summary: A versioned replay schema, a lazy renderer, the two-tab Studio, and an in-repo headless capturer that imports the Studio's own scene modules so the video cannot drift from the dashboard. Working. Carries the finding that a CLI preset was the wrong shape for a look.
+flywheel:
+  node_id: 945404f2-773f-5457-8421-9fac0049f11f
+  slug: shy-art-4211
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: e255a7b11ea82e664f9a8f1a15affd7eb48ff88853ea853e68b2f8745941e6b2
 ---
 Status: working
 

@@ -13,6 +13,12 @@ origin:
   slug: rough-art-1658
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 6f50dbd8-8cc1-5ddd-919c-c45f51db88c9
+  slug: broken-sun-3056
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 29725341848e22b0934cf7a300dee2ed495d3021fc5b5737bd91eadfe83cadc5
 ---
 # R4: the last pre-authorized lever — privileged decoupling reward on top of the colored-noise arm. RED, and the ladder is closed.
 

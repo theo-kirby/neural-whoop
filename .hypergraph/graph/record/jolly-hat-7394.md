@@ -19,6 +19,12 @@ origin:
   slug: jolly-hat-7394
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 35ee617f-32c0-5076-9bc2-619b6c2567cd
+  slug: dry-king-3776
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 0ddc00701653225fe5ed8bc91ab8345a3f2f927deff92561bc97fbb7ea932098
 ---
 **Gap.** The visual contract recorded gate geometry only. So the entire follow/perception thread (`target_follow` -> `hand_follow` -> `gesture_follow` -> `command_follow`) and the second swarm task (`swarm_formation`) — all of which chase a moving target/anchor instead of gates, two of them carrying a command channel — rendered NOTHING in the Studio (`studio_rollout` crashed follow tasks on an unexpected `n_gates=` kwarg and gave `swarm_formation` the wrong substrate) and as empty courses in nw-viz. The recent arc lived only as static `runs/_perception_matrix/` PNGs.
 

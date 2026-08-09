@@ -12,6 +12,12 @@ origin:
   slug: small-unit-3590
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 7c05984a-e8fe-5e02-aff9-ffa84932790e
+  slug: dry-recipe-6997
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 62fabc0e66e2cca27a6e106d0813603ef8f555ae5c17a8a1ec05b03cff977043
 ---
 # BOM — sim2real hardware
 

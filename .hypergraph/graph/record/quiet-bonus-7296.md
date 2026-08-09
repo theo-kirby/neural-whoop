@@ -13,6 +13,12 @@ origin:
   slug: quiet-bonus-7296
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 86186c51-2089-5fe0-9a22-547af392c5a8
+  slug: shrill-pine-2206
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: ba220b9c1350cf096f8a53ca64b90ca4b296ccd248ae7dd457070d4fc3e8eaf4
 ---
 # Reframing the v2 post-mortem: what actually sank the arms is unknown — the ablation was not one-factor
 

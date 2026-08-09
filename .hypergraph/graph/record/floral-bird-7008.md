@@ -13,6 +13,12 @@ origin:
   slug: floral-bird-7008
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 7dfb57af-34b2-556c-ac0f-d94619e0c0b9
+  slug: lively-mud-3192
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: f8f5beb6934acd4b084e906152ce65d733690505192d2283d175d4d30c92c99e
 ---
 # Idea: fiducial mocap ground-truth rig (Mac-only)
 

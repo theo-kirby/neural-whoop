@@ -12,6 +12,12 @@ origin:
   slug: orange-art-0247
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0f096d3c-433f-5dbd-a422-0a5da6029b09
+  slug: late-hat-7004
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: eb249f6a7b9d20e8d2d81698e713839c8fbdcd1afa88ee2cdbc6829187cb91ae
 ---
 # _noiseonly: honest-noise DR with the BASELINE reward — the control that localizes the sink.
 

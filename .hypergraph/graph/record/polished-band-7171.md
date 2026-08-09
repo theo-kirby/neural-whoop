@@ -12,6 +12,12 @@ origin:
   slug: polished-band-7171
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0bca8d09-7d41-503d-a59c-a5472c0bdca6
+  slug: delicate-fog-4007
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 01eac00d6734e42828ad24b095ebcb406ea0997e274440dd34fd9a8f5348891c
 ---
 # Wobble decomposition — what "super wobbly, shaky, non-stationary" actually is
 

@@ -14,6 +14,12 @@ origin:
   slug: muddy-brook-9314
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 5ec59c35-dc5f-5dae-8690-3d11fe3d0d6e
+  slug: purple-block-2813
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 9aaadaeb6d274a71d0ff141e91429ea30b36990d7d9dcdeac348416c21c36e7a
 ---
 # R1: the cheapest arm of the attribution ladder — does removing the trim-poison DR rescue the trim? No.
 

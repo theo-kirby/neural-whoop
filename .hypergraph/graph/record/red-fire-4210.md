@@ -12,6 +12,12 @@ origin:
   slug: red-fire-4210
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e46e9aa4-da68-5ef6-a218-023f6efda007
+  slug: billowing-dust-3133
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 39d056a9ce04c762baa47e2ad8b0294c7aa88a2fe1f41ef7b0377e47b77b9afb
 ---
 # d50var_s8a: the right idea meets a train/eval mismatch — and the honest-link probe closes the metric-artifact escape hatch
 

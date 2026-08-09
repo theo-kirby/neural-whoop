@@ -13,6 +13,12 @@ origin:
   slug: rapid-meadow-0957
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 8cfdbdcd-83ed-5aae-af96-5e87cb35ae2d
+  slug: broad-tree-5361
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: c01e9d9216699e1b6b8c22b65c9fbe3744ae19384b67803c83194ffec6e710f5
 ---
 # Unified bench dashboard — one page for real flight + parallel sim
 

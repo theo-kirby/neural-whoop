@@ -12,6 +12,12 @@ origin:
   slug: proud-field-5681
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 1e6f42a0-d579-51d4-968d-da77bb633846
+  slug: calm-sunset-9895
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 542aa03ae6c153c4d7d853ceefb7d3031f400210c5b590af7a46743efa34fa8d
 ---
 ## Idea
 `hand_follow` (`cold-sky-6425`) established close-following a jerky hand. Its catalog note: 'a gesture channel (stop/come) can be added to the obs later.' This hop builds it -- the lab's first **command-conditioned** policy: a discrete command in the obs that makes the SAME tiny shared net switch between two behaviours.

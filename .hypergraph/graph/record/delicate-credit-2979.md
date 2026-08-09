@@ -13,6 +13,12 @@ origin:
   slug: delicate-credit-2979
   revision: 7
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 4420aa32-f4b5-5e96-9600-a93dac0cf5da
+  slug: green-recipe-2167
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 9f805bb3850a82cbdd4edc0d21589a587ce813b14d55e34be093bf9614795692
 ---
 # Run contract — flywheel-auto, stock-hardware IMU-only hover — **CLOSED 2026-07-07**
 

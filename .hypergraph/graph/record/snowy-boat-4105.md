@@ -13,6 +13,12 @@ origin:
   slug: snowy-boat-4105
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 89c93ecb-93a9-5f15-80bc-0d780ae46193
+  slug: jolly-breeze-9105
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 15682a4fc6f359cfd4774024b07d2af50abd7bc8fa7d1e7d2415a70b1eeed083
 ---
 ## Hypothesis
 B7 (`silent-wood-5878`) showed `scale_sample_weight` is a tight↔giant Pareto dial with ends w=1.0 (tight-strong) and w=0.5 (giant-strong). Does an intermediate setting (w=0.7) hit a sweet spot that clears ALL contract gates at once (tight>=0.90 AND big>=0.75 AND giant>=0.55) — the clean dominant generalist B4 just missed on giant?

@@ -12,6 +12,12 @@ origin:
   slug: gentle-resonance-7390
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: c8669145-6d1f-55ed-919a-f050c96fd3c2
+  slug: small-mud-2269
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 75af77452a33b10ea2b2c1edb8a23f399898ee7825af07d6cf35fa1531f7bd5e
 ---
 ## Hypothesis
 The STEP-derived chassis GLB (parent node) gave every part a regex-guessed material because STEP carries no appearance. Theo's `whoop-assembly.fbx` was authored with real per-part materials ("all the textures and stuff") — loading those instead should make the Studio/Bench drone look like the actual airframe, and a brightness bump keeps the dark plastics from reading as a black blob.

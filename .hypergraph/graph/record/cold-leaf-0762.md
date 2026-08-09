@@ -13,6 +13,12 @@ origin:
   slug: cold-leaf-0762
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: ed71a880-cafd-545c-b541-e53d8032e97f
+  slug: gentle-frog-6607
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: c0a613e8fe1f71d677462e4a0b99e21eb2d96b624b6c01374b0d976c354497bd
 ---
 # acro_flip_pitch — the roll→pitch axis ablation
 

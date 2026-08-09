@@ -13,6 +13,12 @@ origin:
   slug: sweet-bush-8692
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: efcab54e-2694-5f6c-9b64-86bdaafc5a9d
+  slug: fragrant-brook-5168
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 17e40868d8cbbe8c2e9ef9fc67a0db3513388b72d3dd4917fa41e1b21576ea97
 ---
 ## Idea (cross-branch synthesis)
 Two of this run's main results were a **reusable EMA precision primitive** (perception branch: noisy detector estimate -> EMA(0.85) filter closes the target_follow standoff back-off, `long-tree-2976` / `flat-waterfall-0121`) and a **scalable formation task** (swarm branch: `swarm_formation` holds a ring around an anchor, scales to 24 drones, `raspy-moon-0909` / `summer-wave-6268`). Both used the anchor/target via GROUND TRUTH. This hop asks the composition question: **if the formation anchor is only NOISILY DETECTED (a realistic onboard sensor), does formation hold — and does the EMA primitive help?**

@@ -12,6 +12,12 @@ origin:
   slug: still-flower-6355
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 4569392e-ae2b-508a-92ed-01d6bc77cfcc
+  slug: silent-water-6713
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 7e4e1d9f44ee5979bb2d59aa282b90e67e1afd488e71be077a77771aaed0d68b
 ---
 # Sensor decision — one module, and it's a downward camera
 

@@ -13,6 +13,12 @@ origin:
   slug: lively-cell-6933
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3ca8843e-5977-5592-878a-00ff63b99e6f
+  slug: orange-forest-6803
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: f9b56297728aa09aed278243b928229a76927cce6e2eb6ccf058dbe164786519
 ---
 # First Bench-dashboard flight session — Air65 II, 2026-07-10
 

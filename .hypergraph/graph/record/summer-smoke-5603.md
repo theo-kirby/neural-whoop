@@ -13,6 +13,12 @@ origin:
   slug: summer-smoke-5603
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 582c88db-2d90-5179-9638-b85ee5f999a1
+  slug: lively-resonance-9838
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 3342886c13c6fb8878dbac557f12bbd79acb47f90673e8e48d8b23a5d4806639
 ---
 # Studio: hero-layout viewport + course editor + in-dashboard hero-MP4 export
 

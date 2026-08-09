@@ -13,6 +13,12 @@ origin:
   slug: long-tree-2976
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 059e13d0-7d1b-581d-ae6f-dcd9d4f8dc57
+  slug: long-star-7678
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: bc4fc657bc0632ac166273b5b2f824bcc2ebe6b347be22f07c507e6b721ee36c
 ---
 ## Setup
 The detector-regime sweep `nameless-bar-9184` (33c3e1e7) proved the detector-trained follower's standoff back-off (2.17m vs d*=1.5m) is set by per-fix **bearing/range PRECISION** (insensitive to dropout/FOV), and pre-registered the one viable RL lever: **temporal precision-filtering** of the noisy estimate (not dropout-coasting memory). This hop implements and tests it.

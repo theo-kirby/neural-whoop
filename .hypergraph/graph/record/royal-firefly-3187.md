@@ -12,6 +12,12 @@ origin:
   slug: royal-firefly-3187
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 47b7761e-0983-5df4-931f-9aacc3c9c460
+  slug: jolly-shape-9257
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 7eadcfd430da83d1e50731425dc77200d20d650d1f03d9dc46c0502d77d64a73
 ---
 # Hop-9 — DR-on reliability at the [128,128]@120M baseline (RESOLVED, measurement hop)
 

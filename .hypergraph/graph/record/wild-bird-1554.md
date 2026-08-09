@@ -12,6 +12,12 @@ origin:
   slug: wild-bird-1554
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: fa710af3-5503-5597-97cb-5670c292a963
+  slug: wandering-art-7833
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 299c5c2055a1b1f0ff987b5a7fabd255d422fcfdf5954bd14217824d35cedb23
 ---
 ## Hypothesis
 PufferLib's dual-scale target encoding — replace the raw body-frame gate vector with [tanh(0.1·v), tanh(10·v)] coarse+fine channels — improves gate precision and therefore lap time on gate_race (idea #1 from the comparison node long-fog-2207).

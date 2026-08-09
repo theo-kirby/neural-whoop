@@ -13,6 +13,12 @@ origin:
   slug: dry-mud-9424
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: c8e5b546-3b3b-5e75-83ee-4437bd8f3034
+  slug: hidden-butterfly-3294
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 4b86e76d282a13cf0f760bf9f9fe96a40f7fc8ba4eb4e6bdd2c890419c99ef2c
 ---
 # hover_tof_air65: the measured height closes the vertical loop — and re-opens a horizontal one
 

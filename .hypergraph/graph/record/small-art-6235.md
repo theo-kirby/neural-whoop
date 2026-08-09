@@ -12,6 +12,12 @@ origin:
   slug: small-art-6235
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: cbb78905-6781-5b52-ae8b-2d257057dbf9
+  slug: cool-field-9786
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 5b11363778d4afa86a36cf4549e2bc87e12b946b194d208e939d71c17eba3488
 ---
 ## Idea
 `gesture_follow` (`proud-field-5681`) proved a tiny policy holds TWO command-conditioned behaviours (STOP/GO) from one obs bit. The discovery question: does the command channel **scale to a vocabulary**? This builds a 3-way command and asks whether the same net can hold three distinct behaviours.

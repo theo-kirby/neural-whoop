@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:31+00:00'
 parents:
 - dusty-pine-0511
 summary: 'MultiAgentDroneEnv: a batched, GPU-resident, agent-flattened env with a task registry. Thirteen tasks registered. Working. Measured at ~444k env-steps/s, which a CPU-vectorised competitor beats by ~15x.'
+flywheel:
+  node_id: b55692c7-1c02-5c6f-93fe-2a5a4733757d
+  slug: yellow-star-4139
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: db219723c3bce5ebaee21f369dd44793cea883d98f294e60621efe14f192123d
 ---
 Status: working
 

@@ -12,6 +12,12 @@ origin:
   slug: square-smoke-0918
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 61a636d1-16db-5be9-8a5b-5ae318ea4a47
+  slug: odd-wildflower-1328
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: b468a235c15887f01243f2eabf116cd3741b46ef848c3996962448e0cc006ee1
 ---
 # Visual observability seam (tooling node)
 

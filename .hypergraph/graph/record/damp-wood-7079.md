@@ -13,6 +13,12 @@ origin:
   slug: damp-wood-7079
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0efa5615-ff6f-54dd-908f-3fa38d23639f
+  slug: flat-snow-3894
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 1d4a5efa961c0ceff7aef1e8df0f81bcc0a1786b6855c47eaad42bcae9a6a477
 ---
 ## Trigger
 In the new Studio the baseline policy visibly fumbles on every course except the tight one. This node quantifies why.

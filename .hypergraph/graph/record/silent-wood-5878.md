@@ -14,6 +14,12 @@ origin:
   slug: silent-wood-5878
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 016a4d83-0687-541e-93ff-7da4328e1ebc
+  slug: purple-forest-6778
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 492f2bea76927557cd46f2913030eada3ecf3526beee9e8399945505c1942065
 ---
 ## Hypothesis
 B5/B6 left giant as the weak, seed-fragile scale. Mechanism guess (from `wild-tree-5582`): giant is the **rarest, hardest slice** of the uniform U[4.5,18] radius draw, so it's under-trained. Prediction: biasing the sampler toward large courses (more giant mass) should lift and stabilize giant — testing whether giant's weakness is a **distribution** problem (fixable by reweighting) rather than a capacity one (B6 showed more capacity didn't help).

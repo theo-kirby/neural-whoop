@@ -12,6 +12,12 @@ origin:
   slug: morning-base-2167
   revision: 27
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e69a6e7b-0e32-585c-9025-994f876ee1d2
+  slug: late-truth-8411
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: d2a6b50dc8daec3d5af6d64ad88d62282859d7fa2b7a1b57ed7cbf64eac23d65
 ---
 # Reward shaping: time_penalty sweep (empirical node, RESOLVED — GREEN)
 

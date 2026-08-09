@@ -13,6 +13,12 @@ origin:
   slug: white-surf-8279
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3d4b7913-8b4a-5a3b-b9a7-5129288a05cd
+  slug: broad-truth-4694
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: ea4c3390ce421af2248270f770794044ff1bdab0fc94a47298b20799e84828ee
 ---
 ## What shipped
 - **Backend**: `studio/live.py` `LiveSession` (stateful, steppable); `/ws/live` websocket in `server.py` (build off-thread, single-flight via the shared `ROLLOUT_LOCK`, reader-queue + ~50 Hz step/stream loop, frees the GPU session on disconnect); a `build_session` refactor (env+agent construction shared with the rollout path); and a shared `hero_pose_snapshot` frame extractor so the live wire-format can't drift from the recorded replay schema.

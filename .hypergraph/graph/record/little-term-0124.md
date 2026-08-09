@@ -13,6 +13,12 @@ origin:
   slug: little-term-0124
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e15a4715-c6ae-5769-b4f0-566111efe7f0
+  slug: orange-king-5423
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: f69998f753aee6ce4400e1b1e1f8b9abbe821160f892757e6a97ceb739e86734
 ---
 ## Hypothesis
 Framing/decision node: given the O-0 measurement (parent sparkling-shadow-2507: policy = 79 KB flash / 1 KB RAM / ≥0.5% CPU headroom everywhere), which chip-on-the-whoop path should the project take, and how does it compose with the locked offboard-first plan?

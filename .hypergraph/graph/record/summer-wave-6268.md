@@ -12,6 +12,12 @@ origin:
   slug: summer-wave-6268
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 40fc1342-b593-5168-8c94-ffd0008f9bd1
+  slug: black-sound-4708
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: ee4cbf3154831d8afceea21f077446830b72d894ffb2215191fe93187d46c4aa
 ---
 ## Setup
 The formation density curve (`rapid-smoke-6696`) showed swarm_formation collapses ONLY when slots crowd the collision radius — a geometric packing limit, not an agent-count limit. This hop isolates the agent-count axis: **hold slot spacing FIXED at a feasible ~0.6m (2.4x the 0.25m `collision_radius`) and scale `n_agents` 6/12/24 by GROWING the ring** (`formation_radius` 0.600 / 1.159 / 2.298 -> spacing 0.60m each). `n_drones` held 12288 (`n_envs` 2048/1024/512). [128,128]@120M, seed 0, full seam DR. Eval each at its own scale, 2048 envs x 1500 steps, seed 12345. Configs `configs/swarm_formation_scale{6,12,24}.yaml` (committed 7fbe7af); n=3 ref from `raspy-moon-0909`.

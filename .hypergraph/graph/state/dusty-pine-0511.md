@@ -5,6 +5,12 @@ title: neural-whoop — state
 created_at: '2026-08-09T18:28:18+00:00'
 parents: []
 summary: ''
+flywheel:
+  node_id: bf2b6991-b13b-54e8-9100-69566e43496d
+  slug: square-sun-3876
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 3cb6e6144e092b31a4f8b81e06d52be3222f99c001e66377baab35d4e816d61f
 ---
 Distilled state graph root for neural-whoop.
 

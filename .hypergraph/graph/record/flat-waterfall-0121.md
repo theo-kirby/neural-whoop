@@ -12,6 +12,12 @@ origin:
   slug: flat-waterfall-0121
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3f432f3f-4629-5d61-a600-bf916624c1eb
+  slug: frosty-butterfly-2688
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 88f649b367ccb1bead990517e250ce97f2f9b0a4f1570e56544197c5c95a516f
 ---
 ## Setup
 Follow-up to `long-tree-2976` (the EMA precision-filter GREEN, single seed at alpha=0.7) to (a) confirm it across seeds and (b) find the lag<->variance knee. Alpha sweep `estimate_ema_alpha` in {0.5, 0.85} (0.0=detector anchor and 0.7=the prior GREEN already exist) + a **second seed** of 0.7 and 0.85. Detector-ON `target_follow` (3deg bearing / 10% range / 5% dropout / 110deg FOV), [128,128]@120M, n_envs=4096, full seam DR. Eval each under its own regime, 2048x1500 seed 12345 deterministic. Reward identical throughout; only alpha + train seed vary.

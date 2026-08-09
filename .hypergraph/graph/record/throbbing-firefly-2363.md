@@ -12,6 +12,12 @@ origin:
   slug: throbbing-firefly-2363
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 81d88863-b0de-5687-a6db-4179cb02d24f
+  slug: bitter-bar-3315
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 8183779baecaed309b7cf6c7f7e2eefd9a2d14124e43eb41fe976dda739c44a8
 ---
 # Effective-mean deterministic deployment (the clipped-Gaussian trim-bias fix)
 

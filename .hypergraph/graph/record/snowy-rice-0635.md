@@ -12,6 +12,12 @@ origin:
   slug: snowy-rice-0635
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 65fd80e1-2c97-5c9d-a107-6b45f5f883d7
+  slug: lingering-haze-7532
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 258a245915f288a6ae22e00bd5a9324399f033d8f43a1654aee07f7cfc6596d2
 ---
 # Importance-sampling Pareto dial — trading tight vs giant on the [256] generalist (empirical, RESOLVED — Pareto/nuanced)
 

@@ -14,6 +14,12 @@ origin:
   slug: lively-block-9924
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f5b33753-401e-58a1-a509-001f5131c40e
+  slug: throbbing-wildflower-1907
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 1e16f293d93ff8496d949d3467e0515b22c722ff3946156a39ed989af05eb0da
 ---
 # Method: the pilot acro-flip harness — blind take-off → flip → land
 

@@ -13,6 +13,12 @@ origin:
   slug: old-violet-0574
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 50214cad-fdbe-5714-bb5b-e4b4144e027b
+  slug: dry-poetry-2692
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: fa920fc58c764700d6e9166d42c07a552b2995696fdd1bd14709ea19b4e89119
 ---
 # d50var: does training across an amplitude band force an amplitude-invariant trim? Yes — the cliff disappears. It just isn't high enough yet.
 

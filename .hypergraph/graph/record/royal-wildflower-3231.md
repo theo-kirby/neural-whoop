@@ -13,6 +13,12 @@ origin:
   slug: royal-wildflower-3231
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e9da5a38-6b08-504a-a8e3-2b6033c5518a
+  slug: red-mouse-9483
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 0713b848dc5f7e02b45f909b7141ccda74a9a0d791bf9573f2b94d236914a33b
 ---
 ## Setup
 Retrained `target_follow` detector-ON with a tightened standoff reward (`configs/target_follow_tight.yaml`): `track_sigma` 0.6->0.35 (sharper peak) + new `over_distance_penalty=0.5` (linear tax on d > d*). Identical otherwise (detector seam, [128,128], 120M, full DR, seed 0). Eval matrix vs the prior policies, 2048 envs x 1500 steps, seed 12345, deterministic.

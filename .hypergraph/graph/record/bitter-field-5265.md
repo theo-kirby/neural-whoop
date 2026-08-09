@@ -12,6 +12,12 @@ origin:
   slug: bitter-field-5265
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 1c229fdf-3992-5f93-867c-a405f7efc828
+  slug: muddy-bonus-6308
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: eb06383b29c2bf9857655b0c83eb00399165040962b34ec54b90e2ea7fe0d77a
 ---
 # hover_tof_air65_w192u15: more capacity keeps buying robustness — and starts selling the setpoint
 

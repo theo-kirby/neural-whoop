@@ -12,6 +12,12 @@ origin:
   slug: bitter-sun-1558
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: abb45d86-2174-593a-8b27-2519ff5cc646
+  slug: bitter-salad-4087
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: dadc90eb4726d510088413f449e684dcacd36674e5005ed73909a1b882c12925
 ---
 # Onboard-only tiny-whoop autonomy — what the field actually does, and our cheapest path
 

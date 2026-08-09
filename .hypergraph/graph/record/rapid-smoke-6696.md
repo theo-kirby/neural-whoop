@@ -13,6 +13,12 @@ origin:
   slug: rapid-smoke-6696
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: a4cfb784-6612-500e-a388-cac165a029d9
+  slug: divine-moon-2109
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: cddecdbc041460667f205c79d88487f909056f8586c0987f062760940e27173e
 ---
 ## Setup
 The swarm_formation GREEN (`raspy-moon-0909`) noted that at n=3 / wide ring (1.0m) collisions never arise, so it's a weak collision-avoidance test. This hop traces the **formation density curve** to find where formation-keeping and collision-avoidance actually conflict. Scale `n_agents` 3/6/12 on a **tight ring** (`formation_radius=0.5`), holding `n_drones`=12288 (`n_envs` 4096/2048/1024) so the comparison isolates density. Slot spacing = `2 * r * sin(π/n)` = 0.866 / 0.500 / 0.259 m vs the `collision_radius`=0.25 m. [128,128]@120M, seed 0, full seam DR. Eval each at its own density, 2048 envs x 1500 steps, seed 12345. Configs `configs/swarm_formation_n{3,6,12}.yaml` (committed e320ecb).

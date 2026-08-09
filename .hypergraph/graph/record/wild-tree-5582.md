@@ -13,6 +13,12 @@ origin:
   slug: wild-tree-5582
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 45c68808-afeb-544a-81b0-a642f56b0de3
+  slug: shiny-poetry-3784
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: e6f9c73dd1dc82c4ce98086399e6753f90a0ae9233746defdd1ac2a682070bb4
 ---
 ## Hypothesis / purpose
 B4 (`purple-base-8302`) declared a dominant GREEN on a SINGLE seed (s0). Every node in this branch carried the single-seed caveat. This re-runs the exact same `gate_race_general_giant_w256` config at **seed 1** to test whether the win — especially the headline giant improvement — is robust or seed luck.

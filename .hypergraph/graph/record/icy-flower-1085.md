@@ -13,6 +13,12 @@ origin:
   slug: icy-flower-1085
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 5ccf7c42-7113-5b97-899f-d7baf498b7a2
+  slug: round-cherry-4512
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 6f10f834f8ff6f31901de9983f133f16dd2342a98311b6707bdb2f4fa5294f5f
 ---
 # hover_air65_bridge: first-flight hover under the ESP-bridge envelope (3 seeds)
 

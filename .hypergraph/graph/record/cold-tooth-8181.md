@@ -12,6 +12,12 @@ origin:
   slug: cold-tooth-8181
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: c8fc5ef7-589f-5468-9584-448d0dd91bbd
+  slug: noisy-pine-6020
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 76d1fcfdbe3d7ab1524c98a313a15421dd64638c72ef82559708fc4cccc6d8d9
 ---
 # hover_tof_air65_w128u15_ampc: easing into the noise makes it worse, not better
 

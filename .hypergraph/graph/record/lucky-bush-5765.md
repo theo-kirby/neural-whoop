@@ -13,6 +13,12 @@ origin:
   slug: lucky-bush-5765
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: fd60a857-a840-5fb4-b715-35d30f947d3b
+  slug: bold-wood-3559
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 3abf0c2a5f819b584e3eba2d7a44c66b40db6ab93750bbfb1495d23eebb30a61
 ---
 # nw-viz — Three.js replay -> hero MP4 (tooling node)
 

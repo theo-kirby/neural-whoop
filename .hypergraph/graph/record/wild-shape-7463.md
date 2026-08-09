@@ -12,6 +12,12 @@ origin:
   slug: wild-shape-7463
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: de82e999-8385-52ca-be6c-7560666d37f8
+  slug: white-brook-3805
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 09ffd8f6731907920c86d77bdf6dcb5f143b3ffd15839ff96de29970e19fb83d
 ---
 # Airframe option: Mobula6 2024 V3 (superseded)
 

@@ -13,6 +13,12 @@ origin:
   slug: lingering-resonance-4887
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 63244fe4-0c91-5c69-b617-77d0db722f4e
+  slug: twilight-cloud-7507
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 2ce661a2c6c19c678c36289674b4233bc3485b77ff850af2551388846a7c2f8f
 ---
 ## Hypothesis
 The Studio/Bench drone was a crude procedural glyph (a box + four cylinder rotors). Theo has a CAD model of the actual airframe (`whoop_assembly_draft.step`); using it should make every viewer — especially the Bench real-drone dashboard — show the true chassis instead of an abstraction, at no cost to the training or replay path.

@@ -14,6 +14,12 @@ origin:
   slug: polished-moon-9652
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 669f6f67-3b3c-5619-972f-929b11ed88ed
+  slug: tight-sun-8524
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 85f93f90f433be1d92299ea199531b9ee95e77c736ccf4fb049590345a523423
 ---
 # d50: is half the measured gyro-noise amplitude below the learnability ceiling σ*? No — and here is why nothing on the fixed-amplitude ladder could ever pass
 

@@ -13,6 +13,12 @@ origin:
   slug: gentle-bird-8357
   revision: 9
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 54c21b0f-6e8b-5430-aed3-cbb2b78d6d48
+  slug: bold-block-7420
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: a34ba6a08e20eed6a8ec04dacd3c3d000ec82c5206aa31433171ede6a8e268bb
 ---
 ## Status: NORTH-STAR IDEA / integration branch (not a sim experiment)
 

@@ -13,6 +13,12 @@ origin:
   slug: bold-shadow-8014
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: d5d62411-710c-56f6-b497-8405e455f3cf
+  slug: red-sound-4519
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 43150db7da8d02d6f4984531f95ff8cb4862a6763002d9240ee21a2f4f77e827
 ---
 # d50var_s8jit: train dist == deploy dist was not enough — the final arm and the campaign verdict
 

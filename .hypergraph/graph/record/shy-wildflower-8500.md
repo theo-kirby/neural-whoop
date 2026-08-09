@@ -12,6 +12,12 @@ origin:
   slug: shy-wildflower-8500
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 196485ec-7af6-509b-be55-671807c8166c
+  slug: floral-frost-4509
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 5890306ea3804c6f35b90362d4eaaa620f41640da58c17d9029a75b5832467f5
 ---
 # Scale-generalist gate racing — range-training generalizes across course scale (empirical, RESOLVED — GREEN)
 

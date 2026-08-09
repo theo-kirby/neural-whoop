@@ -12,6 +12,12 @@ origin:
   slug: misty-paper-7383
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e148fa18-29df-5dd3-a840-65f6e94b412c
+  slug: gentle-poetry-1653
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 1786a72192937cb4cc24e85f3fa8e9081373c4a977805f805744efc13ba518a7
 ---
 ## Hypothesis
 A tiny policy trained with disturbance rejection as the *objective* (hold a setpoint, recover from impulses) — not as a DR side-effect — will hold station and re-stabilize from arbitrary shoves/tumbles, and survive being poked by hand in the Studio, **iff it trains against the very impulse seam the editor will drive**.

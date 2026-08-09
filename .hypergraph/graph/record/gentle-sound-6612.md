@@ -12,6 +12,12 @@ origin:
   slug: gentle-sound-6612
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 73672786-b354-56b3-925a-b4c7d8f9aefa
+  slug: restless-cell-8415
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 9080e9ed9421f9ea185b558b404effdab9e742931fcef07d8ea19e2157a9cb65
 ---
 # hover_tof_air65_w128: width fixes the nominal leveling regression — and buys it by over-trusting noisy channels
 

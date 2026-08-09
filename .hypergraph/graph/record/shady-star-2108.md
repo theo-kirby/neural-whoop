@@ -6,6 +6,12 @@ created_at: '2026-08-09T19:55:26+00:00'
 parents:
 - young-snow-0387
 summary: 'Upgraded to 0.0.8; the AGENTS.md block carrying this project''s whole Flywheel-to-Hypergraph reconciliation was preserved rather than overwritten. The contract''s frontier summary now matches the interview: nothing broken, and open never means next. 0.0.8''s stricter citation rule surfaces 7 real uncited claims, left unfixed rather than guessed at.'
+flywheel:
+  node_id: 62ae93f5-eff2-57bf-8c4f-55a255d78b8d
+  slug: late-recipe-8675
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 50184f6ff011cfbbefa3d2ab211d3d583508ec86d7e854cf92785a66007f3954
 ---
 ## What
 

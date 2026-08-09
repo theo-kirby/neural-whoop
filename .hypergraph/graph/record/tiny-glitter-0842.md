@@ -14,6 +14,12 @@ origin:
   slug: tiny-glitter-0842
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: a5828028-0969-521b-ae2b-4e89e59b56d1
+  slug: late-bar-6004
+  revision: 0
+  pushed_at: '2026-08-09T21:28:18+00:00'
+  content_sha256: 40759d899e0aac51599389213bb7eb5b75c4875356b44e9d586b4d9b8f8fbf58
 ---
 # ToF sensor characterization + three deploy fixes (2026-07-30)
 

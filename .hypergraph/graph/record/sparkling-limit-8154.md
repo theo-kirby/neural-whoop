@@ -13,6 +13,12 @@ origin:
   slug: sparkling-limit-8154
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: fa08093d-7fd6-567b-aed8-ff8316678a63
+  slug: red-bar-5590
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 45e0f8513d13d1e98958b12569ae4e53feb874aca59f0561548ee9f2b501bb38
 ---
 # Capacity probe: bigger policy + longer training (empirical node, RESOLVED — GREEN, NEW BASELINE)
 

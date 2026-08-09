@@ -13,6 +13,12 @@ origin:
   slug: long-queen-3431
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: ec24a8cd-34ff-56d2-9ebd-8869384b7604
+  slug: gentle-scene-8918
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 9fb1d7fea5acc3be0a792432b2d89a0001b1762456467e101404572786c32ad6
 ---
 # Air65 II purchased — control/compute-path branch map
 

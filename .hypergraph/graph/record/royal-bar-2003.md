@@ -13,6 +13,12 @@ origin:
   slug: royal-bar-2003
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 34cf6085-9735-5e5d-a644-29ca7ef63163
+  slug: rough-sound-3134
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 1c163def9d9e24e2b9342ac1234fd01b82d576586a53d5207963403e68ec5961
 ---
 # d50var_s8 first flight — hover solved, policy exonerated, crash was the harness
 

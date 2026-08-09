@@ -12,6 +12,12 @@ origin:
   slug: calm-base-6054
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 8498f213-9a31-5625-b6d3-82cbd9f2e481
+  slug: little-dawn-9519
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 8869f4b80a4ce94e3719a1a62385603204ba10765b82a4504dc1f67d0dd51359
 ---
 # hover_tof_air65_w128u15: reward-side leveling pressure buys back the noise tail — most of it
 

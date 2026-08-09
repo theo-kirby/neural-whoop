@@ -13,6 +13,12 @@ origin:
   slug: aged-term-6809
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0bab377a-0611-524c-9782-61730371ea24
+  slug: broken-surf-4517
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 628d5d7cfc1dee5b6ac8be1c85bc81c7025062ec544873fa683719e57c2914bb
 ---
 # Hop-11 — reliability-weighted reward (near-miss boundary penalty) (RESOLVED, NO-GO)
 

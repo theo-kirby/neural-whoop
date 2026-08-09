@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:31+00:00'
 parents:
 - dusty-pine-0511
 summary: Vendored, patched DiffAero pure-torch dynamics core running on Blackwell. Working. Carries the 2026-08-01 rate-loop frame-bug fix and the standing consequence that non-planar measurements predating it were made on a divergent substrate.
+flywheel:
+  node_id: 17fc86fc-24ee-52c7-9f0b-530c49201d34
+  slug: plain-cell-1990
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: b0580aa85ea545c4ce6e9561110ab5a8305fb669f08601dbf4bed80c4fd065bb
 ---
 Status: working
 

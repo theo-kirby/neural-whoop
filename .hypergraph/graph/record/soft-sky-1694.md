@@ -13,6 +13,12 @@ origin:
   slug: soft-sky-1694
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: b102ada8-f826-51b1-834a-7c63e2f98e17
+  slug: still-wind-1782
+  revision: 0
+  pushed_at: '2026-08-09T21:28:18+00:00'
+  content_sha256: 93d70e7d54c49a9f8a5b39edf2f5a885306ea701f152f4bafa2e87ac1de219ea
 ---
 # Real-drone blind-flip session #1 — Air65 II, one-press Bench Flip
 

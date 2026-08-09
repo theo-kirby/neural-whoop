@@ -12,6 +12,12 @@ origin:
   slug: aged-darkness-9566
   revision: 25
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 12cba4d5-fd94-5061-95ae-40ed051c8ec3
+  slug: orange-frog-8182
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: cf6579f70fb0591c221e286509b5aa4b03176763d9ac48eee0c27e473c9663eb
 ---
 # Racing-line / next-gate-speed reward (empirical node, RESOLVED — RED / refuted)
 

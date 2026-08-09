@@ -12,6 +12,12 @@ origin:
   slug: cold-night-8900
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: bfa7f74e-74f9-55f9-84e3-5fbf51875c12
+  slug: divine-cell-0538
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 6694fa58bbbbe130dfdfb428493d93d3af3dd6fde7eb91a6397c133dd5733a18
 ---
 # hover_blind_air65_long: how far blind IMU-only hover gets at 80× the budget, with the trim-bias fix
 

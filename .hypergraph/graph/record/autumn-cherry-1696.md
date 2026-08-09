@@ -13,6 +13,12 @@ origin:
   slug: autumn-cherry-1696
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 5da4853a-e76a-5ff3-b484-5ca30de31fde
+  slug: round-wood-0555
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 1965a4d33ca510ed1e3f882138494d0c67e4eef34a21754333f27c3160ab69ae
 ---
 ## Hypothesis
 The EMA precision primitive trades lag for variance-reduction and leaves a residual per-fix penalty (`wandering-mode-7957`: its benefit shrinks on fast targets due to lag; `mute-block-8299`: deployable formation stuck below the clean ceiling). A **predictive** filter -- a constant-velocity **alpha-beta** filter (steady-state Kalman) that tracks the estimate AND its velocity and predicts one step ahead -- should smooth the noisy detector fix WITHOUT the EMA's pure-lag penalty, especially on a moving target. Predicted: alpha-beta beats EMA, most on the fast target.

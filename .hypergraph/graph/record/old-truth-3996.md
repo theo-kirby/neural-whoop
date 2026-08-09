@@ -14,6 +14,12 @@ origin:
   slug: old-truth-3996
   revision: 25
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: ab0642e6-d816-56e1-b580-7da7ac540b64
+  slug: odd-hall-8860
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 4980174b4acd4cb7acca3f88e36f3df0b73cfabf8f4cdce615ce2f2fb9ed60aa
 ---
 ## Hypothesis
 The baseline fumbles on big courses because it never trained on far-apart gates (measurement `4d5ed6b9`). Training ONE policy across a range of course scales (the `scale_randomize` knob, commit `d56a16d`) should recover big/giant reliability at a modest tight cost.

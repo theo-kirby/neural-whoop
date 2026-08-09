@@ -13,6 +13,12 @@ origin:
   slug: fancy-smoke-0094
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 637cb41c-1af4-51c1-829e-55b682234e27
+  slug: wild-bush-1084
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: c9a31023c163f7885d785d986f855045f7e3d64214f933bb460f408c514da2c1
 ---
 # d50var_s8 props-off deploy check + yaw-sign refutation (bench, Air65 II)
 

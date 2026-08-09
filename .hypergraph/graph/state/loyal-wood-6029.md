@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - cold-pebble-7468
 summary: acro_flip v1 is GREEN on both axes and has flown once for real. v2 is RED as an exploration failure, which is the direct argument for reference_track. Tracking the authored swing and orbit is GREEN; the tracked flip is RED, and a control seed showed every single-seed result in this line carries an error bar wide enough to flip crash/survive.
+flywheel:
+  node_id: 18f23861-a324-5347-9570-2380a87ac825
+  slug: green-bar-4626
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: 3c7a308dfdb1a6acd3d026221eb77a3e9eda37bd929a44b62235c42429562a39
 ---
 Status: open
 

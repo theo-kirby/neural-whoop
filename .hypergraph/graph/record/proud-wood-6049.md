@@ -13,6 +13,12 @@ origin:
   slug: proud-wood-6049
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 6cbb31f8-9969-5379-89e4-2c5e1dbf4d3b
+  slug: shy-cherry-2312
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: b7832b0e476faae635e723093567d0467d7460d4bfdf706250fa3b7d4b47161a
 ---
 ## Setup
 The hop-14a NO-GO (`ffc5d9e4`) showed swarm completion is capped by track CONGESTION, not the shared-fate rule. This hop traces the **density curve** to find where coordination/throughput breaks. Scale `n_agents` 3->4->6 on the **same** 4.5 m arena, **holding `n_drones` = 12288 constant** (`n_envs` = 4096/3072/2048) so the comparison isolates *density* (agents sharing one course) from training amount (same updates, same 120M-step budget, same per-update batch). [128,128]@120M, seed 0, full seam DR. Eval each at its own density, 2048 envs x 1500 steps, seed 12345, deterministic. Configs `configs/swarm_race_n{4,6}.yaml` (committed 1b176e9); n=3 = the hop-13 baseline (`4b21d59b`).

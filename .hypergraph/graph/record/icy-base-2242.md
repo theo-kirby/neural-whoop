@@ -14,6 +14,12 @@ origin:
   slug: icy-base-2242
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 9b4339dd-c001-5257-9b37-b459907a7f6a
+  slug: young-bonus-7460
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 0e9141c1d0778632c8a7737516a39c78fe8bb0a230652b8d2cad0de575d137ff
 ---
 # Full-drone rewire bring-up — Air65 II + XIAO bridge, 2026-07-29/30
 

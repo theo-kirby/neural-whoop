@@ -12,6 +12,12 @@ origin:
   slug: jolly-disk-0383
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 734eb27f-2dc1-5cdb-98e5-d9e253c7a9e7
+  slug: winter-block-0818
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: fa321d79d4b6db4873d8fc828e079e526c99f940effb8552f35c3784d0912846
 ---
 ## Hypothesis
 The full-range generalist (`b4c3466f`) pays a ~0.07 tight-completion tax (0.95->0.88) from training on big courses from scratch. A curriculum that grows the course-size range tight->big over the first `scale_curriculum_frac` of training should master tight first and recover that tax WITHOUT sacrificing the big/giant gains.

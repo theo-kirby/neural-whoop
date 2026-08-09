@@ -13,6 +13,12 @@ origin:
   slug: long-fog-2207
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 8dca4cf0-2c9c-51fa-b2d1-e21474948e57
+  slug: polished-block-1621
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: e1b65887d716f0692f40b54696d0d5ee54848f8bb480c67a23f2d972d8fe4959
 ---
 ## Hypothesis
 Framing/analysis node — what does the closest open competitor system do differently, and which of their choices should flow into neural-whoop?

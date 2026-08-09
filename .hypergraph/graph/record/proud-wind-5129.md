@@ -12,6 +12,12 @@ origin:
   slug: proud-wind-5129
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 17d9387e-15ef-5297-ac88-fa45e2ff799c
+  slug: polished-dream-7991
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 2643e96bbab8cecb6a57b77e8752ff24bafc238973eb340c066c915cb8e23bbd
 ---
 ## Setup
 Theo asked to replace the drone's red/white nav lights with a plain RGB direction axis, and to raise brightness once more.

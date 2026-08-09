@@ -12,6 +12,12 @@ origin:
   slug: little-feather-5786
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: b9e45ea9-89b9-57d5-b68e-e50d38ab27bd
+  slug: broad-night-2952
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 58c8b7a68bcdc6a3f261b41e9111d42a9c5a79139a368a6bb3b9a3ec131e82e9
 ---
 ## What this is
 Code-only method node: implements `target_follow`, the perception beachhead. The dominant un-bracketed sim2real gap is that every policy in the graph (incl. the studio-baseline generalist b4c3466f) is fed a PERFECT body-frame target vector from `OracleEstimator`; on hardware there is no oracle. This task is the first to route obs through the `DetectorNoise` seam (bearing/range/FOV/dropout + stale-hold) as a first-class part of the task, so a tiny policy can learn to track through real detection error without rendering a pixel.

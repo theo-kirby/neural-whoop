@@ -13,6 +13,12 @@ origin:
   slug: square-cake-5756
   revision: 25
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 47aabb7b-2a7e-5230-9e33-c006af3b65b9
+  slug: shrill-king-1874
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 63766f9211eb053e2afbaeed5eb335255793abebab3fe00b278d781fa20cce2b
 ---
 # PPO exploration (ent_coef) sweep (empirical node, RESOLVED — RED / no-effect)
 

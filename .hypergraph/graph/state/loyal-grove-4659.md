@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:31+00:00'
 parents:
 - dusty-pine-0511
 summary: Torch-native PPO over the batched env, deterministic eval, and TorchScript / ONNX / dependency-free C export. Working, with a measured C-export budget of 79.3 KB flash and 1.0 KB RAM. Carries the clipped-Gaussian deployment-bias finding.
+flywheel:
+  node_id: 1c0ebfb3-00cf-5714-9363-c64d94d7d7c2
+  slug: young-silence-1287
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: cf18da14225d456367150140bdf0a6541cc10efce58a392a7f3bab03f0c539a2
 ---
 Status: working
 

@@ -12,6 +12,12 @@ origin:
   slug: weathered-wildflower-1251
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 6971443a-04aa-522e-8e4c-fd13ec98218c
+  slug: raspy-mud-0104
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 6b0ee9659fedb184ddd03783b1b5582e50e79650b704675b99d4ef295159d328
 ---
 # Scale curriculum vs flat uniform sampling (empirical, RESOLVED — NO-GO)
 

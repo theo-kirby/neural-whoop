@@ -13,6 +13,12 @@ origin:
   slug: silent-math-9686
   revision: 26
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 4d5a5512-990c-52b1-90fc-16d7cf9a86d6
+  slug: late-bread-4076
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: ce6d72e91c53f9272ed7f8a3969a53ea3d2921b8b00958fef20844aae9175d88
 ---
 # Honest dynamically-feasible oracle (empirical / measurement node, RESOLVED — GREEN)
 

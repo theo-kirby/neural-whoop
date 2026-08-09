@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:33+00:00'
 parents:
 - modest-raven-7153
 summary: Peer-to-peer ESP-NOW replaced the WiFi/UDP bridge end to end and confirmed its hypothesis that the tail was association overhead rather than 2.4 GHz congestion. Both pre-registered bench gates still miss, the in-flight tail has since regressed to the WiFi baseline, and docs/ESPNOW.md still describes the link as awaiting bring-up.
+flywheel:
+  node_id: 8aaf55d3-e20d-511b-8a9c-ff3f8abc83ab
+  slug: withered-smoke-4391
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: c34f26877838d5dfd5e0002deaec246365e4df41e2b96ba0459b6a06b5491c4b
 ---
 Status: open
 

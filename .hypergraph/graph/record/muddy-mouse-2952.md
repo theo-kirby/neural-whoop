@@ -14,6 +14,12 @@ origin:
   slug: muddy-mouse-2952
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f5d9d1de-74e3-52e6-84a1-06aa0f6ca103
+  slug: broken-bird-4864
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 077ffa5f52f30a94f786326a673e3a48e3206e3eddf9f5a2cee759678b6b6b19
 ---
 # Compose the winners: onboard-hybrid split latency × Muon lr 2.5e-3 × reliability shaping
 

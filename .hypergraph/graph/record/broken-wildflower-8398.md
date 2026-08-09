@@ -12,6 +12,12 @@ origin:
   slug: broken-wildflower-8398
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 40f556ac-419a-598b-aa20-41a3e44104a2
+  slug: purple-rice-7122
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 891c9c261e61f09300c3af6fd293ab8302b4da26d5ae0eac8f108138df211f7c
 ---
 # d50var_s8: the capacity lever lands — and the residual enemy has a name
 

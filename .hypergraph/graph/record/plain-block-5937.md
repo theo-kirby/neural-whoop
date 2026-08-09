@@ -14,6 +14,12 @@ origin:
   slug: plain-block-5937
   revision: 23
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 2afa4d04-54b3-565a-9937-31bb2989ae9a
+  slug: bitter-meadow-5328
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 11215c1ba813fa7c9518d4692841085467d6e5a494b0d8a7c7c32e3d3c8acb7f
 ---
 ## What this is
 A viz/checkpoint + bugfix node: the swarm_race hero video showed a single lonely drone, and this makes the swarm actually render as the coexisting group it is. First true visual confirmation of multi-agent shared-track racing.

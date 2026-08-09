@@ -12,6 +12,12 @@ origin:
   slug: shiny-queen-9632
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: a42ef933-502d-55cd-9242-5cc1277ead15
+  slug: withered-lake-2781
+  revision: 0
+  pushed_at: '2026-08-09T21:28:18+00:00'
+  content_sha256: 313924a04fb7124ddf0deb36bd7926b833be5ccef1893490a5149ef42e3d010f
 ---
 # ESP-NOW link — implementation (2026-07-30)
 

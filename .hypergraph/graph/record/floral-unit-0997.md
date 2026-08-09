@@ -13,6 +13,12 @@ origin:
   slug: floral-unit-0997
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: bcff971b-b3da-5766-ae20-5880d00e924f
+  slug: square-term-2705
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 04a91b5572910e592833877bd90bbc329e628899c65bc5935ad58cbd8e3fa7c4
 ---
 # hover_tof: closing the altitude loop with the first measured state channel
 

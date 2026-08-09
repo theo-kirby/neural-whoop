@@ -13,6 +13,12 @@ origin:
   slug: still-bird-0492
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: a362e244-5c0f-5979-9cf0-975fb48aeb76
+  slug: restless-wave-9912
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: c375760eed7ca8fbeee1bad64864ebcc0cdf3e1df22f0a345c85e2ed3d97a7df
 ---
 # hover_blind_air65: IMU-only hover training + the deterministic-trim discovery
 

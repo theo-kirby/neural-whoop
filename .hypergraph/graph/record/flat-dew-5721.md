@@ -12,6 +12,12 @@ origin:
   slug: flat-dew-5721
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 9324466f-4252-5c88-bd82-b61835992b33
+  slug: lucky-mode-4417
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 183a78b1f620accc89e624e58a56269fd4ff09b4d094283253cdec3323a20be8
 ---
 ## Hypothesis (from hop-13's staged hop-14a)
 `swarm_race` (hop-13, `4b21d59b` / cool-union-2681) ends the whole env episode on ANY drone's collision (`drone_fail = crashed | collided`, shared fate), so a clean drone is reset for a teammate's collision — suspected to cap `lap_completion_rate` at 0.34. **Predicted:** relaxing shared-fate (collisions become a per-step soft cost, not fatal) lengthens clean drones' episodes → higher completion, with `collision_rate` staying bounded (the per-step `collision_penalty` still deters).

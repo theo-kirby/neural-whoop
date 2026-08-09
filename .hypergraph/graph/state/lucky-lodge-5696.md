@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:33+00:00'
 parents:
 - modest-raven-7153
 summary: The shipped 1.0 m hover policy crashed every real flight that reached its setpoint, by a five-step mechanism measured in flight. Flying lower at 0.7 m still does not settle. Desk-Hover moves the operating point to 0.10 m so the mechanism is structurally absent, scores 3 of 4 pre-registered gates in sim, and has never been flown.
+flywheel:
+  node_id: 5b3afdb0-b117-58aa-9fb3-d8976cf902e0
+  slug: floral-sea-1852
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: ac3eaf62a724c8f0b49a16874dc6b95a7151702f366a0c8def7fa68591031e32
 ---
 Status: open
 

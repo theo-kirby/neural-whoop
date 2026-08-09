@@ -12,6 +12,12 @@ origin:
   slug: snowy-sun-6709
   revision: 7
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 76ba5810-753a-574b-900f-95f9c206c800
+  slug: tight-smoke-8823
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 410a7e184d8448d95d641cd55c2cec63577a2f0b6b138fa186cdcf03adae4e87
 ---
 # Capacity unlocks the full-range generalist — [256,256] is the knee (empirical, RESOLVED — GREEN)
 

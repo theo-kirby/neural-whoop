@@ -14,6 +14,12 @@ origin:
   slug: twilight-boat-1997
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 65bc87b1-03a3-5bcc-b506-5b4baf3a8c2f
+  slug: spring-resonance-6037
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: bd5cbd59df75a785a69b0ceeff6587ea611ffab099670cf009bdb2f0f903bd8b
 ---
 Iteration on the neural-whoop Studio (parent **wispy-dust-3157**) responding to direct user feedback on the viewer's look and feel. Five changes, all shipped in commit `100d66e897614982285dbf30642c790dcf2f9bf0` (pushed to `theo-kirby/neural-whoop@main`):
 

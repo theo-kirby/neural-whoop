@@ -6,6 +6,12 @@ created_at: '2026-08-09T19:02:38+00:00'
 parents:
 - wandering-water-2720
 summary: The interview the adoption could not run. Nothing in the project is broken — the three broken nodes are the frontier being worked, not regressions. Swarm is parked by decision; racing is a live goal deliberately off the frontier; the frontier is single-drone flight quality, latency, hover and acro.
+flywheel:
+  node_id: c181dec4-a4a7-5b05-a2be-4a176ad23dca
+  slug: aged-morning-1142
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: fbe6f9f0e5285af17edb21bb684b8abbaaf2e28df8b819681a09c20b7101f793
 ---
 ## What
 

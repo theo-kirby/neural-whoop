@@ -12,6 +12,12 @@ origin:
   slug: withered-bar-0632
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 1b5c6fc9-bcdd-5de8-8470-e54065994b42
+  slug: summer-limit-8235
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 3176c94538a78125fc9430cd3fb252745b8849aca50019317eaaae36b20a241c
 ---
 ## Hypothesis
 The parent node (FBX materials) shipped with a caveat: the FBX's only texture ref was a stale screenshot, so parts meant to be *image*-textured fell back to flat base color. Theo re-exported `whoop-assembly 2.fbx` with two real textures and handed over the image files, so embedding them should give the battery its LAVA wrap and the FC its board silkscreen.

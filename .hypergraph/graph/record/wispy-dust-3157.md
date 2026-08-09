@@ -15,6 +15,12 @@ origin:
   slug: wispy-dust-3157
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 50c954b9-81d7-57fa-a4b5-6e9dd22585a5
+  slug: summer-cherry-9742
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 81df53b157c6170cd8943c4fdb935a87947802ba094f120d9a032aa7c2da1f54
 ---
 ## What this is
 A **method/tooling** node: an interactive in-browser Studio for this repo, the successor to neural-whoop-lab's studio. Where nw-viz (`6f89cea9`) renders a *fixed* replay to an MP4 headlessly, the Studio lets you **drive the sim on demand** — pick a saved policy, a course, and a drone count, hit Fly, and watch the resulting rollout play back (3D wide + FPV/top-down PiP, play/pause/scrub). It closes the loop from the visual-observability seam (`563fc6d9`) + v2 group replay (`900c7626`) into a live, exploratory viewer.

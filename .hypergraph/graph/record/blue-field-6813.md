@@ -13,6 +13,12 @@ origin:
   slug: blue-field-6813
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 323007d5-859a-50c5-8aea-b4dca348c16c
+  slug: round-boat-1390
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 921f3ce0fb05290bdc3fd1ddb0be92c5461996329c9289b6b1ff69b17dc4ef48
 ---
 # Stage 0 — actuation seam bring-up (bench)
 

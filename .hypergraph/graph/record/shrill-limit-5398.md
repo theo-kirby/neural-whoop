@@ -12,6 +12,12 @@ origin:
   slug: shrill-limit-5398
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 441492fc-d7f5-530e-bb88-d1b7eff808d1
+  slug: broad-tooth-2928
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 26b2e911c11625182dc57ec09a419b814529faba1b791014c313ae35682cbd46
 ---
 # Hop-8 — confirm 120M multi-seed + push the training-budget knee (RESOLVED, GREEN/improved, modest)
 

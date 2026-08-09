@@ -14,6 +14,12 @@ origin:
   slug: wild-waterfall-3546
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f1922ae1-9e92-555b-87c9-1fa2d0535c47
+  slug: tight-waterfall-0956
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: a3409d25da0d8dded147dbb135cd2485107f806341bf647175724a906243279d
 ---
 # Hypothesis: action-history + smoothness penalty kill the delay limit-cycle
 

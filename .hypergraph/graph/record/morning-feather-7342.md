@@ -11,6 +11,12 @@ origin:
   slug: morning-feather-7342
   revision: 28
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: ebfd638e-3ff8-57e0-9b4a-db221719b1c5
+  slug: silent-base-7036
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 834cac7a2984c87c3f92756f0a093d9a7943fd22c1771ed0d240b2b2f874e457
 ---
 # neural-whoop
 

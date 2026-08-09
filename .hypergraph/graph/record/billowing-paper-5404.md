@@ -13,6 +13,12 @@ origin:
   slug: billowing-paper-5404
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 769499ae-d025-5312-bd05-512fcfac3b3a
+  slug: flat-salad-2404
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: f10ab3d78b22dd2ff1d7cdb40684b827bd242326fe13edf3d312354b5ef057f6
 ---
 # Idea: blind acro now — train acro_flip + pilot acro harness
 

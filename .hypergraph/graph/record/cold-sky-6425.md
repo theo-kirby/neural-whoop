@@ -13,6 +13,12 @@ origin:
   slug: cold-sky-6425
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: af00e164-f10f-5c50-bfbc-a8720a7117d1
+  slug: steep-brook-5949
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 6183cb2c9b0e68cee5788b6ef82233e6e335a7166a7dbf286f1488d572f5bbaf
 ---
 ## Idea
 The filtering thread closed (`old-pond-5686`) with: the EMA is the best simple precision filter, but it was only ever validated on SMOOTH orbit/lissajous motion. The open question it raised: does the EMA survive **abrupt** motion, where its lag should hurt most? `hand_follow` (catalog ⬜ -> ✅) answers it with a new task: close-follow a jerky hand.

@@ -13,6 +13,12 @@ origin:
   slug: young-fire-2086
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 20e1aab1-110e-5d0c-946d-bba3f8351baf
+  slug: autumn-math-2469
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: cd5a65b3696f5fd4b2a14f185beb9da6d867b6aac8016836beb230dad536d6dd
 ---
 # Method: xiao_bridge firmware + UDP transport
 

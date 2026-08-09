@@ -12,6 +12,12 @@ origin:
   slug: jolly-paper-6314
   revision: 60
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 834a962b-727d-58c8-814a-f75d893d5d56
+  slug: patient-scene-7188
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: abb1b9679455b6e38da3bf783c6636d355e6cc7568969fd0a420b1676f53eeb4
 ---
 # Control node (flywheel-auto run contract)
 

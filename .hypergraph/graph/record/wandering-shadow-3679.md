@@ -13,6 +13,12 @@ origin:
   slug: wandering-shadow-3679
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: db7f6be0-d809-5a02-bc3d-d948dfc89afc
+  slug: tiny-hill-3015
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 5a9ec010b21afbbd9ab1571b000a4ca0e0aa1c2ed9efdd7bd12b3170cda44e7a
 ---
 # Hop-12 — latency-aware policy via frame stacking (RESOLVED, NO-GO)
 

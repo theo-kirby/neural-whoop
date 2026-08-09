@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - dusty-pine-0511
 summary: exit_probe.py was structurally unable to report the vertical exits it was quoted for, and the corrected tool has not been re-run across the earlier ladder arms. Per-step rates were published without denominators. Four documents carry claims their own repo now contradicts.
+flywheel:
+  node_id: ffdea9fa-2840-523c-a732-a03fa41ee6a5
+  slug: throbbing-tree-0053
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 6e231e8e71884a8f042d7757f8af56964de45d98404b85b76c3cd05e8d25a388
 ---
 Status: open
 

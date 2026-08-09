@@ -13,6 +13,12 @@ origin:
   slug: patient-dew-6473
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: bd047928-da9e-5c1f-94b9-11f2b56001a5
+  slug: long-unit-2702
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 6abc7e96df5e7770351ba19fd165d5434d83435c72c0867573842b090bb8f67e
 ---
 ## Hypothesis
 B5 (`wild-tree-5582`) left giant seed-fragile. If [128,128]->[256,256] helped by adding capacity, maybe [384,384] keeps paying — raising and/or stabilizing giant.

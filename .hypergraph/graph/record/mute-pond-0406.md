@@ -13,6 +13,12 @@ origin:
   slug: mute-pond-0406
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: b73eab2d-f7dd-5193-ac42-d8081e9b7134
+  slug: frosty-dust-8068
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: 1c2ca75ee4ceb069b79d84ae75617807fb8bdcb95b63d1463ccfe86810624513
 ---
 # Scale-generalist x sim2real re-center: good on both scale AND latency
 

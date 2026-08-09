@@ -13,6 +13,12 @@ origin:
   slug: nameless-bar-9184
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 60c48e66-8eab-583c-aee1-6418ba3825a2
+  slug: dry-cake-2408
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: d81eec16f87077bd86c7e3113adb413889a47536f0c7b6905c80d4d73a4a3c8d
 ---
 ## Setup
 The RED `royal-wildflower-3231` (c24fe7be) established that reward-shaping cannot move the detector-trained `target_follow` follower's standoff back-off (it sits at 2.17m vs d*=1.5m), and pre-registered the lever that's actually left: the detector REGIME itself. This hop characterizes the robustness<->accuracy frontier as a function of perception quality.

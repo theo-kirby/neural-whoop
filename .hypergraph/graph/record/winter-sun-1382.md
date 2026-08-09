@@ -12,6 +12,12 @@ origin:
   slug: winter-sun-1382
   revision: 25
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: bd8c2c87-7f2e-5f1b-b24b-d1bf0d904421
+  slug: tiny-flower-3383
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 45838583a7cbb61b499086c6a37a56266bdbff6649258bed9e38d1ae3a903a79
 ---
 # gate_race baseline (empirical node)
 

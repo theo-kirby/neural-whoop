@@ -12,6 +12,12 @@ origin:
   slug: wandering-mode-7957
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: d24bc04d-2111-5638-9281-f4678c0d2a62
+  slug: square-sound-5319
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: c2bf1c0f46e64f4257238e2b3809355bdddcd8c70167e3ca0ace6be39d4d5d94
 ---
 ## Setup
 The EMA alpha-sweep GREEN (`flat-waterfall-0121`) left an open question: the EMA(0.85) precision-filter adds ~0.13 s of lag — does that lag break tracking when the target moves FAST? This hop stress-tests it. Train detector-ON `target_follow` at **2x target_speed (3.0 vs the 1.5 m/s baseline)**, EMA(0.85) vs no-filter detector (alpha=0). [128,128]@120M, seed 0, full seam DR. Eval at own regime, 2048 envs x 1500 steps, seed 12345, deterministic. Configs `target_follow_fast_{det,ema}.yaml` (committed 2fb710b); slow (1.5) anchors from `long-tree-2976` / `flat-waterfall-0121`.

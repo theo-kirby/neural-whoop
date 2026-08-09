@@ -14,6 +14,12 @@ origin:
   slug: white-rice-3299
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3ddde17f-64e5-582c-98ed-f3a86f82961d
+  slug: muddy-poetry-0718
+  revision: 0
+  pushed_at: '2026-08-09T21:28:18+00:00'
+  content_sha256: bc2c1a81df2bf462eadd20b56828a4884e2d8773be939bff7d36af2a6531a03b
 ---
 # Deploy: w128u15 at 1.0 m — the compromise arm ships, with its risks stated
 

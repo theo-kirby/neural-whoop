@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - cold-pebble-7468
 summary: The lab's first beachhead. Best lap 2.32-2.54 s over 3 seeds at 95-98% completion, but the honest oracle showed ~37% headroom remaining and five separate levers have been refuted against it. The standing conclusion is that the residual is a control/algorithm limit. The named next lever (SHAC/BPTT) has never been run.
+flywheel:
+  node_id: 4f6c5727-c9f6-5c23-8b51-004f65cf25f2
+  slug: winter-pine-1130
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: 1c3b32a8b4fc0b2bc2a28352b9a2c0f019b1e23f9e3ccbfb2df4f49ec20d09c8
 ---
 Status: open
 

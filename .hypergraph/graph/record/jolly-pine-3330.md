@@ -13,6 +13,12 @@ origin:
   slug: jolly-pine-3330
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 5cd680ea-3499-5313-9154-20e9da6fc692
+  slug: white-sun-8065
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 9e96995dc0cc8d64eeed337881d0ed10515275a1e6512e385b6b56303d78aff1
 ---
 # hover_blind_air65_long: the 1-hour "how far can blind hover get" run
 

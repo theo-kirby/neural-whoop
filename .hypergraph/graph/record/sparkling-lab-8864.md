@@ -14,6 +14,12 @@ origin:
   slug: sparkling-lab-8864
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 4a68ce61-aae5-5700-b4f9-6b9da5c52f08
+  slug: delicate-meadow-6697
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 14acc95e9699c086901b68f9e21368b21850ac7dafb59a82750d6a70089b5fdc
 ---
 # Airframe of record: BetaFPV Air65 II
 

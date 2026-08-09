@@ -14,6 +14,12 @@ origin:
   slug: curly-dew-8661
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 477dd529-eb40-59fb-ba8e-fe8bb333502e
+  slug: purple-hat-6732
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: d3be3ac81bb0c5adfec9d60c140c930769203b99c32ff8cedecbb236ed371de6
 ---
 # Idea: Studio next — gamepad + real chassis mesh + visuals
 

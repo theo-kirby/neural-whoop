@@ -13,6 +13,12 @@ origin:
   slug: shiny-firefly-6661
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3fd48f93-25c7-596d-acbf-5879d38ee254
+  slug: calm-breeze-0519
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 2ba5f85eae68701c95812657c5c50754302bb7e7734b66eaa24527bfcf8b60d7
 ---
 # The amplitude is not a law of nature — it is a sampling artifact the software stack controls
 

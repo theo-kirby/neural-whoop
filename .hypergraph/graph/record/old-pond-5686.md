@@ -13,6 +13,12 @@ origin:
   slug: old-pond-5686
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 4dae402b-20cc-5195-9ba4-cfe454e5f970
+  slug: withered-firefly-3233
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: fb0702bf794a8568e766b326256388c25edc947627a21fa4a1823e15470f2098
 ---
 ## Hypothesis
 The body-frame alpha-beta filter was a NO-GO (`autumn-cherry-1696`) because the body frame rotates -> velocity is corrupted by ego-motion. Its pre-registered fix: filter in the **INERTIAL WORLD frame**, where the target's velocity is a real, smoothly-varying quantity, so a constant-velocity predictor can reduce the EMA's lag. Predicted: world-frame alpha-beta beats the EMA.

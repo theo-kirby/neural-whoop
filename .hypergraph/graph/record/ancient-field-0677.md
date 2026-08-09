@@ -14,6 +14,12 @@ origin:
   slug: ancient-field-0677
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 387a4a70-3516-518c-9178-86c7d7b03939
+  slug: winter-thunder-0563
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: fd997c6529be08ab75a1248f5aaf089514dd85b5e66cd482ddc9cee506db1530
 ---
 # Muon lr 2.5e-3 + reliability shaping — crash penalty vs near-miss band
 

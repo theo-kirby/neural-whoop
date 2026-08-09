@@ -12,6 +12,12 @@ origin:
   slug: fragrant-dream-2868
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3de51744-80fd-5dd2-bd7a-b57eadc6790a
+  slug: orange-hat-5001
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: e6b2a2a7078cc22eb28e65b191768e7c155e5e58b9d06ea17872b8fe82e8f0cf
 ---
 # _novz: the flagship recipe minus the vz channel — does removing vz recover hover? No.
 

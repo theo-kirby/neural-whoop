@@ -13,6 +13,12 @@ origin:
   slug: cool-resonance-0983
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: c0cc3638-ad1b-5abc-9014-e01867385dc5
+  slug: noisy-unit-2574
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 481cad849f001b25039de04cd564e66d8400a085cb2d6b5a92bd90d5f6d82c0a
 ---
 ## Setup
 Two `target_follow` policies, identical except the detector seam:

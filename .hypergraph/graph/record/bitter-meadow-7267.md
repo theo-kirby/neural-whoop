@@ -13,6 +13,12 @@ origin:
   slug: bitter-meadow-7267
   revision: 27
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: e11dcd61-59b9-5e77-9b0c-5181119926d2
+  slug: tight-forest-9533
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: d852b758d06974847ef14e9ffdfe5c9a874c94c235adb3cd760fdc45d3ed3d91
 ---
 # Strengthen the pass-gated speed-scaled lap bonus (empirical node, RESOLVED — RED / no-effect)
 

@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - cold-pebble-7468
 summary: 'Two swarm tasks, both GREEN, with a sharply measured boundary between them: shared-track racing collapses super-linearly past n=3 while own-slot formation holds flat to 24 drones on one tiny shared policy. Untouched since 2026-06-28.'
+flywheel:
+  node_id: 92f6690a-4eab-59e1-a244-68f2fd0a79c0
+  slug: long-wood-6676
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: 1fd623a085d2549513b8f3dde87c7e715bf99c2b308faee18f4235c709c20938
 ---
 Status: working
 

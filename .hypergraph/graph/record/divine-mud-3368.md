@@ -13,6 +13,12 @@ origin:
   slug: divine-mud-3368
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 0d8bff65-242c-5f98-8c3a-0f56217daad8
+  slug: morning-violet-5305
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 4267ebd7486e56aa4b88cd2e4fc70a82689ba7b53a321549cab688fe3aeedf2a
 ---
 ## Setup
 The two strongest swarm/perception results so far: (a) **clean-anchor formation scales FLAT to 24 drones** (`summer-wave-6268`, hold ~0.99/0 collisions), and (b) the **perception-aware bridge** recovers n=3 formation under a noisy detector to 0.862 hold via EMA (`sweet-bush-8692`). This hop fuses them: **does the deployable (noisy-anchor + EMA) formation also scale flat?** Detector ON (3deg/10%/5%dropout/110-deg FOV) + `estimate_ema_alpha`=0.85, `n_agents` 6/12/24, slot spacing held ~0.6m by growing the ring (r 0.60/1.16/2.30), `n_drones` held 12288, [128,128]@120M seed 0, eval 2048x1500 seed 12345. Configs `swarm_formation_pscale{6,12,24}.yaml` (b6d56ea).

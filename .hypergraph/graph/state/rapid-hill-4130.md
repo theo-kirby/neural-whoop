@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:33+00:00'
 parents:
 - modest-raven-7153
 summary: The measured +23.9 mm static ToF offset is 2.4% of a 1.0 m setpoint and 24% of Desk-Hover's 0.10 m, against 8 cm of floor margin. In sim every Desk-Hover floor exit appears only once the height-error bias is on. Both the design node and the docs name a pilot-side tof_cal as the blocking item and record it as deferred, not done.
+flywheel:
+  node_id: cb9976e2-0a33-543e-aea9-c23e18318e94
+  slug: fragrant-fire-8194
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: 784c99fbef8c492912f5d93c6832cb8bc6873fc75f9acdc2f99d9ad1bb57161f
 ---
 Status: open
 

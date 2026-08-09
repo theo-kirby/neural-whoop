@@ -14,6 +14,12 @@ origin:
   slug: empty-firefly-1882
   revision: 7
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 2cfe4ef3-ca86-5127-93e5-dcb425a47218
+  slug: super-mud-5800
+  revision: 0
+  pushed_at: '2026-08-09T21:27:05+00:00'
+  content_sha256: cdb2f3f0ff868dcd0b1e9a8314da452ff2442b2150f0b80bf81235db39155f91
 ---
 ## Hypothesis
 The tight 120M baseline collapses as gates spread (0.95->0.21 completion) because it never trained the **cruise-and-brake** regime far-apart gates demand (parent `damp-wood-7079`). Training the SAME [128,128]@120M net across a per-episode RANGE of course scales should flatten that curve — at some in-distribution cost.

@@ -13,6 +13,12 @@ origin:
   slug: shiny-mountain-6946
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 067ab6e5-c0e5-5790-bb03-0e7f51850d89
+  slug: damp-salad-1523
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: b0e89f53d2a869340fc69e780c58abc4f586388249dbcfd9593d1c749634ab2c
 ---
 # Hypothesis: does honest sensor-noise DR + a velocity channel + a steeper well make blind hover deployable under the REAL noise floor?
 

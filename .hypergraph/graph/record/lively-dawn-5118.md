@@ -12,6 +12,12 @@ origin:
   slug: lively-dawn-5118
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 9b3078c1-f12c-563d-aab3-91a411845c16
+  slug: fragrant-rice-1272
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: d1b89d19d5aeb13054d4e5f0b8ed2ac856ccd29bc57ab06187c09be47b66cf61
 ---
 ## Hypothesis
 None — characterization. Install PufferLib 4.0's Ocean `drone` env locally and measure what its stack actually delivers on our hardware (RTX 5090), as evidence for the system comparison.

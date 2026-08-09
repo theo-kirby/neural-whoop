@@ -12,6 +12,12 @@ origin:
   slug: old-leaf-3989
   revision: 5
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 12988c12-1f5e-5fd7-8a53-a95d1e9e5da2
+  slug: long-mouse-8156
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: b627f1f0a48efb771b45595ca7e42fb1e117e8761344e9bd9468370dba37bfd7
 ---
 ## Why
 `cool-resonance-0983` found the detector-hardened target_follow policy is robust but conservative: it sits at 2.17 m vs d*=1.5 m (track_err 0.91) while the oracle-clean policy holds 1.52 m (track_err 0.08). The hardened policy even earns LOWER reward (1.17) than the clean policy does under the same noise (1.69), so it's a conservative local optimum, not the reward optimum. The current reward lets it back off for free: `track = exp(-((d-d*)/0.6)^2)` is wide (at 2.17 m it still scores 0.29) and `in_view_bonus` is a flat +0.5 regardless of distance, so extra standoff trades a little track reward for big robustness (target rarely exits FOV, dropouts matter less).

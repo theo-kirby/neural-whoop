@@ -12,6 +12,12 @@ origin:
   slug: cool-sea-6202
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3c5af0f7-d6e7-5158-96e0-b21df5483e05
+  slug: cold-unit-9849
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: f3ea043c6f8579b2a99a52a1d0bf2212b8a923b9e56482922ad8db567d1430bc
 ---
 # RPM-anchor vz fix — the deploy-harness bug from royal-bar-2003, fixed in software
 

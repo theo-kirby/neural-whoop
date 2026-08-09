@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:31+00:00'
 parents:
 - dusty-pine-0511
 summary: 'obs-v4 (11, body-frame, heading-invariant) and act-v2 (4, CTBR, normalised) plus a two-layer DR seam. Working and stable; the seam is what makes a tiny policy transferable. One long-open gap closed in 2026-08: the sim had no mirror of the pilot''s throttle floor.'
+flywheel:
+  node_id: 0f7af439-3ce7-578a-88a1-ac9881971d01
+  slug: noisy-limit-5440
+  revision: 0
+  pushed_at: '2026-08-09T21:28:32+00:00'
+  content_sha256: 693b61a42f39c4a9289110d0e6a79dc1d454d1c7dbd50a464966254e55ad7281
 ---
 Status: working
 

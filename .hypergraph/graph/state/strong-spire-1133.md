@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - cold-pebble-7468
 summary: 'Four follow tasks, all landed. The single durable result is an EMA on the noisy body-frame estimate, alpha 0.85: it closes the detector standoff back-off, is Pareto-dominant over the brittle clean policy, and generalises to abrupt motion. Its envelope is measured and it vanishes at about 4.5 m/s.'
+flywheel:
+  node_id: 0108a894-885f-526f-b4c8-214fc87fecec
+  slug: dry-block-0879
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: f4fb8dc55a3b93086f0a1b0dd1efe128bef523b1f99e5ea8eedf9542e68f71dd
 ---
 Status: working
 

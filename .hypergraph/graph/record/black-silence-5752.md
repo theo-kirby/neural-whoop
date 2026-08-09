@@ -12,6 +12,12 @@ origin:
   slug: black-silence-5752
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 46d5ce4f-ac6c-5b5e-8a73-2438bcf41e13
+  slug: old-surf-4825
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 591d3491a9e7d8a0b547061cfcb44583aa7d07bc2742ce68cca98920bdfdbfd2
 ---
 ## Hypothesis
 Swapping Adam for Muon (Newton-Schulz orthogonalized momentum, PufferLib idea #3 from long-fog-2207) improves gate_race training at equal steps — PufferLib trains its whole drone suite on Muon.

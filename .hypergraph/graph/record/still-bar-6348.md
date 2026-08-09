@@ -13,6 +13,12 @@ origin:
   slug: still-bar-6348
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 872b56b7-fa2a-5bf3-a6e3-bc3c5ffae796
+  slug: small-band-6480
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: 72a8c4a3583c019aadaa8dcc5c7d33afd3433e3ff0a980f67b6020df5133a0ba
 ---
 # Idea: Quest 3 apartment scan → SDF obstacle env → same-room sim2real course
 

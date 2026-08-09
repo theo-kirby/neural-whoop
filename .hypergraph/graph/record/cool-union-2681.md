@@ -13,6 +13,12 @@ origin:
   slug: cool-union-2681
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 1f52d4f6-13a0-5861-960e-6613cce8ca67
+  slug: broad-dream-4590
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: fd9307d1790987fee6d27c5f318c98459141f63e182a85cb66648cdaa9cfbe8a
 ---
 # Hop-13 — swarm_race: the first multi-drone (n_agents>1) task
 

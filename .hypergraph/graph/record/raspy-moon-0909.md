@@ -13,6 +13,12 @@ origin:
   slug: raspy-moon-0909
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 08ce6f4a-5004-5e65-9c94-0d655a0d5315
+  slug: odd-morning-5099
+  revision: 0
+  pushed_at: '2026-08-09T21:26:51+00:00'
+  content_sha256: f86916afb73de217242258890882c7c8c95ea2f444856baa89fb0e5cb118afa8
 ---
 ## What it is
 The **second swarm task** (the formation half of `docs/TASK_CATALOG.md`), opened because the density curve `proud-wood-6049` showed shared-track racing throughput is congestion-capped at n=3 and flagged a formation task as the way to *sidestep shared-track congestion entirely*.

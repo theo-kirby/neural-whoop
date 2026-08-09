@@ -12,6 +12,12 @@ origin:
   slug: morning-cloud-8841
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f001f14d-59d7-5005-8770-4e847fe953fb
+  slug: floral-flower-4070
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: 16a7caec4658a951b43c3b000a5309d4cb1f3fde6c5d0963c020385c78f87867
 ---
 # Method: Flip-as-starter — the one-button blind-flip flight
 

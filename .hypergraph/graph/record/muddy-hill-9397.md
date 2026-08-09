@@ -13,6 +13,12 @@ origin:
   slug: muddy-hill-9397
   revision: 4
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 2506819d-748f-5188-a36f-04a46a101195
+  slug: round-math-1326
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 6905a53ae143dc5627744b50ece42700a7e0464bb6a95600baf7a5428af664d6
 ---
 # hover_blind_air65_v2: does honest-noise DR + vz + a steeper well beat the baseline? No — it re-breaks the trim.
 

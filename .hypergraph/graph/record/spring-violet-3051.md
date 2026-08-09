@@ -13,6 +13,12 @@ origin:
   slug: spring-violet-3051
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 62e24327-a747-5285-93b5-372724b9401f
+  slug: blue-surf-5530
+  revision: 0
+  pushed_at: '2026-08-09T21:27:34+00:00'
+  content_sha256: 771799f6e93f0323f8685c1209f20e55123ee9104fa2f7982ee2a32a937b1ab6
 ---
 # R3: does coloring the honest noise (the spectrum fix) recover the open-loop trim? No — but it measurably helps.
 

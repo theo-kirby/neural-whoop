@@ -14,6 +14,12 @@ origin:
   slug: long-sea-0577
   revision: 1
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: d8c16f6e-d0ef-54cd-b228-7f1542b00ce4
+  slug: dry-hill-8924
+  revision: 0
+  pushed_at: '2026-08-09T21:28:03+00:00'
+  content_sha256: d2568fc8d269953b72602f63215a39870d3f7b04cf7acc294a6ce1fb506cd457
 ---
 # Hypothesis: accel-in-obs → observable velocity → station-keeping (stock hardware)
 

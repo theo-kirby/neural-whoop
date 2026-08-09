@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:33+00:00'
 parents:
 - long-mountain-5811
 summary: 'Training is render-free by design and the detector-noise seam works. The honest camera-only eval path is a stub: render_depth raises NotImplementedError, photoreal RGB waits on Isaac Lab''s Blackwell tiled-camera bug #4951, and the chosen camera module has not been integrated.'
+flywheel:
+  node_id: 54f7a647-f4cd-53fa-9b93-55a98a36600d
+  slug: winter-mouse-6558
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: c626d0aff5f9272d3b52f7a01138ede3edecc4459e878c69bd0e3235ccaa303f
 ---
 Status: blocked
 

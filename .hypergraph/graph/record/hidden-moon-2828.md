@@ -12,6 +12,12 @@ origin:
   slug: hidden-moon-2828
   revision: 3
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: ae61f264-5bc0-50e9-8c91-13418cf80728
+  slug: morning-fire-7309
+  revision: 0
+  pushed_at: '2026-08-09T21:26:19+00:00'
+  content_sha256: 83bc4ad82b4652224b1f1cf4549219113688e12e98fa2b031d14d4d146a12a01
 ---
 ## Hypothesis
 PufferLib's trainer recipe — advantages recomputed per minibatch with V-trace ρ/c clipping from a live importance-ratio buffer, plus advantage-prioritized whole-segment minibatches with (N·p)^−β correction and value refresh — improves wall-clock-to-quality over our vanilla PPO epoch loop at equal sample reuse (idea #2 from long-fog-2207).

@@ -13,6 +13,12 @@ origin:
   slug: rapid-union-8239
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: cb34b133-4999-5ecc-ab8c-2ec1ae7f3fdf
+  slug: hidden-truth-3948
+  revision: 0
+  pushed_at: '2026-08-09T21:27:48+00:00'
+  content_sha256: 2e019824814580acc7da81bf143bd3665de63876709bfe2012c36e86a366cda0
 ---
 ## Setup
 `hand_follow` GREEN (`cold-sky-6425`) showed the EMA recovers abrupt-motion follow at zigzag speed 1.8, but flagged: 'a faster/sharper hand could eventually expose the EMA lag.' This hop maps that boundary -- swept the zigzag hand speed **1.8 / 3.0 / 4.5 m/s** for **detector+EMA(0.85)** vs **raw detector** (d*=0.8, [128,128]@120M seed 0, eval 2048x1500 seed 12345; 1.8 = the `cold-sky-6425` anchors).

@@ -6,6 +6,12 @@ created_at: '2026-08-09T18:42:32+00:00'
 parents:
 - dusty-pine-0511
 summary: 'The offboard deploy path — stdlib pilot engine, XIAO ESP32-S3 MSP bridge, Betaflight on an Air65 II, driven from the Studio Real tab. BROKEN: the last flight session ended in a tumbling crash, the airframe needs rewiring and the bench is down, and the in-flight latency tail the ESP-NOW rebuild was meant to fix is back at the WiFi baseline.'
+flywheel:
+  node_id: 9183a953-556f-5caa-bff5-943bf3140780
+  slug: jolly-boat-2708
+  revision: 0
+  pushed_at: '2026-08-09T21:28:39+00:00'
+  content_sha256: 92989fcf9cfe5ba5f43593e8a1a9a1d3a5070bc4b6efc50de3950a9cccf89858
 ---
 Status: open
 

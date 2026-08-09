@@ -13,6 +13,12 @@ origin:
   slug: noisy-disk-9080
   revision: 24
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: f7175a8f-93b3-5121-a456-3141eed5a8bc
+  slug: lingering-mountain-8728
+  revision: 0
+  pushed_at: '2026-08-09T21:26:36+00:00'
+  content_sha256: 4645af5923ccd0ed05b3c8c431b204ac34ce9caba9c9e74ad8df2eaf93bf7b19
 ---
 # Hop-10 — DR curriculum for DR-on reliability (RESOLVED, RED / regressed)
 

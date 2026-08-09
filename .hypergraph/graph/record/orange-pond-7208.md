@@ -13,6 +13,12 @@ origin:
   slug: orange-pond-7208
   revision: 6
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 53ad0200-ae2a-55ae-87ba-1adf3ef93aa8
+  slug: delicate-base-6766
+  revision: 0
+  pushed_at: '2026-08-09T21:27:20+00:00'
+  content_sha256: 109570db1f9f3a72e6fa9ed461d7c87400aa25c21ac76c0d364209ea570ffda9
 ---
 ## Hypothesis
 B1 (flat per-episode scale randomization) left big completion at 0.71, under the 0.75 target. Ordering the scale exposure tight->big over the first 15% of training (a curriculum) might let the policy master tight control first, then transfer it outward — pushing big/giant higher and/or recovering the tight speed B1 lost.

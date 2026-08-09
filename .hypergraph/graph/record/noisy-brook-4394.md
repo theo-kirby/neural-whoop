@@ -13,6 +13,12 @@ origin:
   slug: noisy-brook-4394
   revision: 2
   exported_at: '2026-08-09T18:23:28+00:00'
+flywheel:
+  node_id: 3faafe03-09da-5a7b-817f-74a30fc59bbc
+  slug: lingering-king-7683
+  revision: 0
+  pushed_at: '2026-08-09T21:28:18+00:00'
+  content_sha256: 984c679599f73975b6b2ac2a7dd324d07176aa67cf27b36d9b3f649e2a2f9fe6
 ---
 # hover_tof_air65_w128u15_r25: training against the sensor we actually have
 
