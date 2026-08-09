@@ -95,13 +95,20 @@ attach artifacts.
 <!-- hypergraph:begin -->
 ## Hypergraph protocol
 
-This repo's memory lives in two graphs under `.hypergraph/` (see `.hypergraph/AGENTS.md`):
+This repo's memory lives in two graphs under `.hypergraph/` (see `.hypergraph/AGENTS.md`)
+— an append-only record of what happened, and a distilled projection of what is true
+now, with every claim citing the evidence it rests on. Work that is not recorded did
+not happen, and a dead end recorded is worth as much as a success:
 
 1. **Orient on arrival**: run the `hypergraph-orient` skill or read `STATE.md` —
-   the frontier (open/broken/blocked) is what matters now. For this project that
-   frontier is real: three components are `broken`, two `blocked`, four `open`.
-   Read `lucky-lodge-5696` and `autumn-bell-7061` before touching the deploy path
-   or quoting a probe number.
+   the frontier (open/broken/blocked) is what matters now. For this project:
+   **nothing is `broken`** — the author reviewed the three nodes the adoption marked
+   so and does not consider them broken [`golden-banner-2676`] — with two `blocked`
+   and seven `open`. **An `open` status here means "work not yet done", never
+   "next"**: swarm and racing are deliberately parked (`young-snow-0387`), so an
+   agent picking work by visible headroom would pick the wrong thing. Read
+   `lucky-lodge-5696` and `autumn-bell-7061` before touching the deploy path or
+   quoting a probe number.
 2. **Record every unit of work** (features, fixes, experiments, dead ends,
    decisions): the `hypergraph-record` skill — one causally-parented record node
    with a `## State Impact` section. Unrecorded work is invisible to the project.

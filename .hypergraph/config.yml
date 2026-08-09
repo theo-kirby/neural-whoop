@@ -3,7 +3,7 @@ project: neural-whoop
 
 # The release that last installed this project's skills, AGENTS.md block
 # and workflows — refreshed by `hypergraph upgrade`.
-hypergraph_version: 0.0.7
+hypergraph_version: 0.0.8
 
 # NOTE: `adopt --init` writes uuid5(slug) here even when it *adopts* an existing
 # root. The imported legacy root kept its archive node_id verbatim (`--fork`), so
