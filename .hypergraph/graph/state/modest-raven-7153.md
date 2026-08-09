@@ -7,9 +7,11 @@ parents:
 - dusty-pine-0511
 summary: 'The offboard deploy path — stdlib pilot engine, XIAO ESP32-S3 MSP bridge, Betaflight on an Air65 II, driven from the Studio Real tab. BROKEN: the last flight session ended in a tumbling crash, the airframe needs rewiring and the bench is down, and the in-flight latency tail the ESP-NOW rebuild was meant to fix is back at the WiFi baseline.'
 ---
-Status: broken
+Status: open
 
 ## Current
+
+**Not `broken` — the author's own call** [rec: golden-banner-2676]**.** The spine holds: the radio-owned safety interlock, faithful thrust telemetry, and the `--bridge fake` headless tests. What does not yet hold is a settled hover on the real airframe, and that is the frontier being worked rather than damage to repair before work resumes. The tumbling crash, the stale attitude frames and the airframe rewiring all stand as measured.
 
 The path [rec: rapid-meadow-0957] is: policy on the host, through `neural_whoop.pilot` (a stdlib-only,
 steppable flight engine extracted from `scripts/pilot.py`), over MSP to a XIAO

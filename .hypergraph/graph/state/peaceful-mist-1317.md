@@ -25,8 +25,7 @@ The honest caveat on the formation result is recorded in its own node: collision
 not arise there, so it is a weak collision-avoidance stress. That lives in
 shared-track racing and in denser formations.
 
-Nothing in this cluster has moved since 2026-06-28. `swarm_transport` and
-`swarm_vs_swarm` are catalogued in `docs/TASK_CATALOG.md` and unimplemented.
+**Swarm is parked by decision, not by neglect** [rec: golden-banner-2676]. Nothing in this cluster has moved since 2026-06-28, and that date is the decision showing: an explored branch the project chose not to pursue further, still considered valuable, not under active development. Treat it as scope rather than as a gap to fill — the standing scope decision is `young-snow-0387`. `swarm_transport` and `swarm_vs_swarm` are catalogued in `docs/TASK_CATALOG.md` and unimplemented, and are unimplemented on purpose.
 
 ## Negative knowledge
 

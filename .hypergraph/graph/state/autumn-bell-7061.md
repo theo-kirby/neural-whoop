@@ -7,9 +7,11 @@ parents:
 - dusty-pine-0511
 summary: exit_probe.py was structurally unable to report the vertical exits it was quoted for, and the corrected tool has not been re-run across the earlier ladder arms. Per-step rates were published without denominators. Four documents carry claims their own repo now contradicts.
 ---
-Status: broken
+Status: open
 
 ## Current
+
+**Not `broken` — the author's own call** [rec: golden-banner-2676]**.** The `exit_probe.py` defect, the re-measured 9.5% vertical exit rate, the missing denominators and the four contradicted documents all stand exactly as recorded. They describe outstanding cleanup, not a component that fails.
 
 This node exists because the project's own record found these [rec: shy-butterfly-3991], not because an
 outsider did. Each item below is cited to the node that found it.

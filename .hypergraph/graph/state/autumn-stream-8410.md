@@ -24,6 +24,8 @@ The yardstick matters more than the number. Replacing the path-length oracle wit
 honest dynamically-feasible one showed roughly **37% lap-time headroom remains**
 [rec: silent-math-9686], and that gap has never been closed.
 
+**Racing is deliberately not being pursued right now, and the headroom is still considered a real goal** [rec: golden-banner-2676]. Both halves are the author's: the ~37% gap is "a good goal", and racing is "another branch" the project is interested in rather than pushing. So `open` here means an unexecuted plan, **not** an abandoned one and **not** a queue item — an agent picking work by visible headroom would pick this first and be wrong. The standing scope decision is `young-snow-0387`.
+
 **Open, and named but unrun** [rec: morning-feather-7342]**:** SHAC / BPTT through DiffAero's differentiable path
 (`--algo shac` is reserved in `scripts/train.py`, and `AGENTS.md` and
 `docs/TASK_CATALOG.md` both name it). No node in the record graph reports running it.

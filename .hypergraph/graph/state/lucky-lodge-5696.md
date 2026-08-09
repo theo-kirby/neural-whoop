@@ -7,9 +7,11 @@ parents:
 - modest-raven-7153
 summary: The shipped 1.0 m hover policy crashed every real flight that reached its setpoint, by a five-step mechanism measured in flight. Flying lower at 0.7 m still does not settle. Desk-Hover moves the operating point to 0.10 m so the mechanism is structurally absent, scores 3 of 4 pre-registered gates in sim, and has never been flown.
 ---
-Status: broken
+Status: open
 
 ## Current
+
+**Not `broken` — the author's own call** [rec: golden-banner-2676]**.** Every measurement below stands: the ToF-band mechanism, the four flights that peaked above the trusted band, the guards that followed. What changed is the reading. The 1.0 m operating point was left behind rather than regressing from a working state, and Desk-Hover at 0.10 m is planned work that has never been flown — `open`, not `broken`.
 
 The shipped policy is `hover_tof_air65_w128u15`, chosen by the user at the second
 regroup after four one-factor arms mapped a clean-trim-versus-noise-robustness

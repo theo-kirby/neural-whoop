@@ -15,7 +15,11 @@ distilled from the 189 imported legacy record nodes and the repo's twelve docume
 Six children are architecture components; the rest are frontier claims. The archive
 these claims descend from is frozen and named in `.hypergraph/config.yml`.
 
+**What this project is deliberately not working on**: swarm, racing, and multi-drone work with other sensors. These are scope, not gaps — parked branches the author still values and is not pushing. The frontier being worked is single-drone flight quality on the real airframe: lowest achievable latency, a hover that settles, and acro. The decision itself is a record node, `young-snow-0387`, because it is a point-in-time bet rather than a fact about the world; `peaceful-mist-1317` and `autumn-stream-8410` carry it into the claims it bears on [rec: golden-banner-2676].
+
+An `open` status in this graph therefore means "work not yet done", never "next" — two of the open nodes are deliberately parked. Read the scope decision before picking work by headroom.
+
 ## Reconciliation
 
-- high_water_mark: weathered-hall-8765, still-truth-9599, fragrant-hill-8742, mute-block-8299, jolly-hat-7394, bitter-frog-1235, bitter-violet-6954, orange-pond-7208, patient-dew-6473, snowy-boat-4105, weathered-wildflower-1251, snowy-rice-0635, late-mud-4665, blue-field-6813, small-unit-3590, mute-pond-0406, wild-bird-1554, hidden-moon-2828, muddy-mouse-2952, still-bar-6348, fragrant-dream-2868, bold-shadow-8014, long-sea-0577, wild-waterfall-3546, floral-bird-7008, curly-dew-8661, late-bird-6048, holy-art-9938, divine-heart-1498, broken-tree-7316, wandering-water-2720
-- reconciled_at: 2026-08-09T18:50:00+00:00
+- high_water_mark: weathered-hall-8765, still-truth-9599, fragrant-hill-8742, mute-block-8299, jolly-hat-7394, bitter-frog-1235, bitter-violet-6954, orange-pond-7208, patient-dew-6473, snowy-boat-4105, weathered-wildflower-1251, snowy-rice-0635, late-mud-4665, blue-field-6813, small-unit-3590, mute-pond-0406, wild-bird-1554, hidden-moon-2828, muddy-mouse-2952, still-bar-6348, fragrant-dream-2868, bold-shadow-8014, long-sea-0577, wild-waterfall-3546, floral-bird-7008, curly-dew-8661, late-bird-6048, holy-art-9938, divine-heart-1498, broken-tree-7316, young-snow-0387
+- reconciled_at: 2026-08-09T18:35:00+00:00
