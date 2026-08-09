@@ -8,9 +8,9 @@ summary: ''
 flywheel:
   node_id: bf2b6991-b13b-54e8-9100-69566e43496d
   slug: square-sun-3876
-  revision: 0
-  pushed_at: '2026-08-09T21:28:32+00:00'
-  content_sha256: 3cb6e6144e092b31a4f8b81e06d52be3222f99c001e66377baab35d4e816d61f
+  revision: 1
+  pushed_at: '2026-08-09T22:15:02+00:00'
+  content_sha256: 94e9b7c4cf75b49670577f13bc570ecda560dbadb59349b6c11b81a3108e1a71
 ---
 Distilled state graph root for neural-whoop.
 
@@ -27,5 +27,5 @@ An `open` status in this graph therefore means "work not yet done", never "next"
 
 ## Reconciliation
 
-- high_water_mark: weathered-hall-8765, still-truth-9599, fragrant-hill-8742, mute-block-8299, jolly-hat-7394, bitter-frog-1235, bitter-violet-6954, orange-pond-7208, patient-dew-6473, snowy-boat-4105, weathered-wildflower-1251, snowy-rice-0635, late-mud-4665, blue-field-6813, small-unit-3590, mute-pond-0406, wild-bird-1554, hidden-moon-2828, muddy-mouse-2952, still-bar-6348, fragrant-dream-2868, bold-shadow-8014, long-sea-0577, wild-waterfall-3546, floral-bird-7008, curly-dew-8661, late-bird-6048, holy-art-9938, divine-heart-1498, broken-tree-7316, shady-star-2108
-- reconciled_at: 2026-08-09T19:58:00+00:00
+- high_water_mark: weathered-hall-8765, still-truth-9599, fragrant-hill-8742, mute-block-8299, jolly-hat-7394, bitter-frog-1235, bitter-violet-6954, orange-pond-7208, patient-dew-6473, snowy-boat-4105, weathered-wildflower-1251, snowy-rice-0635, late-mud-4665, blue-field-6813, small-unit-3590, mute-pond-0406, wild-bird-1554, hidden-moon-2828, muddy-mouse-2952, still-bar-6348, fragrant-dream-2868, bold-shadow-8014, long-sea-0577, wild-waterfall-3546, floral-bird-7008, curly-dew-8661, late-bird-6048, holy-art-9938, divine-heart-1498, broken-tree-7316, stormy-lily-4879
+- reconciled_at: 2026-08-09T22:14:42+00:00
