@@ -1,5 +1,17 @@
 # Flywheel: how neural-whoop maps onto the research graph
 
+> **HISTORICAL as of 2026-08-09.** This project moved to the **Hypergraph** protocol.
+> The 189-node Flywheel graph described below was imported verbatim into
+> `.hypergraph/graph/record/` — same slugs, same node ids, same multi-parent topology
+> — and the hosted graph is now a **frozen, read-only archive**. Do not create, edit,
+> tag or re-parent anything on it. What still applies: the node conventions (no empty
+> nodes, summary discipline, the hypothesis → setup → results → verdict → lineage body
+> skeleton, the `stop_reason` vocabulary) and the graph-shape philosophy — write those
+> into a Hypergraph record node instead. What does **not** apply: the setup section,
+> the MCP/CLI tool mapping, artifact upload (node files hold no artifacts — keep the
+> visual pack under `runs/` and name it in the node), and the `kind:`/`outcome:`/
+> `cluster:` tag taxonomy, which did not travel. See `.hypergraph/AGENTS.md`.
+
 This project is developed autonomously on [Flywheel](https://flywheel.paradigma.inc): every
 experiment is a node in a research DAG, and the graph is the durable, post-hoc audit trail of what
 was tried and what it bought. This doc defines the graph structure and the run contract. The

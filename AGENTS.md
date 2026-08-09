@@ -9,8 +9,9 @@ the hard bounds on your autonomy.
 **Optimize the whoop RL and discover novel, creative policies across the task catalog** — starting
 from time-optimal gate racing, expanding toward swarms. You may edit code, add tasks, change
 reward/curriculum/algorithm, and run/tune experiments on the local RTX 5090. Every experiment is one
-node in the Flywheel research DAG; the graph is the durable audit trail of what you tried and what
-it bought.
+node in the research DAG; the graph is the durable audit trail of what you tried and what
+it bought. **That DAG now lives in this repo under `.hypergraph/`** — see the Hypergraph block at
+the end of this file. The Flywheel graph it grew in is frozen as the archive.
 
 Bias toward **creative, measurable** progress: a new reward shape, a curriculum, a different
 algorithm (PPO → SHAC/BPTT via DiffAero's differentiable path), a harder course, a new task from
@@ -28,6 +29,12 @@ Each task defines its own metric; you optimize it and record it on every empiric
   `docs/TASK_CATALOG.md`.
 
 ## Operating loop (one experiment → one empirical node)
+
+> **Amended 2026-08-09 — read the Hypergraph block at the end of this file first.**
+> The shape of this loop stands; the store changed. "Node" now means a Hypergraph
+> record node under `.hypergraph/graph/record/`, not a Flywheel node, and the
+> Flywheel graph is a frozen read-only archive. Step 3's artifact upload no longer
+> applies — build the pack, keep it under `runs/`, and name it in the node.
 
 1. **Hypothesis.** State what you're changing and the expected effect on the metric. Open an
    empirical node with the hypothesis and the parent it builds on.
@@ -84,3 +91,45 @@ Frontier control starts at lookahead `n=1`, width `k=1`; widen as you find produ
 
 See `docs/FLYWHEEL.md` for the exact graph structure (root → control → empirical nodes) and how to
 attach artifacts.
+
+<!-- hypergraph:begin -->
+## Hypergraph protocol
+
+This repo's memory lives in two graphs under `.hypergraph/` (see `.hypergraph/AGENTS.md`):
+
+1. **Orient on arrival**: run the `hypergraph-orient` skill or read `STATE.md` —
+   the frontier (open/broken/blocked) is what matters now. For this project that
+   frontier is real: three components are `broken`, two `blocked`, four `open`.
+   Read `lucky-lodge-5696` and `autumn-bell-7061` before touching the deploy path
+   or quoting a probe number.
+2. **Record every unit of work** (features, fixes, experiments, dead ends,
+   decisions): the `hypergraph-record` skill — one causally-parented record node
+   with a `## State Impact` section. Unrecorded work is invisible to the project.
+   **This replaces the Flywheel step in the Operating loop above.** Where step 1
+   says "open an empirical node" and step 4 says "commit only after a terminal
+   verdict, with the node id in the message", the node is now a **Hypergraph record
+   node** under `.hypergraph/graph/record/`, and the id in the commit message is its
+   slug. The hypothesis → setup → results → verdict → lineage shape that
+   `docs/FLYWHEEL.md` codifies still applies — write it into `## What` / `## Why` /
+   `## Method` / `## Result`. Two things do **not** carry over: node files hold no
+   artifacts (keep the standard visual pack under `runs/` and name it in `## Method`
+   instead of uploading it), and there are no `kind:` / `outcome:` / `cluster:` tags
+   (say GREEN / RED / NO-GO in the title and summary, as the archive's nodes do).
+3. **Never write state nodes**; declare impacts and let the
+   `hypergraph-reconcile` skill fold them. `STATE.md` is generated — never
+   hand-edit it.
+4. **Verify before finishing**: `hypergraph export` + `hypergraph check` must
+   exit 0. If it says this project's copies are behind the CLI, run
+   `hypergraph upgrade` — the skills and this block are copies, and `uv tool
+   upgrade` cannot see them. `scripts/env_check.py` and `uv run pytest -q` are
+   still the foundation gate; `check` is in addition to them, not instead.
+
+**Flywheel is now the frozen archive, not the live record.** The 189-node Flywheel
+DAG this project was built in was imported verbatim on 2026-08-09 (epoch marker
+`wandering-water-2720`) and lives in `.hypergraph/graph/record/` with the original
+slugs, ids and multi-parent topology. The hosted graph is **read-only from here on**
+— do not create, edit, tag or re-parent anything on it. Its 765 artifacts stayed
+behind and `.hypergraph/config.yml`'s `archive:` block is the only pointer to them.
+Everything `docs/FLYWHEEL.md` says about *setup*, MCP/CLI modes, artifact upload and
+tag assignment is therefore historical.
+<!-- hypergraph:end -->

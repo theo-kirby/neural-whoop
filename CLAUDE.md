@@ -23,7 +23,19 @@ racing and expanding toward swarms. The autonomous-development loop runs on Flyw
    graph is the audit trail. Everything lives on this machine; both repos
    (`theo-kirby/neural-whoop`, `theo-kirby/nw-viz`) push to GitHub.
 
-## Autonomy & the Flywheel record
+## Autonomy & the research record
+
+> **Amended 2026-08-09.** This project now runs under the **Hypergraph** protocol:
+> the record graph and a distilled state graph are markdown node files committed
+> under `.hypergraph/`, and `STATE.md` is the generated frontier. Read
+> `.hypergraph/AGENTS.md` and the Hypergraph block at the end of `AGENTS.md`. The
+> 189-node Flywheel DAG was imported verbatim on 2026-08-09 (epoch marker
+> `wandering-water-2720`) and the hosted graph is now a **frozen, read-only
+> archive** — never write to it. Everything below about node discipline still
+> holds; wherever it says "Flywheel node", write a Hypergraph record node. The two
+> exceptions are artifacts (node files hold none — keep the visual pack under
+> `runs/` and name it) and the tag taxonomy (no `kind:`/`outcome:`/`cluster:` tags
+> exist locally; put the verdict in the title and summary).
 
 Capture work **as you go, on your own** — don't wait to be asked. After each meaningful unit (a
 feature, an experiment result, a tooling addition, a fixed bug, a visualization checkpoint): commit

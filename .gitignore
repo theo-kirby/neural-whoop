@@ -231,3 +231,7 @@ third_party/**/__pycache__/
 firmware/**/.pio/
 firmware/**/include/wifi_config.h
 firmware/**/include/espnow_config.h
+
+# Hypergraph: regenerable graph exports (the node files under
+# .hypergraph/graph/ ARE the graph and stay committed).
+.hypergraph/cache/
