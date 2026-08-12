@@ -1,0 +1,121 @@
+# desk-flow-noflow-m1live — the Desk-Flow-NoFlow M1-LIVE twin: CLEAN WORLD, LIVE SENSORS at 1.0x the trained
+# noise amplitude. The deploy-faithful clean-trim survival check.
+#
+# Everything off except per-channel obs noise: wind 0, thrust 0, rate_gain 0, bias 0, latency 0,
+# impulses 0, amplitude fixed at 1.0x (no amp_range). The in-task flow sensor model stays on — it
+# is the sensor, not the world.
+#
+# This twin carries the battery's survival gate (30 s >= 0.98) and its channel-liveness gate
+# (flow_valid_rate >= 0.95, against a modeled availability ceiling of 0.962).
+#
+# The CONTROL arm's twin: obs 6, no flow channels. Identical to the Desk-Flow
+# twin of the same name in every other respect, so the two arms are graded by the
+# same measuring stick.
+#
+# THE TASK GEOMETRY AND `act:` / `whoop:` BLOCKS BELOW ARE desk-flow.yaml's, VERBATIM. That is
+# load-bearing, not tidiness: scripts/survival_probe.py only overrides `hold_fraction`, so any
+# bound / setpoint / throttle-floor / sensor-model mismatch between a twin and the training config
+# silently measures a DIFFERENT ARENA than the policy trained in, and reports the difference as a
+# policy result.
+#
+# The obs-noise entries are the desk values, so "1.0x the trained amplitude" means what it says.
+
+run:
+  name: desk-flow-noflow-m1live
+
+task:
+  name: hover_tof
+  episode_len: 1500
+  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.15 m ---
+  # pos_sigma tracks the setpoint (Desk-Hover: 0.10 at 0.10 m), which is what keeps a vertical
+  # bias costing a comparable FRACTION of the per-step reward at either scale. At pos_sigma 0.6
+  # (the 1 m ladder's) a 5 cm bias costs 0.017/step against ~2.6/step — 0.65% — while a crash
+  # costs ~1960 return, so the policy would learn to hover high and every reward number would
+  # still look fine.
+  pos_sigma: 0.15
+  pos_scale: 1.0
+  dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
+                               # Desk-Hover's (+-0.60 m), so this is Desk-Hover's value
+  upright_scale: 1.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.15            # == pos_sigma, the convention at every other scale
+  # --- the desk ---
+  # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
+  # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
+  # box asymmetric about it. And the setpoint's xy is invisible to this obs anyway (the policy
+  # sees velocity, not position), so sampling it is pure unlearnable noise.
+  arena_radius: 0.0
+  z_min: 0.12
+  z_max: 0.18                  # narrow desk band around 0.15; the purehold twin pins 0.15
+  hold_fraction: 0.5
+  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+                               # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
+                               # ~0.20-0.25 m climbing at ~0.5 m/s. Those are MODULE CONSTANTS
+                               # with no FlightParams override, so there is no per-flight knob for
+                               # a sub-0.3 m target (docs/SIM2REAL.md) — the training distribution
+                               # is the only place that state gets covered.
+  spawn_vel: 0.6               # ~the handover climb rate. NOT flow-hover's 0.8: that was sized
+                               # for a +-1.2 m box, and at +-0.6 m a 0.8 m/s draw crosses the
+                               # whole arena in 0.75 s, which is unrecoverable by construction
+                               # rather than a test of the velocity channel.
+  spawn_tilt_deg: 20.0
+  spawn_rate: 1.5
+  spawn_z_margin: 0.005        # the old hard-coded 0.2 would clamp every spawn to >= 0.21 m —
+                               # above the whole band — and silently delete the pure-hold cohort
+  bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
+  bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
+  bound_z_max: 0.60
+  band_ceiling_m: 0.45         # METRIC ONLY (no reward, no termination): 3x the setpoint, as
+                               # Desk-Hover's 0.30 was at 0.10 m
+  vxy_penalty: 0.0             # ARM 1, and deliberately so. On Desk-Hover this was the only lever
+                               # PPO had against drift it could not see, and soft-breeze-8148
+                               # measured that lever NO-GO (it bought drift and paid floor margin).
+                               # Here the policy can SEE the quantity the penalty was a proxy for,
+                               # so the honest experiment is whether the CHANNEL alone closes the
+                               # loop. Adding a privileged penalty on top would confound the one
+                               # result this config exists to produce. It is the natural arm 2.
+  # --- VL53L1X (measured, unchanged) ---
+  tof_rate_hz: 25.0            # the honest measured rate (24.8-27.1 Hz, 2026-07-30), not the
+                               # datasheet's 40
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+
+act:
+  # The pilot has enforced min_thrust_frac 0.25 since 2026-07-31; mirroring it here is what stops
+  # the policy learning a throttle profile the deploy path silently rewrites. act-v2 thrust -1.0
+  # maps to motors off, which on this airframe is free fall AND a loss of rate authority.
+  min_thrust_normed: 0.25
+
+
+env:
+  n_envs: 2048
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  wind_accel_mps2: 0.0
+  rate_gain_frac: 0.0
+  thrust_scale_frac: 0.0
+  obs_noise_std: 0.0
+  #                        [roll,  pitch, p,     q,    r,    h_err]
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010]
+  obs_bias_channels:      [0.0,   0.0,   0.0,   0.0,  0.0,  0.0  ]
+  action_latency_steps: 0
+  impulse_prob: 0.0
+  impulse_vel_mps: 0.5
+  impulse_rate_rps: 2.0
+
+# Air65 II + XIAO companion + the ~2 g PMW3901 breakout, on the measured 29.5-31.5 g bridge stack.
+# Shifted up from Desk-Hover's [0.030, 0.028, 0.032]: training at the ToF-only mass would train
+# the wrong airframe.
+whoop:
+  mass: [0.032, 0.030, 0.034]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+

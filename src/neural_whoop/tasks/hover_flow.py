@@ -34,6 +34,15 @@ lies rather than merely a way it is noisy:
 - **A featureless floor returns no motion at full frame rate.** Dropout is modeled explicitly
   (``flow_dropout_prob``) because "frames arriving, counts meaningless" is invisible to every
   freshness check.
+- **And it does not fail one frame at a time.** ``flow_dropout_prob`` is an i.i.d. per-step
+  coin, i.e. single-frame speckle: at 0.02 the chance of losing a whole second (50 steps) is
+  1e-85, so a policy trained on it alone has never once seen sustained blindness. The deploy
+  failure it will actually meet is a *run* — a bare patch of desk, a shadow, prop wash lifting
+  a mat — and the pilot's ``flow_lost`` abort deliberately gives it ~1 s before cutting the
+  flight. ``flow_blackout_prob`` / ``flow_blackout_s`` model that run explicitly, so a blackout
+  spanning the whole abort window is **in distribution** rather than something the policy meets
+  for the first time in the air. Off by default: every flow result before 2026-08-12 was
+  measured without it, and silently changing their substrate would make them incomparable.
 
 **Blind handling is grace-then-fade to zero, not hold** — the same guard the deployed pilot
 applies to a stale ToF (``--tof-blind-grace/--tof-blind-fade``, docs/SIM2REAL.md). Holding a
@@ -82,7 +91,16 @@ class HoverFlowConfig(HoverTofConfig):
                                       # faster than it degrades a single ranging ray.
     flow_dropout_prob: float = 0.02   # per-step chance the surface returns nothing usable (low
                                       # texture / low light). PLACEHOLDER — the calibration flight
-                                      # measures it from the logged squal.
+                                      # measures it from the logged squal. SPECKLE, not runs:
+                                      # see flow_blackout_prob for sustained loss.
+    flow_blackout_prob: float = 0.0   # per-step hazard of ENTERING a sustained blackout (a bare
+                                      # patch of floor, a shadow, a mat lifting in prop wash).
+                                      # 0 = off, which is what every pre-2026-08-12 flow result
+                                      # was measured with.
+    flow_blackout_s: float = 1.5      # MAXIMUM blackout length; each one draws uniform in
+                                      # (0, this]. Sized against the pilot's 1 s flow_lost abort:
+                                      # the point is that a loss lasting the whole abort window
+                                      # is something the policy has flown before.
     flow_scale_frac: float = 0.10     # per-episode multiplicative scale error on the measured
                                       # rad_per_count, drawn uniform in +-this.
     flow_gyro_residual: float = 0.05  # per-episode residual fraction of the ROTATIONAL flow the
@@ -108,6 +126,7 @@ class HoverFlowTask(HoverTofTask):
         self.v_meas = torch.zeros(n, 2, device=env.device)   # the estimate the policy sees
         self._v_hold = torch.zeros(n, 2, device=env.device)  # last estimate from a VALID reading
         self._blind_s = torch.zeros(n, device=env.device)    # seconds since the last valid reading
+        self._blackout_s = torch.zeros(n, device=env.device)  # seconds of sustained loss REMAINING
         self._scale = torch.ones(n, device=env.device)       # per-episode calibration error
         self._gyro_res = torch.zeros(n, device=env.device)   # per-episode gyro-compensation residual
         # NOT `_p_update` — that name belongs to HoverTofTask and holds the TOF refresh
@@ -127,6 +146,7 @@ class HoverFlowTask(HoverTofTask):
         self.v_meas[d_idx] = 0.0
         self._v_hold[d_idx] = 0.0
         self._blind_s[d_idx] = 0.0
+        self._blackout_s[d_idx] = 0.0
         self.flow_valid_sum[d_idx] = 0.0
         # Per-episode calibration errors. Both are SIGNED and drawn per drone: the bench
         # measurement of rad_per_count is one number for one lens at one height, and the true
@@ -151,10 +171,23 @@ class HoverFlowTask(HoverTofTask):
         w = env.dyn.ang_vel_body
         cos_tilt = torch.cos(rpy[..., 0]) * torch.cos(rpy[..., 1])
 
+        # Sustained blackout: run the timer down first, then roll for a NEW one only where none
+        # is active (re-rolling inside a blackout would make its length a geometric draw with a
+        # mean nothing set deliberately). A blackout suppresses the reading whatever the surface,
+        # tilt and height are doing — which is the point: the policy meets a channel that is
+        # simply gone for a while, exactly as it will when the mat lifts.
+        self._blackout_s = (self._blackout_s - env.dt).clamp_min(0.0)
+        if c.flow_blackout_prob > 0.0 and c.flow_blackout_s > 0.0:
+            enter = (self._blackout_s <= 0.0) & (
+                torch.rand(z.shape, device=z.device, generator=env.gen) < c.flow_blackout_prob)
+            draw = torch.rand(z.shape, device=z.device, generator=env.gen) * c.flow_blackout_s
+            self._blackout_s = torch.where(enter, draw, self._blackout_s)
+
         valid = (
             (cos_tilt > self._flow_cos_limit)
             & (z >= c.flow_min_m)
             & (z <= c.tof_max_m)  # the SCALE comes from the ToF: no height, no velocity
+            & (self._blackout_s <= 0.0)
             & (torch.rand(z.shape, device=z.device, generator=env.gen) >= c.flow_dropout_prob)
             & (torch.rand(z.shape, device=z.device, generator=env.gen) < self._flow_p_update)
         )

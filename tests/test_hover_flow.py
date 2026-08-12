@@ -117,6 +117,66 @@ def test_below_working_range_fades_to_zero_not_hold():
     assert task.flow_valid_sum.max() <= 1, "reported valid readings while below working range"
 
 
+def test_blackout_is_off_by_default():
+    """The knob must default to inert. Every flow result before 2026-08-12 (keen-mist-5478,
+    staid-moon-7407, the w192 arm) was measured without sustained loss modeled, and a default
+    that quietly changed the substrate would make those numbers incomparable to later ones."""
+    from neural_whoop.tasks.hover_flow import HoverFlowConfig
+
+    assert HoverFlowConfig().flow_blackout_prob == 0.0
+    env = _env(n_envs=8, flow_min_m=0.0, tof_rate_hz=0.0)
+    env.reset_all()
+    env.dyn.pos[:, 2] = 0.5
+    for _ in range(60):
+        env.step(torch.zeros(8, 4))
+    assert env.task._blackout_s.max().item() == 0.0, "a blackout fired with the knob off"
+
+
+def test_blackout_spans_the_abort_window_and_fades_to_zero():
+    """A blackout is a RUN, not speckle, and it must be long enough to cover the pilot's ~1 s
+    ``flow_lost`` abort window — otherwise the policy meets sustained blindness for the first
+    time in the air, which is exactly the out-of-distribution shape the knockout probe
+    (staid-moon-7407) showed this policy cannot afford."""
+    # prob 1.0 -> every drone enters a blackout on step 1; blackout_s 1.2 is the max draw.
+    env = _env(n_envs=64, flow_min_m=0.0, tof_rate_hz=0.0,
+               flow_blackout_prob=1.0, flow_blackout_s=1.2,
+               flow_blind_grace_s=0.2, flow_blind_fade_s=0.3)
+    env.reset_all()
+    task = env.task
+    env.dyn.pos[:, 2] = 0.5
+    task.h_meas[:] = 0.5
+    env.dyn.vel_world[:] = torch.tensor([0.6, 0.0, 0.0])
+    env.step(torch.zeros(64, 4))          # step 1: the blackout starts, so this one is already lost
+    assert task.flow_valid_sum.max().item() == 0.0, "a blacked-out drone reported a reading"
+    assert (task._blackout_s > 0).all()
+    # The longest draws must span the whole abort window (uniform in (0, 1.2] over 64 drones).
+    assert task._blackout_s.max().item() > 1.0, "no blackout reaches the 1 s abort window"
+
+    for _ in range(int(0.6 / env.dt)):    # past grace (0.2) + fade (0.3)
+        env.dyn.pos[:, 2] = 0.5
+        env.step(torch.zeros(64, 4))
+    still_out = task._blackout_s > 0
+    assert still_out.any(), "every blackout ended before the fade completed"
+    assert task.v_meas[still_out].abs().max().item() < 1e-6, \
+        "a blacked-out channel is still asserting a velocity"
+
+
+def test_blackout_shows_up_in_flow_valid_rate():
+    """The metric that exists to tell a live channel from a faded one has to see the blackout —
+    a policy posting a fine mean_xy_error on a dead channel is the failure this number catches."""
+    # A 0.05 per-step hazard against a mean 0.2 s (10-step) blackout: ~1/3 of steps blacked out.
+    env = _env(n_envs=32, flow_min_m=0.0, tof_rate_hz=0.0,
+               flow_blackout_prob=0.05, flow_blackout_s=0.4)
+    env.reset_all()
+    env.dyn.pos[:, 2] = 0.5
+    for _ in range(100):
+        env.dyn.pos[:, 2] = 0.5
+        _, _, _, _, info = env.step(torch.zeros(32, 4))
+    m = env.task.metrics(env)
+    assert 0.05 < m["flow_valid_rate"] < 0.95, m["flow_valid_rate"]
+    assert info["metrics"]["flow_valid_rate"].shape == (32,)
+
+
 def test_metrics_report_flow_validity():
     env = _env(n_envs=8)
     env.reset_all()
