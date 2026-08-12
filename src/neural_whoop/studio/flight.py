@@ -33,6 +33,7 @@ from pathlib import Path
 from neural_whoop.bench.msp import (
     MSP_ANALOG,
     MSP_ATTITUDE,
+    MSP_BRIDGE_FLOW,
     MSP_BRIDGE_TOF,
     MSP_MODE_RANGES,
     MSP_MOTOR_TELEMETRY,
@@ -47,13 +48,17 @@ from neural_whoop.bench.msp import (
 from neural_whoop.pilot import FlightController, FlightParams, FlightSetupError, Policy
 from neural_whoop.pilot.config import BF_MAX_RATE_RP, GYRO_RAW_TO_DPS
 
-#: The 27-col pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated
-#: here so this module — like the pilot engine — imports without numpy).
+#: The pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated here
+#: so this module — like the pilot engine — imports without numpy). THIRD copy of this list;
+#: ``tests/test_flight_ws.py::test_dashboard_csv_matches_the_analysis_schema`` pins this one and
+#: ``tests/test_flight_log.py::test_pilot_and_analysis_schemas_match`` pins scripts/pilot.py's.
+#: Both tests exist because both copies have drifted before.
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
+    "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
 ]
 
 #: Fields a browser ``params`` message may override on the WAITING controller.
@@ -446,6 +451,18 @@ class FakeFlightBridge(_MspEndpoint):
             # trailing loop_max_ms mirrors current firmware (>= 2026-07-30) at its measured
             # healthy bench value (~5 ms), so the fake path exercises CSV col 27 too.
             self._resp(cmd, struct.pack("<HBHBH", max(30, int(self._z * 1000)), 0, 12, 1, 5))
+        elif cmd == MSP_BRIDGE_FLOW:
+            # The bridge's downward PMW3901. CUMULATIVE counts + the bridge's own sample clock,
+            # exactly like the firmware — the host differences successive replies, so a fake that
+            # returned per-read deltas would exercise the wrong contract entirely. The drone is
+            # not modelled as translating here, so the counts advance by a small fixed drift: it
+            # proves the differencing path end-to-end without pretending to be flight data.
+            self._flow_i = getattr(self, "_flow_i", 0) + 1
+            self._flow_dx = getattr(self, "_flow_dx", 0) + 3
+            self._flow_dy = getattr(self, "_flow_dy", 0) - 1
+            self._resp(cmd, struct.pack(
+                "<iiIHBBBH", self._flow_dx, self._flow_dy, int(self._i * 20) + 1000,
+                self._flow_i & 0xFFFF, 72, 1, 1, 8))
         elif cmd == MSP_MOTOR_TELEMETRY:
             rpm = max(600, int((self._thr - 1000) * 45))
             p = bytes([4])

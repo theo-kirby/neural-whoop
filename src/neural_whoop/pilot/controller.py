@@ -123,6 +123,14 @@ class FlightParams:
     # Set tof_blind_grace_s high (or fade_s 0 with a high grace) for the legacy hold-forever.
     tof_blind_grace_s: float = 0.20   # hold verbatim this long — covers ordinary 25 Hz jitter
     tof_blind_fade_s: float = 0.30    # then fade the held error to 0 over this window
+    # PASSIVE optical-flow logging (2026-08-12). Polls MSP_BRIDGE_FLOW and writes the differenced
+    # counts to the flight CSV; the flow NEVER enters the obs on this path. That split is the
+    # whole point — it is the same "measure before use" discipline the ToF got on 2026-07-13
+    # (telemetry-only for its first flights), and it is what a hover_flow policy needs first,
+    # because four of its sim constants are placeholders and rad_per_count does not exist yet.
+    # Off by default: it costs one extra MSP query per tick, and a bridge that predates the flow
+    # sensor answers with an error frame.
+    log_flow: bool = False
     min_us: int = 1000
     max_us: int = 1600
     # Free-flight throttle floor, as a fraction of the LEARNED hover thrust (0 = disabled, the
@@ -454,7 +462,8 @@ class FlightController:
         now = self._clock() if now is None else now
         self.tick += 1
         self.tel.poll(now, want_analog=(self.tick % int(p.hz) == 0),
-                      want_rc=(self.tick % 5 == 0), want_rpm=True, want_tof=True)
+                      want_rc=(self.tick % 5 == 0), want_rpm=True, want_tof=True,
+                      want_flow=p.log_flow)
         if self.tel.vbat:
             self.vfilt = self.tel.vbat if self.vfilt is None else 0.98 * self.vfilt + 0.02 * self.tel.vbat
 
@@ -766,6 +775,14 @@ class FlightController:
             self.n_sent += 1
         self.us = us
         self.hover_eff = hover_eff
+        # Passive flow read. flow_delta() consumes the interval, so it must be called EXACTLY
+        # once per tick and from exactly one place — a second caller would each see half the
+        # motion. None (not zero) whenever there is no new sample, absent sensor, or stale link.
+        flow = None
+        if p.log_flow:
+            d = self.tel.flow_delta(now)
+            if d is not None:
+                flow = (d[0], d[1], f"{d[2]:.4f}", d[3])
         # tof_m: the raw (uncorrected) reading from the fresh-obs section above — CSV col 25
         # keeps its "measured range, validity-gated" semantics; h_est is the policy's view.
         self._on_log([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
@@ -783,7 +800,14 @@ class FlightController:
                       # is the symptom of a bridge stall; this is the cause, self-reported. Empty
                       # on pre-2026-07-30 firmware, which sends a 6-byte ToF reply.
                       self.tel.bridge_loop_max_ms() if self.tel.bridge_loop_max_ms() is not None
-                      else ""])
+                      else "",
+                      # PMW3901 counts over the interval the BRIDGE measured, plus that interval
+                      # and the surface quality. Deliberately RAW COUNTS, not a derived velocity:
+                      # v = counts/dt * rad_per_count * height, and rad_per_count is the constant
+                      # this flight exists to measure. Logging a velocity would bake a placeholder
+                      # into the record and make the log unable to answer its own question.
+                      # Empty on ticks with no new sample — never 0, which reads as "not moving".
+                      *(f"{v}" for v in (flow if flow is not None else ("", "", "", "")))])
         return self._make_frame()
 
     # ------------------------------------------------------------------ helpers

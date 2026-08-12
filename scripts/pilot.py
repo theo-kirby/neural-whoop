@@ -101,13 +101,21 @@ from neural_whoop.pilot import (  # noqa: E402,F401
 )
 from neural_whoop.pilot.config import *  # noqa: E402,F401,F403 - re-export the constants (VZ_*, SEEK_*, …)
 
-# The pilot CSV schema (matches analysis/flight_log.py::LOG_COLUMNS) — kept inline so this shim
-# stays pure-stdlib (flight_log.py imports numpy, which the bench Mac deliberately lacks).
+# The pilot CSV schema (MUST equal analysis/flight_log.py::LOG_COLUMNS) — kept inline so this
+# shim stays pure-stdlib (flight_log.py imports numpy, which the bench Mac deliberately lacks).
+#
+# It DRIFTED, and quietly: this copy sat at 26 entries from 2026-07-30 (when the controller began
+# emitting bridge_loop_max_ms) to 2026-08-12, so every real flight in that window wrote a header
+# describing 26 columns above rows carrying 27. Nothing failed — load_flight accepts 26 as a
+# legacy width and then reads each row by index, past the header — so the logs are intact and the
+# only casualty was anyone reading the CSV with a tool that trusts its header. Pinned equal by
+# tests/test_flight_log.py::test_pilot_and_analysis_schemas_match so it cannot drift again.
 LOG_COLUMNS = [
     "t", "obs_age_ms", "roll", "pitch", "p", "q", "r",
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
-    "rpm_rms", "us_corr", "tof_m", "h_err",
+    "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
+    "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
 ]
 
 
@@ -293,7 +301,7 @@ def cmd_fly(args: argparse.Namespace) -> int:
         aux=args.aux, hover_us=args.hover_us, vbat_ref=args.vbat_ref, trim_thrust=args.trim_thrust,
         min_us=args.min_us, max_us=args.max_us, target_height_m=args.target_height,
         min_thrust_frac=args.min_thrust_frac, tof_blind_grace_s=args.tof_blind_grace,
-        tof_blind_fade_s=args.tof_blind_fade,
+        tof_blind_fade_s=args.tof_blind_fade, log_flow=args.log_flow,
         flip_at_s=args.flip_at, acro_axis=args.axis, acro_n_rotations=args.n_rotations,
     )
     period = 1.0 / args.hz
@@ -410,6 +418,11 @@ def main() -> int:
                      help="after the grace window, fade the held error to 0 (= hover) over this "
                           "window rather than holding a stale error open-loop. 0 = drop to 0 at "
                           "once; a huge --tof-blind-grace restores the legacy hold-forever")
+    fly.add_argument("--log-flow", action="store_true",
+                     help="poll the bridge PMW3901 and log raw counts to the flight CSV "
+                          "(flow_dx/flow_dy/flow_dt_s/flow_squal). PASSIVE: the flow never enters "
+                          "the obs on this path — this is the calibration flight that measures "
+                          "rad_per_count and the dropout rate before any policy consumes them")
     fly.add_argument("--vz-gain", type=float, default=0.15,
                      help="climb damper gain (act[0] per m/s of RPM-anchored climb rate for a "
                           "blind policy; vz-consuming policies own damping and ignore it); "

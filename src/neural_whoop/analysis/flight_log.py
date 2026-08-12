@@ -49,11 +49,23 @@ LOG_COLUMNS = [
     "a_thr", "a_wx", "a_wy", "a_wz", "us_roll", "us_pitch", "us_thr", "us_yaw",
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
+    # PMW3901 passive channels (2026-08-12, --log-flow). Raw counts over the bridge-measured
+    # interval, NOT a velocity: rad_per_count is the constant the calibration flight measures, so
+    # deriving a velocity here would bake a placeholder into the record. Empty when the sensor is
+    # absent, the link stale, or no new sample landed this tick.
+    "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
 ]
 
-#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 26 columns
-#: (pre-``bridge_loop_max_ms``), 25 (ToF-era, pre-``h_err``) and 24 (pre-ToF, through 2026-07).
-_LEGACY_HEADERS = (LOG_COLUMNS[:-1], LOG_COLUMNS[:-2], LOG_COLUMNS[:-3])
+#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 27 columns
+#: (pre-flow, every flight through 2026-08-11), 26 (pre-``bridge_loop_max_ms``), 25 (ToF-era,
+#: pre-``h_err``) and 24 (pre-ToF, through 2026-07).
+#:
+#: Pinned by COUNT, not by a negative slice off :data:`LOG_COLUMNS`. It was written as
+#: ``(LOG_COLUMNS[:-1], [:-2], [:-3])``, which silently redefines every legacy schema the moment a
+#: column is appended — adding the four flow columns would have made "legacy" mean 30/29/28 and
+#: broken loading for all 27-column flights, i.e. every real flight the project has ever recorded.
+_LEGACY_WIDTHS = (27, 26, 25, 24)
+_LEGACY_HEADERS = tuple(LOG_COLUMNS[:w] for w in _LEGACY_WIDTHS)
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose
 #: ``|vz_est|`` reaches this is "railed" — the estimator has saturated and is lying about descent.

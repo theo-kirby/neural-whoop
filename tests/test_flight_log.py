@@ -39,11 +39,15 @@ _VZ_STABLE = [0.0, -0.3, -0.6, -0.9, -1.2, -1.5, -1.8, -2.0, -2.0, -2.0]
 
 
 def _row(**over) -> list:
-    """One CSV row (27 cols) with hover-ish defaults; override any column by name.
+    """One CSV row (current schema) with hover-ish defaults; override any column by name.
 
-    ``tof_m``/``h_err``/``bridge_loop_max_ms`` default blank — the synthetic baseline flight
-    predates both the bridge ToF and the loop-timing firmware, so the legacy code paths
-    (∫vz_est replay z, height.present=False) stay exercised.
+    ``tof_m``/``h_err``/``bridge_loop_max_ms``/``flow_*`` default blank — the synthetic baseline
+    flight predates the bridge ToF, the loop-timing firmware and the flow sensor, so the legacy
+    code paths (∫vz_est replay z, height.present=False) stay exercised.
+
+    Unlisted columns default blank rather than raising, so appending a column to LOG_COLUMNS does
+    not break every test in this file at once. The row is still built in LOG_COLUMNS order, so a
+    genuine ordering change is still caught.
     """
     base = {
         "t": 0.0, "obs_age_ms": 25, "roll": 0.0, "pitch": 0.0, "p": 0.0, "q": 0.0, "r": 0.0,
@@ -54,7 +58,7 @@ def _row(**over) -> list:
         "h_err": "", "bridge_loop_max_ms": "",
     }
     base.update(over)
-    return [base[c] for c in LOG_COLUMNS]
+    return [base.get(c, "") for c in LOG_COLUMNS]
 
 
 def _write_flight(path) -> None:
@@ -99,33 +103,56 @@ def test_load_flight_shape_and_empty_cell_coercion(flight_csv):
     assert log.control_hz == 50                # dt_median = 0.02
 
 
-def test_load_flight_accepts_legacy_24col(tmp_path):
-    # Pre-ToF flights wrote 24 columns (no tof_m/h_err): they must still load, all-NaN tails.
-    p = tmp_path / "legacy.csv"
+@pytest.mark.parametrize("width,label", [
+    (24, "pre-ToF (through 2026-07): no tof_m/h_err/bridge_loop_max_ms/flow_*"),
+    (25, "ToF-era, pre-h_err"),
+    (26, "pre-bridge_loop_max_ms"),
+    (27, "pre-flow: every real flight through 2026-08-11"),
+])
+def test_load_flight_accepts_legacy_schemas(tmp_path, width, label):
+    """Every historical schema must still load, with the missing tail all-NaN.
+
+    Widths are EXPLICIT, not `LOG_COLUMNS[:-n]`. The relative form silently re-aims at a
+    different schema every time a column is appended — these three cases were written as
+    [:-2]/[:-1] and had been testing 25/26 columns under the names "24col"/"25col" ever since
+    bridge_loop_max_ms landed. The production `_LEGACY_HEADERS` had the identical bug, where it
+    would have broken loading for all 27-column flights the moment flow was added.
+    """
+    p = tmp_path / f"legacy{width}.csv"
     with open(p, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(LOG_COLUMNS[:-2])
+        w.writerow(LOG_COLUMNS[:width])
         for i in range(4):
-            w.writerow(_row(t=0.02 * i, us_thr=1300)[:-2])
+            w.writerow(_row(t=0.02 * i, us_thr=1300, tof_m=0.5)[:width])
     log = load_flight(p)
-    assert log.n == 4
-    assert np.isnan(log.tof_m).all()
-    m = flight_metrics(log)
-    assert m["height"]["present"] is False
+    assert log.n == 4, label
+    for missing in LOG_COLUMNS[width:]:
+        assert np.isnan(log.data[missing]).all(), f"{missing} should be NaN on a {width}-col log"
+    if width >= 25:
+        assert (log.tof_m == 0.5).all()
+    else:
+        assert np.isnan(log.tof_m).all()
+        assert flight_metrics(log)["height"]["present"] is False
 
 
-def test_load_flight_accepts_legacy_25col(tmp_path):
-    # ToF-era pre-h_err flights wrote 25 columns: still load, h_err all-NaN.
-    p = tmp_path / "legacy25.csv"
+def test_load_flight_reads_the_flow_columns(tmp_path):
+    """The passive PMW3901 channels: raw counts + the bridge-measured interval + squal.
+
+    Counts, deliberately, not a velocity — rad_per_count is what the calibration flight exists to
+    measure, so a logged velocity would bake a placeholder into the record.
+    """
+    p = tmp_path / "flow.csv"
     with open(p, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(LOG_COLUMNS[:-1])
-        for i in range(4):
-            w.writerow(_row(t=0.02 * i, us_thr=1300, tof_m=0.5)[:-1])
+        w.writerow(LOG_COLUMNS)
+        w.writerow(_row(t=0.00, us_thr=1300, flow_dx=120, flow_dy=-45,
+                        flow_dt_s=0.0200, flow_squal=78))
+        w.writerow(_row(t=0.02, us_thr=1300))  # no new sample this tick -> blank, NOT zero
     log = load_flight(p)
-    assert log.n == 4
-    assert np.isnan(log.data["h_err"]).all()
-    assert (log.tof_m == 0.5).all()
+    assert log.data["flow_dx"][0] == 120 and log.data["flow_dy"][0] == -45
+    assert log.data["flow_dt_s"][0] == 0.02 and log.data["flow_squal"][0] == 78
+    # A tick with no sample must be NaN: a 0 would read as "measured, not moving".
+    assert np.isnan(log.data["flow_dx"][1])
 
 
 def test_load_flight_rejects_bad_header(tmp_path):
@@ -275,3 +302,25 @@ def test_flight_to_replay_roundtrips_through_gzip(flight_csv, tmp_path):
     reloaded = load_run(out)
     assert reloaded["meta"]["source"] == "pilot-flight"
     assert len(reloaded["episodes"][0]["frames"]) == len(doc["episodes"][0]["frames"])
+
+
+def test_pilot_and_analysis_schemas_match():
+    """``scripts/pilot.py`` duplicates LOG_COLUMNS to stay pure-stdlib on the bench Mac. The
+    duplication is deliberate; the drift was not.
+
+    That copy sat at 26 entries from 2026-07-30 to 2026-08-12 while the controller emitted 27, so
+    every flight in the window wrote a header describing fewer columns than its rows carried.
+    Nothing failed — 26 is an accepted legacy width and the loader reads by index past the header
+    — which is exactly why it went unnoticed for two weeks and eleven flights.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    pilot_py = Path(__file__).resolve().parents[1] / "scripts" / "pilot.py"
+    spec = importlib.util.spec_from_file_location("_pilot_schema_probe", pilot_py)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.LOG_COLUMNS == LOG_COLUMNS, (
+        "scripts/pilot.py's inline LOG_COLUMNS has drifted from analysis/flight_log.py's.\n"
+        f"  pilot:    {mod.LOG_COLUMNS}\n  analysis: {LOG_COLUMNS}"
+    )
