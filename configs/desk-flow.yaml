@@ -96,9 +96,28 @@ task:
   #
   # This arm (D) takes A's reward geometry VERBATIM — sigma 0.15, hold_radius 0.15, spawn_offset
   # 0.15 — at the 0.20 m setpoint with the honest 0.015 noise, so it differs from A in the setpoint
-  # and the noise that the setpoint implies, and in nothing else. If it lands near A's 0.0337 the
-  # tension in (3) is not real and 0.20 m is free. If it lands near 0.10 the tension is real and the
-  # next run drops the noise to 0.011 to separate the two.
+  # and the noise that the setpoint implies, and in nothing else. RESULT:
+  #
+  #   D  sigma 0.15 @ 0.20 m, flow obs-noise 0.015  ->  drift 0.0717   sink 0.0262
+  #
+  # Two readings, and they point opposite ways.
+  #
+  #   THE SINK IS SOLVED. 0.0262 against A's 0.0263 — the same number to a tenth of a millimetre,
+  #   at a setpoint 5 cm higher. Taken with B's setpoint sweep, the altitude trim is now pinned as
+  #   a pure function of the reward geometry, reproducible, and independent of the operating point.
+  #   It is 0.6 mm outside gate 2's +-0.02 m band (0.1738 vs 0.18) and that is reported as measured.
+  #
+  #   THE DRIFT IS NOT. 0.0717 vs A's 0.0337 — 2.1x worse, from the only two things left, and both
+  #   of them ARE the setpoint: the height itself, and the sensor noise the height implies (a 1.36x
+  #   noise step producing a 2.1x drift step). Gate 1's 0.05 m bar was set from Desk-Hover's 0.0472
+  #   at 0.10 m, i.e. at HALF this height and with none of this velocity noise, so the honest
+  #   statement is that a bar imported from a lower operating point does not survive the move up —
+  #   not that it should be widened to fit. What makes 0.0717 interpretable is the one-factor
+  #   control arm (desk-flow-noflow) at THIS setpoint, which is what the number gets compared to.
+  #
+  # The remaining diagnostic, if it is ever wanted: rerun D with the noise pinned at A's 0.011.
+  # That separates height from noise — but it models a quieter sensor than physics allows, so it
+  # can only ever explain the gap, never close it.
   pos_sigma: 0.15
   pos_scale: 1.0
   dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
