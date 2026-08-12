@@ -27,31 +27,41 @@ task:
   name: hover_tof
   episode_len: 1500
   # --- reward, on Desk-Hover's desk-scale rescale ---
-  # pos_sigma is DECOUPLED FROM THE SETPOINT, and that is a measured correction to this ladder's
-  # standing convention rather than a preference. The rule used to be "pos_sigma tracks the
-  # setpoint" (Desk-Hover: 0.10 at 0.10 m), on the reasoning that it keeps a vertical bias costing
-  # a comparable FRACTION of the per-step reward at any scale. It does — and that is exactly the
-  # problem, because the fraction it holds constant is the one the policy is willing to give up.
+  # pos_sigma is DECOUPLED FROM THE SETPOINT (the standing rule was "pos_sigma tracks the setpoint",
+  # Desk-Hover: 0.10 at 0.10 m). Three trained arms, all graded clean pure-hold at 3.2e9 steps:
   #
-  # THE MEASUREMENT (2026-08-12, clean pure-hold, both arms trained to 3.2e9):
+  #   A  sigma 0.15 @ 0.15 m, flow obs-noise 0.011  ->  drift 0.0337   sink 0.0263
+  #   B  sigma 0.20 @ 0.20 m, flow obs-noise 0.015  ->  drift 0.1039   sink 0.0502
+  #   C  sigma 0.10 @ 0.20 m, flow obs-noise 0.015  ->  drift 0.1688   sink 0.0405
   #
-  #   pos_sigma 0.15 @ 0.15 m setpoint -> sink 0.0263 m, mean_xy_error 0.0337
-  #   pos_sigma 0.20 @ 0.20 m setpoint -> sink 0.0502 m, mean_xy_error 0.1039   <- gates 1 AND 2 fail
+  # TWO THINGS ARE ESTABLISHED AND ONE IS NOT, and the difference matters more than either number.
   #
-  # A 1.33x wider bell cost 1.9x the altitude trim and 3.1x the drift. The confound (setpoint moved
-  # too) was then knocked out directly: the sigma-0.20 policy was re-evaluated at pinned setpoints
-  # of 0.15 / 0.20 / 0.25 m and sank 0.0502 m at EVERY ONE of them, with mean_xy_error 0.1039 at
-  # every one. The offset is a constant property of the learned policy, invariant to the height it
-  # is asked to hold — i.e. it is the steady-state error of a proportional loop whose gain is set
-  # by the reward's curvature, and the setpoint has nothing to do with it.
+  # 1. The altitude sink is a CONSTANT of the learned policy, not of the height it holds. B was
+  #    re-evaluated at pinned setpoints of 0.15 / 0.20 / 0.25 m and sank 0.0502 m at every one,
+  #    drifting 0.1039 m at every one. It is the steady-state error of a proportional loop, and no
+  #    choice of operating point can move it. The setpoint is therefore NOT the suspect for either
+  #    metric — which is what licensed keeping 0.20 m through all of this.
   #
-  # So the width goes back to Desk-Hover's ABSOLUTE 0.10 while the setpoint stays at 0.20. Reading
-  # sink ~ 0.175 * pos_sigma across the three points (0.018 @ 0.10 from Desk-Hover's shipped
-  # policy, 0.026 @ 0.15, 0.050 @ 0.20) predicts ~0.018 m here — a ~0.182 m hover, which is INSIDE
-  # gate 2 by only 2 mm. That is reported as measured, not re-aimed: a residual trim offset is a
-  # known property of this family (hollow-shore-3969 measured [192,192] fixing it at a cost of 8.6
-  # points of survival, which is why the width stays [128,128]).
-  pos_sigma: 0.10
+  # 2. Sharpening the bell does NOT fix the drift. B -> C is a clean one-factor step (only sigma
+  #    changed, 0.20 -> 0.10) and drift got 1.6x WORSE while the sink improved only 20%. The first
+  #    reading of A vs B — "a wider bell costs drift" — was an artifact of comparing across two
+  #    changes at once, and C refutes it. Sigma is not the drift lever.
+  #
+  # 3. STILL UNATTRIBUTED: A beats both 0.20 m arms by 3-5x on drift, and sigma is now excluded as
+  #    the cause. The remaining differences between A and B/C are the setpoint and the flow
+  #    obs-noise (0.011 -> 0.015). The noise is the live suspect and it is PHYSICS, not a knob: one
+  #    count of sensor jitter is worth counts/dt * rad_per_count * HEIGHT, so the velocity estimate
+  #    is intrinsically ~33% noisier at 0.20 m than at 0.15 m while the true drift it must cancel is
+  #    height-independent. If that is the mechanism, better sensor-floor margin and better velocity
+  #    precision are in genuine tension and 0.20 m costs drift on purpose — a real trade to state,
+  #    not a bug to fix.
+  #
+  # This arm (D) takes A's reward geometry VERBATIM — sigma 0.15, hold_radius 0.15, spawn_offset
+  # 0.15 — at the 0.20 m setpoint with the honest 0.015 noise, so it differs from A in the setpoint
+  # and the noise that the setpoint implies, and in nothing else. If it lands near A's 0.0337 the
+  # tension in (3) is not real and 0.20 m is free. If it lands near 0.10 the tension is real and the
+  # next run drops the noise to 0.011 to separate the two.
+  pos_sigma: 0.15
   pos_scale: 1.0
   dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
                                # Desk-Hover's (+-0.60 m), so this is Desk-Hover's value
@@ -62,10 +72,11 @@ task:
   alive_bonus: 0.1
   smoothness_penalty: 0.004
   crash_penalty: 10.0
-  hold_radius: 0.10            # == pos_sigma, which now means it no longer tracks the setpoint
-                               # either. Desk-Hover used 0.08 against the same 0.10 sigma, so
-                               # hold_rate here is the marginally easier of the two — do not read
-                               # a hold_rate delta between the two policies as a capability delta.
+  hold_radius: 0.15            # == pos_sigma, which now means it no longer tracks the setpoint
+                               # either. It is a METRIC threshold only (hold_rate), so it never
+                               # touches learning — but it does make hold_rate incomparable across
+                               # arms A/B/C/D, which used 0.15/0.20/0.10/0.15. Compare
+                               # mean_xy_error between arms; compare hold_rate only within one.
   # --- the desk ---
   # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
   # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
@@ -75,7 +86,7 @@ task:
   z_min: 0.17
   z_max: 0.23                  # narrow desk band around 0.20; the purehold twin pins 0.20
   hold_fraction: 0.5
-  spawn_offset: 0.20           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
                                # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
                                # ~0.20-0.25 m climbing at ~0.5 m/s. Those are MODULE CONSTANTS
                                # with no FlightParams override, so there is no per-flight knob for
