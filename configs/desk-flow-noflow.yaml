@@ -24,13 +24,32 @@ run:
 task:
   name: hover_tof
   episode_len: 1500
-  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.20 m ---
-  # pos_sigma tracks the setpoint (Desk-Hover: 0.10 at 0.10 m), which is what keeps a vertical
-  # bias costing a comparable FRACTION of the per-step reward at either scale. At pos_sigma 0.6
-  # (the 1 m ladder's) a 5 cm bias costs 0.017/step against ~2.6/step — 0.65% — while a crash
-  # costs ~1960 return, so the policy would learn to hover high and every reward number would
-  # still look fine.
-  pos_sigma: 0.20
+  # --- reward, on Desk-Hover's desk-scale rescale ---
+  # pos_sigma is DECOUPLED FROM THE SETPOINT, and that is a measured correction to this ladder's
+  # standing convention rather than a preference. The rule used to be "pos_sigma tracks the
+  # setpoint" (Desk-Hover: 0.10 at 0.10 m), on the reasoning that it keeps a vertical bias costing
+  # a comparable FRACTION of the per-step reward at any scale. It does — and that is exactly the
+  # problem, because the fraction it holds constant is the one the policy is willing to give up.
+  #
+  # THE MEASUREMENT (2026-08-12, clean pure-hold, both arms trained to 3.2e9):
+  #
+  #   pos_sigma 0.15 @ 0.15 m setpoint -> sink 0.0263 m, mean_xy_error 0.0337
+  #   pos_sigma 0.20 @ 0.20 m setpoint -> sink 0.0502 m, mean_xy_error 0.1039   <- gates 1 AND 2 fail
+  #
+  # A 1.33x wider bell cost 1.9x the altitude trim and 3.1x the drift. The confound (setpoint moved
+  # too) was then knocked out directly: the sigma-0.20 policy was re-evaluated at pinned setpoints
+  # of 0.15 / 0.20 / 0.25 m and sank 0.0502 m at EVERY ONE of them, with mean_xy_error 0.1039 at
+  # every one. The offset is a constant property of the learned policy, invariant to the height it
+  # is asked to hold — i.e. it is the steady-state error of a proportional loop whose gain is set
+  # by the reward's curvature, and the setpoint has nothing to do with it.
+  #
+  # So the width goes back to Desk-Hover's ABSOLUTE 0.10 while the setpoint stays at 0.20. Reading
+  # sink ~ 0.175 * pos_sigma across the three points (0.018 @ 0.10 from Desk-Hover's shipped
+  # policy, 0.026 @ 0.15, 0.050 @ 0.20) predicts ~0.018 m here — a ~0.182 m hover, which is INSIDE
+  # gate 2 by only 2 mm. That is reported as measured, not re-aimed: a residual trim offset is a
+  # known property of this family (hollow-shore-3969 measured [192,192] fixing it at a cost of 8.6
+  # points of survival, which is why the width stays [128,128]).
+  pos_sigma: 0.10
   pos_scale: 1.0
   dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
                                # Desk-Hover's (+-0.60 m), so this is Desk-Hover's value
@@ -41,7 +60,10 @@ task:
   alive_bonus: 0.1
   smoothness_penalty: 0.004
   crash_penalty: 10.0
-  hold_radius: 0.20            # == pos_sigma, the convention at every other scale
+  hold_radius: 0.10            # == pos_sigma, which now means it no longer tracks the setpoint
+                               # either. Desk-Hover used 0.08 against the same 0.10 sigma, so
+                               # hold_rate here is the marginally easier of the two — do not read
+                               # a hold_rate delta between the two policies as a capability delta.
   # --- the desk ---
   # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
   # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
