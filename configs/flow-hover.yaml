@@ -1,0 +1,160 @@
+# Flow-Hover — a 0.40 m station-hold with MEASURED horizontal velocity. The first hover in this
+# lab whose drift is closed-loop.
+#
+# NOT AN ABLATION of Desk-Hover: it changes the task (hover_tof -> hover_flow, obs 6 -> 8) AND
+# the operating point (0.10 -> 0.40 m). It is a new branch off the hover ladder, opened by the
+# PMW3901 arriving (docs/ROADMAP.md #9). Parents: desk-hover (the reward/DR shape at a scale
+# smaller than the 1 m ladder) and hover_tof_air65_w128u15_r25 (the shipped 1 m arm).
+#
+# WHY 0.40 m AND NOT DESK-HOVER'S 0.10. This is the load-bearing decision in the file and it is
+# forced by the sensor, not chosen for comfort. Three constraints bracket the setpoint:
+#   * FLOOR: the PMW3901's working range starts at 0.08 m. At a 0.10 m setpoint the drone is
+#     2 cm above blind, and the whole point of the sensor is the axis that gets worse as you
+#     descend. Below 0.08 m the flow channel fades to zero and the policy is back to open-loop
+#     drift, in the regime where it has least room to recover.
+#   * SCALE: velocity is (counts/dt) * rad_per_count * HEIGHT, so height error is velocity error
+#     one-for-one. The measured +23.9 mm ToF static offset is 24% of a 0.10 m setpoint and 6% of
+#     a 0.40 m one. The same sensor defect is a 4x smaller velocity error here.
+#   * CEILING: the VL53L1X is trustworthy to ~1.3 m and the measured climb overshoot is ~0.37 m
+#     (docs/SIM2REAL.md, the 2026-07-31 crash mechanism). 0.40 + 0.37 = 0.77 m, still 1.7x
+#     inside the ceiling — the saturate-and-hold failure stays structurally absent, which was
+#     Desk-Hover's whole reason for existing.
+# 0.40 m is the widest margin available on all three at once. It is NOT a desk operating point:
+# a fall from 0.40 m is a real crash, so fly it over the floor with a mat, not over the bench.
+#
+# HONEST SCOPE — this is a DRIFT-RATE controller, not a station-keep. The obs has velocity, not
+# position, deliberately (see the task docstring: an integrated flow position drifts unboundedly
+# and nothing in the obs observes the drift). So the policy can learn to stop moving; it cannot
+# learn to come back to a point it has already left. Expect mean_xy_error to fall a lot versus
+# desk-hover and NOT to fall to zero. If it does fall to zero, suspect the sim before believing
+# it: at 100% flow_valid_rate with no scale error that is what a velocity channel plus a
+# privileged position reward can produce, and the drone has neither.
+#
+# WATCH flow_valid_rate. A policy can post a fine mean_xy_error while flying most of the episode
+# on a channel that faded to zero — that is an open-loop policy wearing a closed-loop metric.
+# Any arm whose flow_valid_rate is not ~1.0 in the no-DR eval is reporting something else.
+#
+# UNCALIBRATED KNOBS, stated rather than buried. flow_rate_hz / flow_dropout_prob /
+# flow_scale_frac / flow_gyro_residual are all PLACEHOLDERS until the passive calibration flight
+# lands (fly a shipped hover_tof policy with flow logged but not in the obs; the README slide
+# test gives rad_per_count, the flight gives the rest). This is the same debt the ToF carried
+# between 2026-07-13 and the 2026-07-30 characterization that moved tof_rate_hz 40 -> 25 — and
+# that one was optimistic by 1.6x, so treat these numbers the same way.
+
+run:
+  name: flow-hover
+
+task:
+  name: hover_flow
+  episode_len: 1500
+  # --- reward, scaled to a 0.40 m operating point ---
+  # Between desk-hover's 0.10 m lengths and the 1 m ladder's. pos_sigma tracks the setpoint the
+  # way desk-hover's did (there: 0.10 at 0.10 m), so a vertical bias costs a comparable
+  # fraction of the per-step reward at either scale.
+  pos_sigma: 0.25
+  pos_scale: 1.0
+  dist_penalty: 0.8            # per-metre gain scales inversely with the arena
+  upright_scale: 1.5
+  upright_sigma: 0.5
+  vel_penalty: 0.05
+  spin_penalty: 0.01
+  alive_bonus: 0.1
+  smoothness_penalty: 0.004
+  crash_penalty: 10.0
+  hold_radius: 0.25            # == pos_sigma, the convention at every other scale
+  # NOTE: vxy_penalty stays 0. On desk-hover it was the only lever PPO had against drift it
+  # could not see (and arm 2 measured NO-GO: it bought drift and paid in floor margin). Here the
+  # policy can SEE horizontal velocity, so the honest experiment is whether the obs channel
+  # alone closes the loop. Adding a privileged penalty on top would confound the one result this
+  # config exists to produce. It is the natural arm 2.
+  vxy_penalty: 0.0
+  # --- the arena ---
+  arena_radius: 0.0            # setpoint pinned at the origin: its xy is invisible to this obs
+  z_min: 0.35
+  z_max: 0.45                  # narrow band around 0.40
+  hold_fraction: 0.5
+  spawn_offset: 0.30
+  spawn_vel: 0.8               # a real initial velocity: the flow channel is what should null it
+  spawn_tilt_deg: 20.0
+  spawn_rate: 1.5
+  spawn_z_margin: 0.02
+  bound_xy: 1.20               # 2x desk-hover's box: a drift-rate controller needs room to
+                               # demonstrate arresting drift rather than being terminated by it
+  bound_z_min: 0.010
+  bound_z_max: 1.00
+  band_ceiling_m: 0.80         # METRIC ONLY: "climbed out of the band" as a number, not a crash
+  # --- ToF (inherited, unchanged from the measured values) ---
+  tof_rate_hz: 25.0
+  tof_max_m: 1.3
+  tof_tilt_limit_deg: 45.0
+  # --- PMW3901 (ALL PLACEHOLDERS — see the header) ---
+  flow_rate_hz: 50.0           # counts accumulate between reads, so every control tick gets a
+                               # fresh interval. The ToF's 40->25 lesson says verify this.
+  flow_min_m: 0.08             # datasheet working range. NOT a placeholder; not a knob either.
+  flow_tilt_limit_deg: 30.0
+  flow_dropout_prob: 0.02
+  flow_scale_frac: 0.10        # +-10% rad_per_count calibration error, per episode
+  flow_gyro_residual: 0.05
+  flow_blind_grace_s: 0.2      # mirrors the deployed --tof-blind-grace/--tof-blind-fade guard
+  flow_blind_fade_s: 0.3
+
+act:
+  min_thrust_normed: 0.25      # the deploy floor (pilot --min-thrust-frac), as on desk-hover
+
+env:
+  n_envs: 8192
+  seed: 0
+  obs_stack: 8
+
+dr:
+  enabled: true
+  # Wind: between desk-hover's 0.15 and the 1 m ladder's 1.0. Desk-hover cut it because drift the
+  # policy could neither see nor fight was unsurvivable in a 0.6 m box. Here the policy CAN see
+  # it — steady wind shows up directly in the velocity channel — so restoring some is now a fair
+  # test rather than unlearnable noise. Kept below the 1 m value because the box is still small.
+  wind_accel_mps2: 0.40
+  rate_gain_frac: 0.15
+  thrust_scale_frac: 0.05
+  obs_noise_std: 0.0           # superseded by the per-channel list below
+  # 8 channels now. The first six are desk-hover's measured values, unchanged. The two flow
+  # channels are PLACEHOLDERS: 0.03 m/s of noise is roughly what one count of jitter at 50 Hz
+  # over 0.4 m works out to, which is an arithmetic guess, not a measurement.
+  #                        [roll, pitch, p,    q,    r,    h_err, vx,   vy  ]
+  obs_noise_std_channels: [0.02, 0.02,  1.25, 1.1,  0.75, 0.010, 0.03, 0.03]
+  obs_noise_amp_range:    [0.5, 2.0]
+  # Flow BIAS is deliberately 0: the multiplicative scale error (flow_scale_frac) is the real
+  # calibration error for this sensor and it is drawn in-task. An additive DC offset on a
+  # velocity channel would model a sensor that reports motion while sitting still, which is not
+  # a PMW3901 failure mode — a blind one reports ZERO, and that is the fade path.
+  obs_bias_channels:      [0.0,  0.0,   0.05, 0.05, 0.05, 0.03,  0.0,  0.0 ]
+  action_latency_steps: 5
+  impulse_prob: 0.02           # restored from desk-hover's 0.01: in a 1.2 m box an impulse is
+  impulse_vel_mps: 1.0         # recoverable, and recovering from one is the closed-loop claim
+  impulse_rate_rps: 3.0
+
+# Air65 II + XIAO companion + the ~2 g flow breakout. The band is shifted up from desk-hover's
+# [0.030, 0.028, 0.032]: the measured bridge stack was 29.5-31.5 g and the PMW3901 adds ~2 g,
+# so the centre moves to ~32 g. Training at desk-hover's mass would train the wrong airframe.
+whoop:
+  mass: [0.032, 0.030, 0.034]
+  J_xy: [2.1e-5, 1.8e-5, 2.5e-5]
+  J_z:  [3.5e-5, 3.0e-5, 4.0e-5]
+
+ppo:
+  total_steps: 3_200_000_000
+  num_steps: 24
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  update_epochs: 4
+  num_minibatches: 8
+  clip_coef: 0.2
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  target_kl: 0.03
+  hidden_sizes: [128, 128]
+  activation: tanh
+  init_log_std: -0.5
+  dr_curriculum_frac: 0.5
+  ckpt_interval_updates: 800

@@ -13,7 +13,8 @@ don't are honest research bets, not blockers.
 > bridge's downward height sensor — `MSP_BRIDGE_TOF` on the xiao_bridge, `tof_m` in the flight CSV,
 > measured z in the flight-report replay (the ∫vz_est stub retired for ToF-equipped flights). See
 > `firmware/xiao_bridge/README.md` for wiring + bring-up. Telemetry-only for now (not in obs);
-> item 9's flow×height fusion still waits on the PMW3901.
+> item 9's flow×height fusion landed 2026-08-12 (Plan A: `MSP_BRIDGE_FLOW` + `hover_flow`);
+> what it still waits on is a calibration flight, not hardware.
 
 ## Where we are
 
@@ -84,12 +85,19 @@ don't are honest research bets, not blockers.
 8. **GRU / RMA recurrent tiny-policy.** RAPTOR shows ~2 k-param recurrent policies fly 32 g
    Betaflight quads and adapt in ms; frame-stacks are the weaker form of the same memory. Privileged
    critic + our existing DR seam as the latent (wind/rate-gain/thrust/latency).
-9. **When PMW3901 + VL53L1X arrive.** *(VL53L1X arrived + integrated 2026-07-13 — bridge-answered
-   `MSP_BRIDGE_TOF`, `tof_m` telemetry, measured replay z; same day: `hover_tof` puts the measured
-   height in the obs — the policy owns the altitude loop, docs/TASK_CATALOG.md. The fusion below
-   still waits on the PMW3901.)* Plan A (matches all published Crazyflie practice): fuse
-   flow×height → v_body on the bridge, feed obs-v4's `vel_body` unchanged. Plan B (novel): raw flow +
-   ToF + gyro in obs, DR over flow-scale/dropout — publishable if it works, our seam already supports it.
+9. ~~**When PMW3901 + VL53L1X arrive.**~~ **BOTH ARRIVED — Plan A implemented 2026-08-12.**
+   *(VL53L1X 2026-07-13: bridge-answered `MSP_BRIDGE_TOF`, `tof_m` telemetry, measured replay z;
+   `hover_tof` put the measured height in the obs. PMW3901 2026-08-12: bridge-answered
+   `MSP_BRIDGE_FLOW` (cmd 193, cumulative counts), `Telemetry.flow_delta`, `bench.py flow`, the
+   `flow_probe` calibration rig, and `hover_flow` — obs `[roll, pitch, p, q, r, height_err, vx,
+   vy]`, the first task in this lab whose horizontal drift is closed-loop. docs/SIM2REAL.md
+   "Optical flow", docs/TASK_CATALOG.md.)* Plan A shipped as **velocity, not obs-v4's full
+   `vel_body`** — obs-v4 also carries `target_rel`, which needs a position or perception source
+   flow does not provide, so the flow channel extends the deployable `hover_tof` layout instead
+   of unlocking the obs-v4 family. **Not yet calibrated, trained to a result, or flown**: the next
+   step is a *passive* flight (flow logged, not in the obs) to replace the placeholder DR
+   constants. Plan B (raw counts + ToF + gyro in obs, DR over flow-scale/dropout) is untouched
+   and is the natural second arm — the seam supports it, and `flow_scale_frac` already exists.
 10. **Measured end-to-end latency in DR.** Identify true latency incl. motor time constant (not just
     the 25 ms link) and bracket DR to the measured value (motor-delay sysID, arXiv 2404.07837).
 11. **ESP-NOW ground dongle** — *only if* flight logs show WiFi jitter actually hurting. ESP-NOW is

@@ -467,7 +467,24 @@ pio run -e xiao_bridge_espnow -t upload                     # drone side  (rollb
 python3 scripts/bench.py --port /dev/cu.usbmodemXXX latency --n 500   # THE GATE: air p50/p99
 python3 scripts/pilot.py --serial /dev/cu.usbmodemXXX fly --takeoff --ack-props-on
 uv run python scripts/serve.py --bridge /dev/cu.usbmodemXXX          # Studio Real tab
+
+# Optical flow — the bridge's SECOND downward sensor (PMW3901 on SPI, 2026-08-12). Wiring +
+# bring-up in firmware/xiao_bridge/README.md; the seam is docs/SIM2REAL.md "Optical flow".
+cd firmware/xiao_bridge && pio run -e flow_probe -t upload   # handshake + the CALIBRATION rig
+python3 scripts/bench.py --udp <bridge-ip> flow --height 0.4  # live counts (+ derived velocity)
+uv run python scripts/train.py --config configs/flow-hover.yaml   # task hover_flow, obs 8
 ```
+
+**Two bridge-owned sensors, two bridge-local MSP ids (`firmware/xiao_bridge`).** The bridge is
+transparent except for its own downward sensors: cmd **192** `MSP_BRIDGE_TOF` (VL53L1X range,
+I²C D5/D6) and cmd **193** `MSP_BRIDGE_FLOW` (PMW3901 optical flow, SPI D8/D9/D10 + D3/CS). Both
+ids are consumed, never forwarded; either sensor may be absent and the bridge still proxies. The
+flow reply is deliberately **cumulative and non-destructive** (running count sums + the bridge's
+own sample clock, differenced host-side by `Telemetry.flow_delta`) — a "counts since you last
+asked" reply makes every read destructive, so a dropped packet eats real motion and a second
+client steals it. Counts are not velocity: `v = counts/dt · rad_per_count · height`, where
+`rad_per_count` is **measured** on the bench (`pio run -e flow_probe`) and `height` is the ToF's
+— so ToF error is velocity error one-for-one, which is what sets `hover_flow`'s operating point.
 
 **Deploy height safety (2026-07-31, `docs/SIM2REAL.md`).** The measured climb overshoots its
 setpoint by **~0.37 m**, so a 1.0 m target puts the peak past the VL53L1X's 1.3 m ceiling — the

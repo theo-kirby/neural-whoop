@@ -537,6 +537,55 @@ tumble garbage, not altitude.
 - **Next uses:** height ground-truth for vz_est error characterization → flow×height velocity
   fusion when the PMW3901 lands (ROADMAP #9).
 
+### Optical flow — PMW3901 on the bridge (hardware, 2026-08-12)
+
+The PMW3901 arrived and is integrated as the bridge's **second downward sensor**, the answer to
+the open-loop *horizontal* axis every hover result above carries as a caveat. ROADMAP #9's
+**Plan A** (fuse flow×height → velocity, feed the policy a velocity channel) is what shipped.
+
+- **Bridge (`firmware/xiao_bridge`):** header-only SPI driver (`include/pmw3901.h`) on
+  **D8/CLK + D9/MIS + D10/MOS + D3/CS**, no bus shared with the ToF, so a fault in one cannot
+  take the other down. The bridge answers MSP cmd **193** (`MSP_BRIDGE_FLOW`) itself and never
+  forwards it — same interception rule as 192, no FC config touched, boots and proxies with no
+  sensor wired. The PixArt power-up register sequence is transcribed verbatim from Bitcraze's
+  MIT-licensed Arduino driver (it disagrees with crazyflie-firmware's copy in four places;
+  the Arduino one is what the breakout vendors point at). Wiring + bring-up in
+  `firmware/xiao_bridge/README.md`.
+- **The reply is CUMULATIVE and non-destructive** — running count sums plus the bridge's own
+  millisecond stamp — and the host differences two of them. A "counts since you last asked"
+  reply would be smaller and wrong: every read becomes destructive, so one dropped packet
+  silently eats real motion and a second client (a `bench.py flow` window open beside a flight)
+  steals it. Differencing is idempotent. `Telemetry.flow_delta()` owns it host-side;
+  `dt` comes from the **bridge's** clock, because dividing counts by a host-jittered interval is
+  how a clean flow signal becomes a noisy velocity.
+- **`rad_per_count` is MEASURED, not derived.** `v = (counts/dt) · rad_per_count · height`, and
+  the datasheet does not hand you that constant usably. `pio run -e flow_probe` is the
+  calibration rig: known height over a printed page, slide exactly 100 mm, read the count total,
+  `rad_per_count = distance / (height · counts)`; repeat at a second height and the two must
+  agree. `bench.py flow --height` defaults to a **geometry placeholder** (0.71674 rad / 30 px)
+  and says so.
+- **Two physical limits decide whether flow works at all**, and neither is a firmware setting:
+  the working range starts at **80 mm**, and the sensor has **no illuminator** — it needs ambient
+  light and a *textured* surface. A bare white desk returns `squal` near zero with frames still
+  arriving on time, which no freshness check can catch. That is why `squal` is on the wire and
+  decoded rather than folded into a `valid` flag.
+- **Consequence for the operating point: Desk-Hover's 0.10 m is the wrong height for flow.** It
+  sits 2 cm above the blind floor, and since height multiplies straight into the velocity scale,
+  the measured **+23.9 mm ToF offset is a 24% velocity error** there (6% at 0.40 m). Against the
+  VL53L1X's 1.3 m ceiling and the measured ~0.37 m climb overshoot, **0.40 m** is the widest
+  margin available on all three constraints at once — hence `configs/flow-hover.yaml`. Note it is
+  no longer a *desk* operating point: a fall from 0.40 m is a real crash.
+- **Obs channel (`hover_flow`, docs/TASK_CATALOG.md):** `[roll, pitch, p, q, r, height_err, vx,
+  vy]` (8). Velocity and deliberately not position (an integrated flow position drifts unbounded
+  and nothing observes the drift). Blind handling is grace-then-fade to zero, mirroring the
+  deployed `--tof-blind-grace/--tof-blind-fade` guard, rather than an indefinite hold.
+- **Open debt — the calibration flight has not happened.** `flow_rate_hz`,
+  `flow_dropout_prob`, `flow_scale_frac` and `flow_gyro_residual` are placeholders. The intended
+  first step is **passive**: fly a shipped `hover_tof` policy with flow logged but NOT in the obs,
+  and let the logs set those four numbers — the same shape as the 2026-07-30 ToF
+  characterization, which found the nominal rate optimistic by 1.6×. No `hover_flow` policy has
+  been trained to a result or flown.
+
 #### The 1.0 m setpoint was the wrong side of the sensor ceiling (2026-07-31)
 
 Four ESP-NOW flights (`runs/pilot/flight_17854933{02,23,53,76}.csv`) with the link finally healthy

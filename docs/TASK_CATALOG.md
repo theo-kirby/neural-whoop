@@ -315,6 +315,44 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   calibration (props-on sd 0.091/0.108/0.082 rad/s) before training; these configs keep the ladder's
   `[1.25, 1.1, 0.75]`, ~10–14× larger. Orthogonal to everything above and the obvious next probe.
 
+### 🚧 `hover_flow` — the PMW3901 closes the HORIZONTAL loop (2026-08-12)
+- **Why:** every hover task above ends with the same caveat. `hover_blind` is open-loop in all
+  three axes, `hover_tof` closed the vertical one, and horizontal drift stayed open-loop —
+  Desk-Hover's own config says it out loud ("clean pure-hold drift 0.069 m … under sensor noise
+  alone both arms drift 0.55–0.77 m"). The PMW3901 optical-flow sensor on the bridge
+  (`MSP_BRIDGE_FLOW`, cmd 193) makes horizontal velocity *measured*, which is the first time a
+  policy in this lab can observe the drift it is producing.
+- **Obs/oracle:** **[roll, pitch, p, q, r, height_err, vx, vy]** (8) × `obs_stack 8` (deployed
+  input 64). Channels 0–5 are byte-identical to `hover_tof` (pinned by a test — the pilot keys
+  channel semantics off `meta["task"]`, so a reordered prefix would silently misfeed a deployed
+  policy). `vx, vy` are body-frame, matching obs-v4's `vel_body` convention.
+- **Velocity, NOT position, deliberately.** Integrating flow to a position is free in sim and
+  dishonest on hardware: the integral drifts without bound and nothing in the obs observes the
+  drift, so the policy would learn to trust a channel that decays. The consequence is stated
+  rather than hidden — this is a **drift-rate controller**: it can learn to stop moving, it
+  cannot return to a point it has already left.
+- **Three modeled ways the channel lies** (each a way it is *wrong*, not merely noisy):
+  **(1) height multiplies straight into the velocity scale** (`v = counts/dt · rad_per_count ·
+  height`, and the host has only `h_meas`, so the sim scales by `h_meas/z`) — at a 0.10 m
+  setpoint the measured +23.9 mm ToF offset is a **24% velocity error**, which is what drove the
+  operating point to 0.40 m; **(2) below 0.08 m the sensor is blind** (PMW3901 working range — an
+  optical limit, not a noise floor); **(3) a featureless floor returns no motion at full frame
+  rate**, invisible to every freshness check, hence an explicit dropout term and the `squal`
+  channel on the wire.
+- **Blind handling is grace-then-fade to zero, not hold** — the same guard the deployed pilot
+  applies to a stale ToF. Holding a stale velocity forever is the confidently-wrong-held-channel
+  shape that flew the 2026-07-31 crash; a faded velocity decays to an honest neutral.
+- **Status:** implemented (`tasks/hover_flow.py`, `configs/flow-hover.yaml`, `tests/test_hover_flow.py`).
+  **Not yet trained to a result and not yet flown.** Sensor state advances in `reward_and_done`
+  (once per step); `observe` is a pure read.
+- **Watch `flow_valid_rate`** (new metric). A policy can post a fine `mean_xy_error` while flying
+  most of the episode on a faded-to-zero channel — that is an open-loop policy wearing a
+  closed-loop metric, and this number is what tells them apart.
+- **Open calibration debt, stated:** `flow_rate_hz` / `flow_dropout_prob` / `flow_scale_frac` /
+  `flow_gyro_residual` are placeholders until the passive calibration flight. This is exactly the
+  debt the ToF carried between 2026-07-13 and the 2026-07-30 characterization — which found the
+  nominal rate optimistic by **1.6×**. Treat these the same way.
+
 ### 🔜 `acro_flip` — learned single-axis flip / barrel roll (the first *agility* task)
 - **Metric:** `flip_success_rate` (reached Φ = 2π·`n_rotations` **and** recovered level, no crash) ↑,
   with the **shape** metrics next to it: `mean_altitude_loss` (max `z0 − z`), `max_lateral_drift`,
