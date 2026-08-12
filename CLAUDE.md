@@ -473,6 +473,15 @@ uv run python scripts/serve.py --bridge /dev/cu.usbmodemXXX          # Studio Re
 cd firmware/xiao_bridge && pio run -e flow_probe -t upload   # handshake + the CALIBRATION rig
 python3 scripts/bench.py --udp <bridge-ip> flow --height 0.4  # live counts (+ derived velocity)
 uv run python scripts/train.py --config configs/flow-hover.yaml   # task hover_flow, obs 8
+# Desk-Flow: the 0.15 m operating point (the LOWEST setpoint where both bridge sensors work) plus
+# its one-factor control. desk-flow-noflow is hover_tof/obs-6 and byte-identical otherwise, so the
+# difference between the two IS the flow channel's contribution.
+uv run python scripts/train.py --config configs/desk-flow.yaml
+uv run python scripts/train.py --config configs/desk-flow-noflow.yaml
+# Flying an obs-8 hover_flow policy. --rad-per-count has NO default and the pilot refuses without
+# it: unmeasured, it is the gain of the only loop closing horizontal drift (README slide test).
+python3 scripts/pilot.py --udp <bridge-ip> --weights runs/desk-flow/policy_weights.json \
+    --rad-per-count <measured> --target-height 0.15 fly --takeoff --ack-props-on
 ```
 
 **Two bridge-owned sensors, two bridge-local MSP ids (`firmware/xiao_bridge`).** The bridge is
