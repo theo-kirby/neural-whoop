@@ -108,6 +108,8 @@ def test_load_flight_shape_and_empty_cell_coercion(flight_csv):
     (25, "ToF-era, pre-h_err"),
     (26, "pre-bridge_loop_max_ms"),
     (27, "pre-flow: every real flight through 2026-08-11"),
+    (31, "raw-flow: passive --log-flow counts, before the fused vx/vy channels"),
+    (33, "pre-phase: the obs-8 rehearsal schema, before the controller phase column"),
 ])
 def test_load_flight_accepts_legacy_schemas(tmp_path, width, label):
     """Every historical schema must still load, with the missing tail all-NaN.
