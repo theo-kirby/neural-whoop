@@ -176,7 +176,14 @@ class HoverFlowTask(HoverTofTask):
         self.v_meas = self._v_hold * fade.clamp(0.0, 1.0).unsqueeze(-1)
 
         self.flow_valid_sum += valid.float()
-        return super().reward_and_done(env, action)
+        reward, done, info = super().reward_and_done(env, action)
+        # Ride the PER-STEP metrics dict, like every other `*_rate`. The episode accumulator above
+        # feeds metrics() at training log cadence, but it zeroes on episode reset — and the eval
+        # rollout runs exactly one episode_len horizon, so the final auto-reset clobbers it right
+        # before the read and the eval reported flow_valid_rate 0.0 for a channel that was live
+        # 98% of the time. eval/rollout.py aggregates this key over the full horizon instead.
+        info.setdefault("metrics", {})["flow_valid_rate"] = valid.float()
+        return reward, done, info
 
     def metrics(self, env) -> dict:
         m = super().metrics(env)

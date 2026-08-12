@@ -128,6 +128,24 @@ def test_metrics_report_flow_validity():
     assert "mean_xy_error" in m  # inherited; the number this task exists to move
 
 
+def test_flow_valid_rate_rides_the_per_step_metrics_dict():
+    """It must be in ``info["metrics"]``, not only in ``metrics()``.
+
+    The episode accumulator zeroes on reset, and eval/rollout.py runs exactly one episode_len
+    horizon — so the final auto-reset clobbers the accumulator right before the read. Shipped
+    that way once: the eval reported flow_valid_rate 0.0 for a channel that was live 98% of the
+    time, i.e. the metric that exists to catch a faded channel claimed a fully faded one."""
+    env = _env(n_envs=8, flow_min_m=0.0)
+    env.reset_all()
+    env.dyn.pos[:, 2] = 0.5
+    _, _, _, _, info = env.step(torch.zeros(8, 4))
+    assert "flow_valid_rate" in info.get("metrics", {}), \
+        "flow_valid_rate is not aggregated over the eval horizon"
+    per_step = info["metrics"]["flow_valid_rate"]
+    assert per_step.shape == (8,)
+    assert ((per_step == 0.0) | (per_step == 1.0)).all()
+
+
 def test_registered_and_single_agent():
     import pytest
 
