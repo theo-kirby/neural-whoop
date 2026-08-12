@@ -56,10 +56,19 @@ class Policy:
         # Channel-6 semantics are task-keyed: hover_tof's 6th channel is the measured height
         # error, every other 6-dim file is the vz_est family (pre-tof exports without a task
         # field are all vz-era, so the dim fallback stays correct for them).
+        #
+        # hover_flow EXTENDS that layout — [.. height_err, vx, vy] — so its channel 5 is still the
+        # ToF height error and `uses_tof` must be true for it. The dim is NOT a usable key here:
+        # base_obs_dim 8 is already the acro-flip obs-8 family (check_policy_family_acro), so the
+        # ONLY safe discriminator is meta["task"], which is why both gates below branch on it.
         self.task = str(self.meta.get("task", ""))
-        self.uses_tof = self.task == "hover_tof"
+        self.uses_flow = self.task == "hover_flow"
+        self.uses_tof = self.task in ("hover_tof", "hover_flow")
+        # ...and `uses_vz` must exclude the flow family explicitly, or an 8-dim flow file would
+        # fall through the `base_obs_dim >= 6` fallback and be fed a climb-rate estimate where the
+        # policy expects a measured height error.
         self.uses_vz = self.base_obs_dim >= 6 and not self.uses_tof
-        # Either 6th-channel family owns the vertical loop itself -> external damper trim off.
+        # Every one of these families owns the vertical loop itself -> external damper trim off.
         self.owns_altitude = self.uses_vz or self.uses_tof
 
     @staticmethod
@@ -97,12 +106,30 @@ def stack_frames(hist: deque, frame: list[float], stack: int) -> list[float]:
 
 
 def check_policy_family(pol: Policy) -> None:
-    """This pilot builds [roll, pitch, p, q, r] (+ vz_est | ToF height_err) frames — refuse
-    anything else."""
-    if pol.base_obs_dim not in (5, 6):
+    """This pilot builds [roll, pitch, p, q, r] (+ vz_est | ToF height_err (+ flow vx, vy)) frames
+    — refuse anything else.
+
+    The dim check is TASK-KEYED, not a widened tuple. ``base_obs_dim == 8`` is already claimed by
+    the acro-flip obs-8 family, so accepting 8 unconditionally here would let an acro file load as
+    the hover policy and be flown as one — the same channel-semantics confusion the 6-dim
+    vz/ToF split was written to prevent, one family further along.
+    """
+    if pol.uses_flow:
+        if pol.base_obs_dim != 8:
+            sys.exit(f"unsupported hover_flow policy: base_obs_dim {pol.base_obs_dim} (the "
+                     "hover_flow obs is 8: [roll, pitch, p, q, r, height_err, vx, vy])")
+    elif pol.base_obs_dim not in (5, 6):
         sys.exit(f"unsupported policy: base_obs_dim {pol.base_obs_dim} (this pilot feeds the "
-                 "5-dim hover_blind, 6-dim hover_blind_v2, or 6-dim hover_tof obs layouts only)")
-    if pol.uses_tof:
+                 "5-dim hover_blind, 6-dim hover_blind_v2, 6-dim hover_tof or 8-dim hover_flow "
+                 "obs layouts only; an 8-dim file must declare task hover_flow — obs-8 is also "
+                 "the acro-flip layout)")
+    if pol.uses_flow:
+        print(f"policy: base obs 8 (ToF height_err + PMW3901 vx/vy) x {pol.obs_stack} stacked "
+              "frames; external climb damper DISABLED — the policy owns altitude AND horizontal "
+              "drift from measured channels. BOTH bridge sensors are REQUIRED: the flow channel "
+              "is load-bearing (staid-moon-7407: zeroing it drops survival BELOW the arm that "
+              "never had it), so losing it aborts the flight.")
+    elif pol.uses_tof:
         print(f"policy: base obs 6 (incl. ToF height_err) x {pol.obs_stack} stacked frames; "
               "external climb damper DISABLED — the policy owns altitude from the measured "
               "height (RPM governor stays: absolute thrust anchor). ToF telemetry is REQUIRED.")
@@ -128,6 +155,14 @@ def check_policy_family_acro(pol: Policy) -> None:
     Used ONLY for the acro policy that drives the bounded FLIP window (the primary hover policy
     still goes through :func:`check_policy_family`'s 5/6-dim guard). Single-frame — no stacking.
     """
+    # The dim tuple alone stopped being sufficient the moment a HOVER family reached 8 channels:
+    # a hover_flow file is base-8 and would sail through this gate, then be driven through the
+    # flip window with gravity_body where it expects roll/pitch and a maneuver clock where it
+    # expects a measured velocity. Task first, dim second — the mirror of check_policy_family.
+    if pol.uses_tof or pol.uses_flow:
+        sys.exit(f"unsupported acro policy: task {pol.task!r} is a HOVER family (its channels are "
+                 "[roll, pitch, p, q, r, height_err, ...], not [gravity_body(3), p, q, r, "
+                 "rotation_remaining, ...]) — pass it as --weights, not --acro-weights")
     if pol.base_obs_dim not in (7, 8):
         sys.exit(f"unsupported acro policy: base_obs_dim {pol.base_obs_dim} (the acro-flip pilot "
                  "feeds the 7-dim [gravity_body(3), p, q, r, rotation_remaining] or 8-dim "
@@ -212,6 +247,31 @@ def obs_from_msp_acro(att: dict, imu: dict, rotation_remaining: float,
     if maneuver_phase is not None:
         obs.append(maneuver_phase)
     return obs
+
+
+def flow_to_velocity(dx: int, dy: int, dt_s: float, rad_per_count: float, height_m: float,
+                     p: float, q: float) -> tuple[float, float]:
+    """PMW3901 counts -> body-frame horizontal velocity (m/s), gyro-compensated and height-scaled.
+
+    The hover_flow deploy contract in one function, so the flight engine and the props-off
+    ``check`` display cannot drift apart on it (they did on the height channel once already, in
+    the other direction: ``check`` fed a 5-dim frame to a 6-dim ToF policy and nothing failed).
+
+    Three steps, in the order ``tasks/hover_flow.py`` models them:
+
+    1. ``dx/dt * rad_per_count`` — what the lens saw, in rad/s. ``rad_per_count`` is MEASURED
+       (the ``flow_probe`` slide test), never assumed.
+    2. Subtract the ROTATION. A pitching drone sweeps the ground past the lens with no
+       translation at all: the raw rate is ``v/h + omega``, body-x pairing with pitch rate ``q``
+       and body-y with ``-p``. Without this the channel is a mixture, not a velocity — and the
+       sim models only the *residual* of this compensation (``flow_gyro_residual``), i.e. it
+       presumes the compensation happens here.
+    3. Scale by the MEASURED height. The host has no true height, only the ToF's, so a height
+       error is a velocity error one-for-one — which is why the setpoint moved to 0.15 m.
+    """
+    wx = dx / dt_s * rad_per_count
+    wy = dy / dt_s * rad_per_count
+    return ((wx - q) * height_m, (wy + p) * height_m)
 
 
 def action_to_us(act: list[float], hover_us: int, min_us: int, max_us: int,

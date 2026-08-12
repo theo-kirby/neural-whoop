@@ -62,6 +62,7 @@ from .config import (
 from .policy import (
     Policy,
     action_to_us,
+    flow_to_velocity,
     obs_from_msp_acro,
     rpm_climb_rate,
     rpm_damper_trim,
@@ -123,6 +124,31 @@ class FlightParams:
     # Set tof_blind_grace_s high (or fade_s 0 with a high grace) for the legacy hold-forever.
     tof_blind_grace_s: float = 0.20   # hold verbatim this long — covers ordinary 25 Hz jitter
     tof_blind_fade_s: float = 0.30    # then fade the held error to 0 over this window
+    # --- PMW3901 optical flow, the hover_flow obs channels 6/7 (2026-08-12) ---
+    # These MUST mirror tasks/hover_flow.py's HoverFlowConfig for the same reason the ToF gates
+    # above mirror HoverTofConfig: the policy trained against a channel with these exact validity
+    # semantics, and a deploy gate that differs hands it a channel it has never seen.
+    #
+    # rad_per_count has NO defensible default, so its default is "unmeasured" and a flow policy
+    # REFUSES TO FLY on it (see setup). It is the slide-test constant from
+    # firmware/xiao_bridge/README.md — v = (counts/dt - gyro) * rad_per_count * height — and
+    # guessing it is guessing the gain of the only loop closing horizontal drift. bench.py's
+    # --rad-per-count carries a documented geometry placeholder (0.023891, Crazyflie's
+    # 0.71674 rad / 30 px) for eyeballing live counts; that is not a measurement of THIS unit.
+    rad_per_count: float = 0.0
+    flow_min_m: float = 0.08          # PMW3901 working range starts here. A HARD optical limit.
+    flow_tilt_limit_deg: float = 30.0  # tighter than the ToF's 45: tilt rotates the measured
+                                      # ground plane out from under the flat-floor assumption
+                                      # faster than it degrades a single ranging ray
+    flow_squal_min: int = 20          # surface quality floor. The deploy-side form of the sim's
+                                      # flow_dropout_prob: frames arrive on time over a bare desk
+                                      # and the counts mean nothing, which no freshness check can
+                                      # see. PLACEHOLDER until the Phase-0 surface check measures
+                                      # the in-flight squal floor over the real flying surface.
+    flow_blind_grace_s: float = 0.20  # hold the last estimate verbatim this long, then ...
+    flow_blind_fade_s: float = 0.30   # ... fade it to zero. Same grace-then-fade as the ToF, and
+                                      # for a velocity the faded value is an HONEST neutral ("I
+                                      # don't know that I'm moving") rather than a held claim.
     # PASSIVE optical-flow logging (2026-08-12). Polls MSP_BRIDGE_FLOW and writes the differenced
     # counts to the flight CSV; the flow NEVER enters the obs on this path. That split is the
     # whole point — it is the same "measure before use" discipline the ToF got on 2026-07-13
@@ -252,6 +278,18 @@ class FlightController:
         self.t_tof_used: float = 0.0
         self.att_hist: deque = deque(maxlen=24)  # (t, roll, pitch), ~0.5 s at 50 Hz
         self._tof_cos_limit = math.cos(math.radians(params.tof_tilt_limit_deg))
+        # Flow estimate: gyro-compensated, height-scaled, zero-order-held at the last VALID
+        # reading and then faded to zero (the hover_flow obs contract). vx_obs/vy_obs are the
+        # values the policy actually saw — CSV cols 32/33 — mirroring h_err_obs exactly, which is
+        # what keeps sim_vs_real's offline replay byte-exact.
+        self._v_hold: tuple[float, float] = (0.0, 0.0)
+        self.vx_obs: float | None = None
+        self.vy_obs: float | None = None
+        self.t_last_flow: float | None = None
+        self._flow_cos_limit = math.cos(math.radians(params.flow_tilt_limit_deg))
+        # Poll the sensor when EITHER the policy consumes it or --log-flow asked for the passive
+        # calibration trace. One flag, because there is exactly one flow_delta() consumer.
+        self._wants_flow = bool(params.log_flow) or policy.uses_flow
         self.trim_roll_rad = math.radians(params.trim_roll_deg)
         self.trim_pitch_rad = math.radians(params.trim_pitch_deg)
 
@@ -351,6 +389,52 @@ class FlightController:
                         "--udp <bridge-ip> tof")
             self._log(f"ToF live: {self.tel.height_m(self._clock()):.3f} m "
                       f"(target height {p.target_height_m:.2f} m)")
+        if self.pol.uses_flow:
+            # Two refusals, and the first is not about hardware at all. rad_per_count converts
+            # counts to metres per second; unmeasured, it is the gain of the loop that holds the
+            # drone still, and "0" would silently feed the policy a permanently-zero velocity —
+            # the exact faded-channel state the knockout probe measured as WORSE than never
+            # having the channel (staid-moon-7407, 16.8% vs 25.6%).
+            if p.rad_per_count <= 0.0:
+                raise FlightSetupError(
+                    "this policy observes optical flow but rad_per_count is unmeasured "
+                    "(--rad-per-count). Measure it first: firmware/xiao_bridge/README.md's "
+                    "flow_probe slide test (known height over a printed page, zero the sums, "
+                    "slide 100 mm, rad_per_count = distance / (height * counts)) — and repeat it "
+                    "at a second height; the two must agree or the standoff is wrong.")
+            # The sensor gate checks the SENSOR, deliberately not the surface. Setup runs with the
+            # drone on the floor, i.e. ~3 cm up — BELOW the PMW3901's 80 mm working range, where a
+            # collapsed squal is the expected reading rather than a diagnosis. Refusing on squal
+            # here would make a hover_flow policy unable to take off at all (found on the fake
+            # bridge, which models the blind floor honestly). So: refuse a missing/silent sensor,
+            # WARN on a poor surface, and let the in-flight flow_lost abort be the thing that
+            # catches a genuinely textureless floor — one second into free flight, where the
+            # reading actually means something.
+            t0 = self._clock()
+            while True:
+                self.tel.poll(self._clock(), want_flow=True)
+                fl = self.tel.flow
+                if fl is not None and fl["sensor_ok"] and fl["valid"]:
+                    break
+                self._sleep(0.02)
+                if self._clock() - t0 > 5.0:
+                    why = ("no PMW3901 reply" if fl is None else
+                           "bridge up but no PMW3901 found (check 3V3/SPI/CS, and that RST is "
+                           "tied HIGH)" if not fl["sensor_ok"] else
+                           "sensor present but never sampled / sample stale")
+                    raise FlightSetupError(
+                        f"this policy observes the bridge optical flow but the sensor is not "
+                        f"usable in 5 s ({why}). Check: python3 scripts/bench.py --udp "
+                        f"<bridge-ip> flow")
+            squal = self.tel.flow["squal"]
+            self._log(f"flow sensor live: squal {squal} on the ground "
+                      f"(rad_per_count {p.rad_per_count:.6f}, blind below {p.flow_min_m:.2f} m — "
+                      "a low ground squal is expected, the sensor is under its working range)")
+            if squal < p.flow_squal_min:
+                self._log(f"  NOTE squal {squal} < {p.flow_squal_min}. If it stays there in the "
+                          "air the flight aborts (flow_lost) ~1 s in: no texture, no flow, and "
+                          "that is a go/no-go rather than a tuning knob — fly over a patterned "
+                          "mat.")
         return {
             "override_aux": override_rng["aux_idx"] + 1,
             "arm_aux": (arm_rng["aux_idx"] + 1) if arm_rng else None,
@@ -463,7 +547,7 @@ class FlightController:
         self.tick += 1
         self.tel.poll(now, want_analog=(self.tick % int(p.hz) == 0),
                       want_rc=(self.tick % 5 == 0), want_rpm=True, want_tof=True,
-                      want_flow=p.log_flow)
+                      want_flow=self._wants_flow)
         if self.tel.vbat:
             self.vfilt = self.tel.vbat if self.vfilt is None else 0.98 * self.vfilt + 0.02 * self.tel.vbat
 
@@ -533,6 +617,12 @@ class FlightController:
         #     limit the ray misses the spot below and the cos correction degrades; past the
         #     trusted range the short-mode reading is not believable. Either -> hold.
         self.att_hist.append((now, o[0], o[1]))
+        # --- optical flow, BEFORE the ToF advance ---
+        # Order is contract, not preference. tasks/hover_flow.py advances the flow estimator first
+        # and reads ``h_meas`` there, i.e. the height from BEFORE this step's ToF refresh; reading
+        # it after would scale the velocity by a height the deploy path could not have had yet.
+        # Mirroring that here is what makes the two agree step for step.
+        flow = self._advance_flow(now, o)
         sample = self.tel.height_sample(now)
         tof_m = sample[0] if sample is not None else None
         if sample is not None and sample[1] > self.t_tof_used:
@@ -550,6 +640,31 @@ class FlightController:
             self._log(f"\nno valid ToF height for > 1 s ({why}) and the policy observes it"
                       " -> releasing")
             return self._abort("tof_lost")
+        # The flow twin of that abort. It SUBSUMES the ToF one by construction — a flow reading is
+        # only valid with a height in [flow_min_m, tof_max_m], so a dead ToF kills the flow channel
+        # too — and the ToF check above simply runs first so a dead rangefinder is reported as
+        # `tof_lost` rather than as its downstream symptom. What lands HERE is the failure the ToF
+        # cannot see: texture. The sim now flies sustained blackouts in-distribution
+        # (flow_blackout_prob), so the policy has met this state before; it still cannot fly on it
+        # indefinitely, because a faded-to-zero channel is worse than none (staid-moon-7407).
+        # It starts counting at FREE FLIGHT, not at the override edge, because everything before
+        # that happens on or near the floor: the countdown, the liftoff seek and the climb-out all
+        # sit under the sensor's 80 mm working range, so a t_start-gated abort would kill every
+        # take-off before the policy ever got the aircraft. `now - t_air` is the instant free
+        # flight began — the policy gets one second from there to acquire the channel.
+        if self.pol.uses_flow and self.t_start is not None and t_air > 0.0:
+            since = self.t_last_flow if self.t_last_flow is not None else (now - t_air)
+            lost = now - since > 1.0
+        else:
+            lost = False
+        if lost:
+            why = ("no new sample" if flow is None else
+                   f"every reading rejected (squal {flow[3]}, h_est "
+                   + (f"{self.h_est:.3f} m" if self.h_est is not None else "none")
+                   + f", tilt {math.degrees(math.hypot(o[0], o[1])):.0f} deg)")
+            self._log(f"\nno valid optical flow for > 1 s ({why}) and the policy observes it"
+                      " -> releasing")
+            return self._abort("flow_lost")
         # Crash detector: sustained extreme attitude -> cut + release. SUSPENDED while `flipping`:
         # a legitimate flip passes |roll|>110° by design, so the detector would false-fire. The
         # bounded FLIP window (acro_flip_max_s) + the re-level exit gate re-arm it the instant the
@@ -634,7 +749,9 @@ class FlightController:
         o = [o[0] - self.lvl[0] - self.trim_roll_rad,
              o[1] - self.lvl[1] - self.trim_pitch_rad, o[2], o[3], o[4]]
 
-        self.h_err_obs = None  # set below iff a ToF policy actually observed an error this tick
+        # Reset the "what the policy saw" mirrors: set below iff the hover policy actually ran and
+        # observed them this tick (a mid-flip tick runs the ACRO policy and observes neither).
+        self.h_err_obs = None
         if self.flipping:
             # The acro policy owns the maneuver. Advance the maneuver clock by integrating the
             # maneuver-axis gyro (mirrors tasks/acro_flip.py's phi accumulation), then feed the
@@ -673,6 +790,12 @@ class FlightController:
                 err *= self._blind_fade(now)  # blind and confidently wrong is worse than neutral
                 self.h_err_obs = err
                 frame = o + [err]
+                if self.pol.uses_flow:
+                    # Channels 6/7. _advance_flow already ran (before the ToF advance, per the
+                    # sim's own order); None only on the pre-first-sample ticks the setup gate
+                    # makes ~impossible, and a neutral zero is the right thing to feed then.
+                    frame = frame + [self.vx_obs if self.vx_obs is not None else 0.0,
+                                     self.vy_obs if self.vy_obs is not None else 0.0]
             elif self.pol.uses_vz:
                 frame = o + [self.vz]
             else:
@@ -775,14 +898,12 @@ class FlightController:
             self.n_sent += 1
         self.us = us
         self.hover_eff = hover_eff
-        # Passive flow read. flow_delta() consumes the interval, so it must be called EXACTLY
-        # once per tick and from exactly one place — a second caller would each see half the
-        # motion. None (not zero) whenever there is no new sample, absent sensor, or stale link.
-        flow = None
-        if p.log_flow:
-            d = self.tel.flow_delta(now)
-            if d is not None:
-                flow = (d[0], d[1], f"{d[2]:.4f}", d[3])
+        # The raw flow counts for the CSV. The single flow_delta() call happened in
+        # _advance_flow(), up with the obs — it consumes the interval, so it must be called
+        # EXACTLY once per tick and from exactly one place; this used to BE that place, and moving
+        # it (rather than adding a second call) is what keeps both readers seeing all the motion.
+        # None (not zero) whenever there is no new sample, absent sensor, or stale link.
+        flow = (flow[0], flow[1], f"{flow[2]:.4f}", flow[3]) if flow is not None else None
         # tof_m: the raw (uncorrected) reading from the fresh-obs section above — CSV col 25
         # keeps its "measured range, validity-gated" semantics; h_est is the policy's view.
         self._on_log([f"{t_fl:.3f}", f"{age * 1e3:.0f}",
@@ -807,10 +928,83 @@ class FlightController:
                       # this flight exists to measure. Logging a velocity would bake a placeholder
                       # into the record and make the log unable to answer its own question.
                       # Empty on ticks with no new sample — never 0, which reads as "not moving".
-                      *(f"{v}" for v in (flow if flow is not None else ("", "", "", "")))])
+                      *(f"{v}" for v in (flow if flow is not None else ("", "", "", ""))),
+                      # vx/vy: the velocity channels the POLICY OBSERVED — gyro-compensated,
+                      # height-scaled and post-fade. The four raw columns above are PRE-FUSION and
+                      # cannot reconstruct these (they carry neither h_est, nor the gyro, nor the
+                      # fade state), so without these two sim_vs_real cannot replay a flow flight
+                      # at all. Same discipline as h_err, and for the same reason. Blank on ticks
+                      # where no flow policy ran.
+                      f"{self.vx_obs:.4f}" if self.vx_obs is not None else "",
+                      f"{self.vy_obs:.4f}" if self.vy_obs is not None else ""])
         return self._make_frame()
 
     # ------------------------------------------------------------------ helpers
+
+    def _advance_flow(self, now: float, o: list[float]) -> tuple[int, int, float, int] | None:
+        """Consume this tick's PMW3901 interval; update the held/faded velocity estimate.
+
+        Returns the raw ``(dx, dy, dt_s, squal)`` for the CSV (``None`` when there was no new
+        sample), and sets :attr:`vx_obs` / :attr:`vy_obs` — the metres-per-second the policy is
+        fed this tick — mirroring :attr:`h_err_obs`.
+
+        **This is the only ``flow_delta`` call in the pilot, and it has to stay that way.**
+        ``Telemetry.flow_delta`` consumes the interval by contract, so a second caller would see
+        half the motion and so would the first: the logging path used to own this call, and the
+        obs path MOVED it here rather than adding one.
+
+        The three conversions, in the order tasks/hover_flow.py models them:
+
+        1. **Counts to angular rate.** ``dx/dt * rad_per_count`` is what the lens saw, in rad/s.
+        2. **Remove the rotation.** A pitching drone sweeps the ground past the lens with no
+           translation at all, so the raw rate is ``v/h + omega``: body-x pairs with pitch rate
+           ``q`` and body-y with ``-p``. Subtracting the gyro is what makes the channel a velocity
+           rather than a mixture; the sim models only the RESIDUAL of this compensation
+           (``flow_gyro_residual``), which presumes the compensation exists here.
+        3. **Scale by height.** ``* h_est`` — and the host has no true height, only the ToF's, so
+           a height error is a velocity error one-for-one. That is the whole reason the setpoint
+           moved to 0.15 m.
+        """
+        p = self.params
+        # Reset the observed mirrors first (the h_err_obs discipline): a tick that feeds no flow
+        # channel must log a BLANK cell, not a stale number that replay would then trust.
+        self.vx_obs = self.vy_obs = None
+        if not self._wants_flow:
+            return None
+        d = self.tel.flow_delta(now)
+        if not self.pol.uses_flow:
+            return d  # passive --log-flow: raw counts to the CSV, never into the obs
+        if d is not None:
+            dx, dy, dt_f, squal = d
+            h = self.h_est
+            cos_tilt = math.cos(o[0]) * math.cos(o[1])
+            if (dt_f > 0.0 and squal >= p.flow_squal_min and h is not None
+                    and p.flow_min_m <= h <= p.tof_max_m and cos_tilt > self._flow_cos_limit):
+                self._v_hold = flow_to_velocity(dx, dy, dt_f, p.rad_per_count, h,
+                                                self.p, self.q)
+                self.t_last_flow = now
+        fade = self._flow_fade(now)
+        self.vx_obs = self._v_hold[0] * fade
+        self.vy_obs = self._v_hold[1] * fade
+        return d
+
+    def _flow_fade(self, now: float) -> float:
+        """Confidence in the held flow estimate, 1.0 (fresh) -> 0.0 (blind long enough to drop it).
+
+        The velocity twin of :meth:`_blind_fade`, and the cheaper of the two decisions: a faded
+        HEIGHT error means "you are at target" (a claim), while a faded velocity means "I don't
+        know that I'm moving" (an honest neutral). ``tasks/hover_flow.py`` fades on exactly this
+        curve, so the policy has trained against it.
+        """
+        p = self.params
+        if self.t_last_flow is None or p.flow_blind_grace_s < 0.0:
+            return 1.0
+        stale = now - self.t_last_flow - p.flow_blind_grace_s
+        if stale <= 0.0:
+            return 1.0
+        if p.flow_blind_fade_s <= 0.0:
+            return 0.0
+        return max(0.0, 1.0 - stale / p.flow_blind_fade_s)
 
     def _blind_fade(self, now: float) -> float:
         """Confidence in the held ToF error, 1.0 (fresh) -> 0.0 (blind long enough to disbelieve).

@@ -45,7 +45,13 @@ from neural_whoop.bench.msp import (
     decode_u16s,
     encode_msp_v1,
 )
-from neural_whoop.pilot import FlightController, FlightParams, FlightSetupError, Policy
+from neural_whoop.pilot import (
+    FlightController,
+    FlightParams,
+    FlightSetupError,
+    Policy,
+    check_policy_family,
+)
 from neural_whoop.pilot.config import BF_MAX_RATE_RP, GYRO_RAW_TO_DPS
 
 #: The pilot CSV schema (kept in sync with analysis/flight_log.py::LOG_COLUMNS; duplicated here
@@ -59,12 +65,16 @@ LOG_COLUMNS = [
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
     "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
+    "vx", "vy",
 ]
 
 #: Fields a browser ``params`` message may override on the WAITING controller.
 _PARAM_FIELDS = ("seconds", "hz", "hover_us", "min_us", "max_us", "hold_seconds", "vz_gain",
                  "trim_roll_deg", "trim_pitch_deg", "trim_thrust", "yaw", "target_height_m",
-                 "min_thrust_frac", "tof_blind_grace_s", "tof_blind_fade_s")
+                 "min_thrust_frac", "tof_blind_grace_s", "tof_blind_fade_s",
+                 # hover_flow: rad_per_count is the one with no safe default — a flow policy
+                 # refuses to fly until it is set, and this is the Studio's way to set it.
+                 "rad_per_count", "flow_squal_min", "flow_blind_grace_s", "flow_blind_fade_s")
 
 
 def is_serial_bridge(bridge: str) -> bool:
@@ -142,6 +152,16 @@ class FlightManager:
         self._bridge = bridge
         self._host, self._port = _parse_bridge(bridge)
         self._policy = Policy(str(weights))
+        # The CLI has refused an unsupported obs family since the ToF landed; this path loaded
+        # ANY policy silently and fed it whatever frame the controller happened to build. With a
+        # second 8-dim family in the repo (hover_flow vs acro-flip) that gap stops being academic:
+        # the two layouts are the same width and mean entirely different things.
+        # The gate is the CLI's, so it signals by sys.exit; in a library that has to become an
+        # ordinary exception the server can report rather than a process teardown.
+        try:
+            check_policy_family(self._policy)
+        except SystemExit as e:
+            raise ValueError(str(e)) from None
         self._weights = str(weights)
         # Optional acro-flip policy: enables the {type:"flip"} command (a bounded FLIP window at
         # HOVER). None = the Flip button is inert (the base take-off/land/hover flow is unchanged).
@@ -378,6 +398,13 @@ class FlightManager:
                 pass
 
 
+#: The rad-per-count the fake bridge's flow model INVERTS to produce its counts. It is bench.py's
+#: documented geometry placeholder (Crazyflie's 0.71674 rad / 30 px), not a measurement of any real
+#: unit — a rehearsal has to pass this same value as ``--rad-per-count`` for the loop to close,
+#: and the real one comes from the ``flow_probe`` slide test.
+FAKE_RAD_PER_COUNT = 0.023891
+
+
 def _truthy(v) -> bool:
     return str(v).lower() in ("1", "true", "yes", "on") if v is not None else False
 
@@ -399,6 +426,10 @@ class FakeFlightBridge(_MspEndpoint):
         self._roll = 0.0           # attitude integrated from the commanded rate (deg): a real flip
         self._pitch = 0.0
         self._z = 0.0              # crude height integrated from throttle (the fake "ToF" source)
+        self._vx = 0.0             # crude horizontal velocity from tilt + drag (the fake "flow")
+        self._vy = 0.0
+        self._roll_rate_dps = 0.0
+        self._pitch_rate_dps = 0.0
         self._i = 0
         self._vbat = 4.05
         self._armed = armed
@@ -454,15 +485,28 @@ class FakeFlightBridge(_MspEndpoint):
         elif cmd == MSP_BRIDGE_FLOW:
             # The bridge's downward PMW3901. CUMULATIVE counts + the bridge's own sample clock,
             # exactly like the firmware — the host differences successive replies, so a fake that
-            # returned per-read deltas would exercise the wrong contract entirely. The drone is
-            # not modelled as translating here, so the counts advance by a small fixed drift: it
-            # proves the differencing path end-to-end without pretending to be flight data.
+            # returned per-read deltas would exercise the wrong contract entirely.
+            #
+            # The counts are now FLOW-CONSISTENT rather than a fixed drift. A constant made the
+            # rehearsal vacuous for a hover_flow policy: the channel read the same regardless of
+            # what the drone did, so a sign error, a units error or a dead obs path all produced
+            # an identical CSV. Here the fake integrates a crude horizontal velocity from the
+            # commanded roll/pitch (below) and emits the counts that velocity WOULD produce —
+            # counts = (v/h + omega) * dt / rad_per_count — inverting the host's own conversion,
+            # so a rehearsal actually exercises it end to end. Below the sensor's 80 mm working
+            # range the squal collapses, which is what makes the blind path reachable with no
+            # hardware. Physically crude; the point is that the loop is closed.
             self._flow_i = getattr(self, "_flow_i", 0) + 1
-            self._flow_dx = getattr(self, "_flow_dx", 0) + 3
-            self._flow_dy = getattr(self, "_flow_dy", 0) - 1
+            h = max(0.02, self._z)
+            omega_x = self._vx / h + math.radians(self._pitch_rate_dps)
+            omega_y = self._vy / h - math.radians(self._roll_rate_dps)
+            k = 0.02 / FAKE_RAD_PER_COUNT          # counts per rad/s over one 50 Hz sample
+            self._flow_dx = getattr(self, "_flow_dx", 0) + int(round(omega_x * k))
+            self._flow_dy = getattr(self, "_flow_dy", 0) + int(round(omega_y * k))
+            squal = 72 if self._z >= 0.08 else 2   # blind under the working range
             self._resp(cmd, struct.pack(
                 "<iiIHBBBH", self._flow_dx, self._flow_dy, int(self._i * 20) + 1000,
-                self._flow_i & 0xFFFF, 72, 1, 1, 8))
+                self._flow_i & 0xFFFF, squal, 1, 1, 8))
         elif cmd == MSP_MOTOR_TELEMETRY:
             rpm = max(600, int((self._thr - 1000) * 45))
             p = bytes([4])
@@ -483,10 +527,19 @@ class FakeFlightBridge(_MspEndpoint):
                 self._gyro = (int(roll_dps / GYRO_RAW_TO_DPS), int(pitch_dps / GYRO_RAW_TO_DPS), 0)
                 self._roll = self._wrap180(self._roll + roll_dps * 0.02)   # fixed 50 Hz control tick
                 self._pitch = self._wrap180(self._pitch + pitch_dps * 0.02)
+                self._roll_rate_dps, self._pitch_rate_dps = roll_dps, pitch_dps
             # Height: climb/sink proportional to throttle above/below a nominal hover point,
             # integrated at the same fixed 50 Hz tick. Crude but monotone with the commands.
             vz = max(-1.5, min(2.0, (self._thr - 1450) / 120.0))
             self._z = max(0.0, min(3.0, self._z + vz * 0.02))
+            # Horizontal: tilt accelerates, drag opposes. tau ~ 0.32 s is the real airframe's
+            # (acc = -(D_xy/m)*v, D_xy ~ 0.10 on m ~ 0.032). Sign convention is the contract's —
+            # +pitch is nose DOWN, which accelerates FORWARD (+x); +roll is roll RIGHT, which
+            # accelerates right, i.e. -y since body y is LEFT. Without this the fake flow channel
+            # would be a constant, and a hover_flow rehearsal would pass with the obs path dead.
+            tilt = lambda d: math.tan(math.radians(max(-60.0, min(60.0, d))))  # noqa: E731
+            self._vx += (9.81 * tilt(self._pitch) - self._vx / 0.32) * 0.02
+            self._vy += (-9.81 * tilt(self._roll) - self._vy / 0.32) * 0.02
 
     def _read(self) -> bytes:
         d = bytes(self._out)

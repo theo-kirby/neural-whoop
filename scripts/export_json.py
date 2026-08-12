@@ -41,6 +41,11 @@ OBS_LAYOUTS = {
     "hover_tof": "hover_tof: [roll, pitch, p, q, r, height_err] (rad, rad/s, m; frame x fwd/"
                  "y left/z up; height_err = target_height - measured height, tilt-corrected "
                  "bridge ToF held at the last valid reading)",
+    "hover_flow": "hover_flow: [roll, pitch, p, q, r, height_err, vx, vy] (rad, rad/s, m, m/s; "
+                  "frame x fwd/y left/z up; channels 0-5 are hover_tof's EXACTLY; vx/vy are the "
+                  "body-frame horizontal velocity from the bridge PMW3901, "
+                  "v = (counts/dt - gyro) * rad_per_count * measured height, faded to zero when "
+                  "the sensor is blind (below 0.08 m, past 30 deg of tilt, or no texture))",
 }
 ACT_LAYOUT = "act-v2: [thrust(-1..1 -> 0..4x hover), roll_rate, pitch_rate, yaw_rate]"
 
@@ -68,7 +73,11 @@ def _probes(base_dim: int, task: str = "", seed: int = 0) -> dict[str, list[floa
         ("roll_rate_p_1rps", 2, 1.0),
         ("yaw_rate_r_1rps", 4, 1.0),
     ]
-    if task == "hover_tof":  # channel 5 = height_err (m, + = climb), not vz
+    # Channel 5 is task-keyed, and the branch has to be a MEMBERSHIP test, not `== "hover_tof"`:
+    # hover_flow extends hover_tof's layout, so its channel 5 is height_err too and the vz branch
+    # would have named the same probe "sink_vz" — mislabeling the parity oracle that
+    # `pilot.py selftest` prints, in the exact place a reader checks the sign of the height loop.
+    if task in ("hover_tof", "hover_flow"):  # channel 5 = height_err (m, + = climb), not vz
         named += [
             ("below_target_err_+0.3m", 5, 0.3),
             ("above_target_err_-0.3m", 5, -0.3),
@@ -77,6 +86,11 @@ def _probes(base_dim: int, task: str = "", seed: int = 0) -> dict[str, list[floa
         named += [
             ("sink_vz_-0.5mps", 5, -0.5),
             ("climb_vz_+0.5mps", 5, 0.5),
+        ]
+    if task == "hover_flow":  # channels 6/7 = measured body-frame horizontal velocity (m/s)
+        named += [
+            ("drift_forward_vx_+0.2mps", 6, 0.2),
+            ("drift_left_vy_+0.2mps", 7, 0.2),
         ]
     probes: dict[str, list[float]] = {}
     for name, idx, val in named:

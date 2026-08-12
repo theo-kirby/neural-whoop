@@ -49,9 +49,16 @@ def main() -> int:
     args = p.parse_args()
 
     pol = pilot.Policy(args.weights)
-    if pol.base_obs_dim not in (5, 6):
+    # Task-keyed, exactly like the pilot's own gate: base_obs_dim 8 is BOTH the hover_flow obs and
+    # the acro-flip one, and replaying an acro file against these columns would silently diff
+    # gravity_body against roll/pitch.
+    if pol.uses_flow:
+        if pol.base_obs_dim != 8:
+            sys.exit(f"unsupported hover_flow policy: base_obs_dim {pol.base_obs_dim} (expects 8)")
+    elif pol.base_obs_dim not in (5, 6):
         sys.exit(f"unsupported policy: base_obs_dim {pol.base_obs_dim} (expects the 5/6-dim "
-                 "hover_blind obs — same family scripts/pilot.py flies)")
+                 "hover_blind/hover_tof obs or an 8-dim hover_flow one — the families "
+                 "scripts/pilot.py flies)")
 
     rows = list(csv.DictReader(Path(args.flight).open(newline="")))
     if not rows:
@@ -69,6 +76,15 @@ def main() -> int:
             # h_err (col 26) is the channel exactly as the pilot fed it (tilt-corrected,
             # last-valid-held, minus the flight's target height) — replay is exact.
             base = base + [_f(r.get("h_err", ""))]
+            if pol.uses_flow:
+                # vx/vy likewise: the FUSED, faded channel, not the raw flow_dx/flow_dy counts.
+                # Reconstructing these from the counts would need the held height, the gyro and
+                # the fade clock, i.e. a reimplementation of the controller — which is the thing
+                # this script exists to check rather than to assume.
+                if "vx" not in r or "vy" not in r:
+                    sys.exit(f"{args.flight}: a hover_flow policy needs the vx/vy columns "
+                             "(33-column schema); this log predates them")
+                base = base + [_f(r.get("vx", "")), _f(r.get("vy", ""))]
         elif pol.uses_vz:
             base = base + [_f(r["vz_est"])]
         obs = pilot.stack_frames(hist, base, pol.obs_stack)

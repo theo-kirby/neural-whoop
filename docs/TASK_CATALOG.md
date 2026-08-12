@@ -331,20 +331,36 @@ agent picks the next item, opens a Flywheel branch, and iterates (see `AGENTS.md
   drift, so the policy would learn to trust a channel that decays. The consequence is stated
   rather than hidden — this is a **drift-rate controller**: it can learn to stop moving, it
   cannot return to a point it has already left.
-- **Three modeled ways the channel lies** (each a way it is *wrong*, not merely noisy):
+- **Four modeled ways the channel lies** (each a way it is *wrong*, not merely noisy):
   **(1) height multiplies straight into the velocity scale** (`v = counts/dt · rad_per_count ·
   height`, and the host has only `h_meas`, so the sim scales by `h_meas/z`) — at a 0.10 m
   setpoint the measured +23.9 mm ToF offset is a **24% velocity error**, which is what drove the
   operating point to 0.40 m; **(2) below 0.08 m the sensor is blind** (PMW3901 working range — an
   optical limit, not a noise floor); **(3) a featureless floor returns no motion at full frame
   rate**, invisible to every freshness check, hence an explicit dropout term and the `squal`
-  channel on the wire.
+  channel on the wire; **(4) it fails in RUNS, not one frame at a time** — `flow_dropout_prob` is
+  an i.i.d. per-step coin, so at 0.02 the chance of losing a whole second is 1e-85 and a policy
+  trained on speckle alone meets sustained blindness for the first time in the air.
+  `flow_blackout_prob`/`flow_blackout_s` (2026-08-12) model the run explicitly and are sized past
+  the pilot's 1 s `flow_lost` abort window, so the losses that end a flight are ones the policy
+  has flown before. Default OFF, because every flow result before that date was measured without
+  them.
 - **Blind handling is grace-then-fade to zero, not hold** — the same guard the deployed pilot
   applies to a stale ToF. Holding a stale velocity forever is the confidently-wrong-held-channel
   shape that flew the 2026-07-31 crash; a faded velocity decays to an honest neutral.
-- **Status:** implemented (`tasks/hover_flow.py`, `configs/flow-hover.yaml`, `tests/test_hover_flow.py`).
-  **Not yet trained to a result and not yet flown.** Sensor state advances in `reward_and_done`
-  (once per step); `observe` is a pure read.
+- **Status:** implemented (`tasks/hover_flow.py`, `configs/flow-hover.yaml`,
+  `configs/desk-flow.yaml`, `tests/test_hover_flow.py`). Sensor state advances in
+  `reward_and_done` (once per step); `observe` is a pure read. The **deploy path exists**
+  (`tests/test_pilot_flow.py`, docs/SIM2REAL.md "The obs-8 deploy path"): the pilot builds the
+  channel, logs it as `vx`/`vy`, and aborts on `flow_lost`. **Not yet flown** — the bench
+  calibration that measures `rad_per_count` is the standing blocker, and the pilot refuses to fly
+  a flow policy without it.
+- **Two operating points.** `flow-hover` holds **0.40 m** (the widest margin on the floor/scale/
+  ceiling constraints at once, but a fall from there is a real crash). **Desk-Flow**
+  (`configs/desk-flow.yaml`) holds **0.15 m**: still desk scale, still structurally immune to the
+  2026-07-31 saturate-and-hold chain, and the lowest setpoint where both sensors work — at 0.10 m
+  the ~1.8 cm hover sink plus the uncalibrated +23.9 mm ToF offset puts the sensor at 0.076 m,
+  i.e. *blind*. `desk-flow-noflow` is its one-factor control.
 - **Watch `flow_valid_rate`** (new metric). A policy can post a fine `mean_xy_error` while flying
   most of the episode on a faded-to-zero channel — that is an open-loop policy wearing a
   closed-loop metric, and this number is what tells them apart.

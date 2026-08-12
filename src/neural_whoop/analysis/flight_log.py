@@ -1,7 +1,7 @@
 """Pure flight-log load + metrics — the characterization core, unit-testable without the sim.
 
-A ``scripts/pilot.py`` flight writes a 27-column CSV (:data:`LOG_COLUMNS`; the 26-, 25-column ToF-era
-and 24-column pre-ToF schemas still load) — one row per control
+A ``scripts/pilot.py`` flight writes a 33-column CSV (:data:`LOG_COLUMNS`; the 31-column raw-flow,
+27-column pre-flow, 26-, 25-column ToF-era and 24-column pre-ToF schemas still load) — one row per control
 step of a real tiny-whoop flight. This module parses that CSV into a :class:`FlightLog` (per-column
 numpy arrays, empty cells -> NaN) and derives :func:`flight_metrics`: the phase segmentation, hover
 quality, the vertical-estimator smoking-gun metrics (``vz_est`` railing + thrust-vs-``a_thr``
@@ -54,17 +54,23 @@ LOG_COLUMNS = [
     # deriving a velocity here would bake a placeholder into the record. Empty when the sensor is
     # absent, the link stale, or no new sample landed this tick.
     "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
+    # hover_flow obs channels 6/7 exactly as the POLICY saw them (2026-08-12): gyro-compensated,
+    # scaled by the held ToF height, post-blind-fade. The four raw columns above are pre-fusion and
+    # cannot reconstruct these — they carry neither the height, nor the gyro, nor the fade state —
+    # so these are what makes an offline replay of a flow flight possible at all. Same relationship
+    # h_err has to tof_m. Empty on ticks where no flow policy ran.
+    "vx", "vy",
 ]
 
-#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 27 columns
-#: (pre-flow, every flight through 2026-08-11), 26 (pre-``bridge_loop_max_ms``), 25 (ToF-era,
-#: pre-``h_err``) and 24 (pre-ToF, through 2026-07).
+#: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 31 columns
+#: (raw flow counts but no fused vx/vy), 27 (pre-flow, every flight through 2026-08-11), 26
+#: (pre-``bridge_loop_max_ms``), 25 (ToF-era, pre-``h_err``) and 24 (pre-ToF, through 2026-07).
 #:
 #: Pinned by COUNT, not by a negative slice off :data:`LOG_COLUMNS`. It was written as
 #: ``(LOG_COLUMNS[:-1], [:-2], [:-3])``, which silently redefines every legacy schema the moment a
 #: column is appended — adding the four flow columns would have made "legacy" mean 30/29/28 and
 #: broken loading for all 27-column flights, i.e. every real flight the project has ever recorded.
-_LEGACY_WIDTHS = (27, 26, 25, 24)
+_LEGACY_WIDTHS = (31, 27, 26, 25, 24)
 _LEGACY_HEADERS = tuple(LOG_COLUMNS[:w] for w in _LEGACY_WIDTHS)
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose

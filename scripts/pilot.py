@@ -92,6 +92,7 @@ from neural_whoop.pilot import (  # noqa: E402,F401
     action_to_us,
     check_policy_family,
     check_policy_family_acro,
+    flow_to_velocity,
     obs_from_msp,
     obs_from_msp_acro,
     rpm_climb_rate,
@@ -116,6 +117,7 @@ LOG_COLUMNS = [
     "vbat", "hover_eff", "vz_est", "trim", "acc_x", "acc_y", "acc_z",
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
     "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
+    "vx", "vy",
 ]
 
 
@@ -175,6 +177,26 @@ def cmd_selftest(args: argparse.Namespace) -> int:
             sink = action_to_us(pol(probe(5, -0.5)), args.hover_us, args.min_us, args.max_us)
             print(f"sinking obs (vz_est -0.5 m/s) -> throttle {sink[2]} us vs level {us[2]} us "
                   "(expect higher)")
+        if pol.uses_tof:  # channel 5 is height_err, + = "climb": below target must add throttle
+            below = action_to_us(pol(probe(5, 0.3)), args.hover_us, args.min_us, args.max_us)
+            print(f"below target (h_err +0.3 m) -> throttle {below[2]} us vs level {us[2]} us "
+                  "(expect higher)")
+        if pol.uses_flow:
+            # The corrective SIGNS of the two new channels, through the full conversion chain —
+            # the same closed-loop direction check the attitude channels get above, on the axis
+            # that has never had one because nothing in the obs could see it.
+            #
+            # Body x is FORWARD, y is LEFT. Drifting forward (+vx) has to pitch the nose UP to
+            # brake, and on this board channel-high = nose DOWN (empirical, 2026-07-05), so the
+            # brake is pitch_us BELOW 1500. Drifting left (+vy) has to roll RIGHT: positive roll
+            # tilts thrust toward -y (= right), so roll_us ABOVE 1500.
+            fwd = action_to_us(pol(probe(6, 0.2)), args.hover_us, args.min_us, args.max_us)
+            left = action_to_us(pol(probe(7, 0.2)), args.hover_us, args.min_us, args.max_us)
+            flow_ok = fwd[1] < 1500 and left[0] > 1500
+            print(f"drifting FORWARD (vx +0.2 m/s) -> pitch_us {fwd[1]} (<1500 = nose-up brake); "
+                  f"drifting LEFT (vy +0.2 m/s) -> roll_us {left[0]} (>1500 = roll-right brake) "
+                  f"-> {'OK' if flow_ok else 'CHECK THE SIGNS'}")
+            ok = ok and flow_ok
     return 0 if ok else 1
 
 
@@ -188,10 +210,23 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("  level & still           -> throttle ~ hover_us, roll/pitch/yaw ~ 1500")
     if pol.uses_vz:
         print("  lift/lower STEADILY     -> vz_est +/- (leaky, decays back); throttle counters it")
+    if pol.uses_tof:
+        print("  raise/lower the drone   -> h_err = target - measured height; below target (+) "
+              "should raise throttle")
+    if pol.uses_flow:
+        print("  SLIDE it over texture   -> vx/vy (m/s, body x fwd / y LEFT); sliding forward "
+              "should push pitch_us < 1500 (nose-up brake)")
+        print("  hold it over a BARE desk-> squal collapses, vx/vy fade to 0 within "
+              "grace+fade; in flight that state aborts after 1 s")
     print("Ctrl+C to stop. Nothing is streamed to the FC in this mode.\n")
+    if pol.uses_flow and args.rad_per_count <= 0.0:
+        sys.exit("this policy observes optical flow: pass --rad-per-count from the flow_probe "
+                 "slide test (firmware/xiao_bridge/README.md). check would otherwise display a "
+                 "channel scaled by a number nobody measured.")
     with open_link(args) as fc:
         tel = Telemetry(fc)
         hist: deque = deque(maxlen=pol.obs_stack)
+        v_flow = (0.0, 0.0)
         # Same vz estimator the fly loop runs (full projection, leak, clamp, tilt-freeze) so a
         # v2 policy's 6th channel — and its thrust response — can be sanity-checked by hand.
         az_cal: list[int] = []
@@ -201,7 +236,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         try:
             while True:
                 now = time.monotonic()
-                tel.poll(now, want_analog=True)
+                tel.poll(now, want_analog=True, want_tof=pol.uses_tof, want_flow=pol.uses_flow)
                 if tel.obs_age(now) < 0.5:
                     o = tel.obs()
                     acc = tel.imu["acc_raw"]
@@ -224,13 +259,37 @@ def cmd_check(args: argparse.Namespace) -> int:
                         else:
                             vz *= math.exp(-dt / VZ_LEAK_TAU)
                     t_last = now
-                    frame = o + [vz] if pol.uses_vz else o
+                    # Build the SAME frame the flight engine would. This used to be
+                    # `o + [vz] if uses_vz else o`, which silently fed a 6-dim ToF policy a 5-dim
+                    # frame (Policy.__call__ zips over len(obs), so the last column of every
+                    # weight row was just dropped and nothing failed) — the props-off check is
+                    # where a sign gets verified, so it has to be the real obs.
+                    h_est = tel.height_m(now)
+                    if h_est is not None:
+                        h_est *= math.cos(o[0]) * math.cos(o[1])   # flat-floor tilt correction
+                    extra: list[float] = []
+                    if pol.uses_tof:
+                        extra = [args.target_height - h_est if h_est is not None else 0.0]
+                        if pol.uses_flow:
+                            d = tel.flow_delta(now)   # the single consumer on this path
+                            if d is not None and h_est is not None and d[3] >= args.flow_squal_min:
+                                v_flow = flow_to_velocity(d[0], d[1], d[2], args.rad_per_count,
+                                                          h_est, o[2], o[3])
+                            extra = extra + [v_flow[0], v_flow[1]]
+                    elif pol.uses_vz:
+                        extra = [vz]
+                    frame = o + extra
                     us = action_to_us(pol(stack_frames(hist, frame, pol.obs_stack)),
                                       args.hover_us, args.min_us, args.max_us, args.trim_thrust)
                     print(f"\r roll {math.degrees(o[0]):+6.1f}  pitch(sim) {math.degrees(o[1]):+6.1f} deg"
                           f" | gyro {math.degrees(o[2]):+7.1f} {math.degrees(o[3]):+7.1f}"
                           f" {math.degrees(o[4]):+7.1f} deg/s"
                           + (f" | vz_est {vz:+5.2f} m/s" if pol.uses_vz else "")
+                          + (f" | h {h_est:.3f}m err {extra[0]:+.3f}" if pol.uses_tof and h_est
+                             is not None else (" | h --" if pol.uses_tof else ""))
+                          + (f" | v {v_flow[0]:+5.2f} {v_flow[1]:+5.2f} m/s "
+                             f"squal {tel.flow['squal'] if tel.flow else 0:3d}"
+                             if pol.uses_flow else "")
                           + f" | cmd RPTY(us) {us}"
                           f" | vbat {tel.vbat or 0:.2f}V   ", end="")
                 time.sleep(0.1)
@@ -302,6 +361,8 @@ def cmd_fly(args: argparse.Namespace) -> int:
         min_us=args.min_us, max_us=args.max_us, target_height_m=args.target_height,
         min_thrust_frac=args.min_thrust_frac, tof_blind_grace_s=args.tof_blind_grace,
         tof_blind_fade_s=args.tof_blind_fade, log_flow=args.log_flow,
+        rad_per_count=args.rad_per_count, flow_squal_min=args.flow_squal_min,
+        flow_blind_grace_s=args.flow_blind_grace, flow_blind_fade_s=args.flow_blind_fade,
         flip_at_s=args.flip_at, acro_axis=args.axis, acro_n_rotations=args.n_rotations,
     )
     period = 1.0 / args.hz
@@ -379,6 +440,22 @@ def main() -> int:
     ap.add_argument("--trim-thrust", type=float, default=0.0, help="additive act[0] trim (bench-calibrated)")
     ap.add_argument("--min-us", type=int, default=1000)
     ap.add_argument("--max-us", type=int, default=1600, help="hard throttle ceiling for early flights")
+    # Shared by `check` and `fly`: both build the real obs, so both need the channel constants.
+    ap.add_argument("--target-height", type=float, default=1.0, metavar="M",
+                    help="hover_tof/hover_flow policies: height to hold (m); the obs channel is "
+                         "target - measured (tilt-corrected bridge ToF, last-valid-held). "
+                         "Keep target + overshoot inside tof_max_m (1.3): the climb has "
+                         "overshot by ~0.37 m, so 1.0 puts the peak OUTSIDE the sensor band. "
+                         "Desk-Flow flies 0.15")
+    ap.add_argument("--rad-per-count", type=float, default=0.0, metavar="RAD",
+                    help="hover_flow policies: the PMW3901 scale, radians per count, from the "
+                         "flow_probe SLIDE TEST (firmware/xiao_bridge/README.md). No default: "
+                         "unmeasured, it is the gain of the only loop closing horizontal drift, "
+                         "so a flow policy refuses to fly without it")
+    ap.add_argument("--flow-squal-min", type=int, default=20, metavar="N",
+                    help="surface-quality floor below which flow counts are treated as blind. A "
+                         "bare desk returns squal near 0 with frames still arriving on time, "
+                         "which no freshness check can see")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("selftest")
     sub.add_parser("check")
@@ -402,11 +479,6 @@ def main() -> int:
                      help="hand-launch flow: after the override switch, idle countdown, throttle "
                           "ramps WHILE HELD, release only at GO")
     fly.add_argument("--hold-seconds", type=float, default=3.0)
-    fly.add_argument("--target-height", type=float, default=1.0, metavar="M",
-                     help="hover_tof policies: height to hold (m); the obs channel is "
-                          "target - measured (tilt-corrected bridge ToF, last-valid-held). "
-                          "Keep target + overshoot inside tof_max_m (1.3): the climb has "
-                          "overshot by ~0.37 m, so 1.0 puts the peak OUTSIDE the sensor band")
     fly.add_argument("--min-thrust-frac", type=float, default=0.25, metavar="F",
                      help="free-flight throttle floor as a fraction of learned hover thrust "
                           "(0 = disabled/legacy). Stops act[0]=-1 meaning motors-off, which is "
@@ -418,6 +490,13 @@ def main() -> int:
                      help="after the grace window, fade the held error to 0 (= hover) over this "
                           "window rather than holding a stale error open-loop. 0 = drop to 0 at "
                           "once; a huge --tof-blind-grace restores the legacy hold-forever")
+    fly.add_argument("--flow-blind-grace", type=float, default=0.20, metavar="S",
+                     help="hold the last valid flow velocity verbatim this long once the sensor "
+                          "stops returning usable counts (mirrors hover_flow's own guard)")
+    fly.add_argument("--flow-blind-fade", type=float, default=0.30, metavar="S",
+                     help="after the grace window, fade the held velocity to 0 over this window. "
+                          "Zero is the HONEST neutral for a velocity ('I don't know that I'm "
+                          "moving'); the 1 s flow_lost abort still backstops a dead sensor")
     fly.add_argument("--log-flow", action="store_true",
                      help="poll the bridge PMW3901 and log raw counts to the flight CSV "
                           "(flow_dx/flow_dy/flow_dt_s/flow_squal). PASSIVE: the flow never enters "

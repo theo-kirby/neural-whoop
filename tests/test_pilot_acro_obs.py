@@ -90,8 +90,10 @@ def test_acro_family_guard_accepts_7_and_8_and_rejects_the_rest():
 
     from neural_whoop.pilot.policy import check_policy_family_acro
 
-    def _pol(base: int, stack: int = 1):
-        return types.SimpleNamespace(base_obs_dim=base, obs_stack=stack)
+    def _pol(base: int, stack: int = 1, task: str = "acro_flip_v2"):
+        return types.SimpleNamespace(base_obs_dim=base, obs_stack=stack, task=task,
+                                     uses_tof=task in ("hover_tof", "hover_flow"),
+                                     uses_flow=task == "hover_flow")
 
     check_policy_family_acro(_pol(7))        # v1
     check_policy_family_acro(_pol(8))        # v2
@@ -100,3 +102,8 @@ def test_acro_family_guard_accepts_7_and_8_and_rejects_the_rest():
             check_policy_family_acro(_pol(bad))
     with pytest.raises(SystemExit):          # the acro family is single-frame
         check_policy_family_acro(_pol(8, stack=2))
+    # ...and the dim alone stopped being sufficient when a HOVER family reached 8 channels:
+    # hover_flow is base-8 and would otherwise sail through, then be flown through the flip
+    # window with gravity_body where it expects roll/pitch. Task first, dim second.
+    with pytest.raises(SystemExit, match="HOVER family"):
+        check_policy_family_acro(_pol(8, task="hover_flow"))

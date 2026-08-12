@@ -580,11 +580,53 @@ the open-loop *horizontal* axis every hover result above carries as a caveat. RO
   and nothing observes the drift). Blind handling is grace-then-fade to zero, mirroring the
   deployed `--tof-blind-grace/--tof-blind-fade` guard, rather than an indefinite hold.
 - **Open debt — the calibration flight has not happened.** `flow_rate_hz`,
-  `flow_dropout_prob`, `flow_scale_frac` and `flow_gyro_residual` are placeholders. The intended
+  `flow_dropout_prob`, `flow_blackout_prob`, `flow_scale_frac` and `flow_gyro_residual` are
+  placeholders. The intended
   first step is **passive**: fly a shipped `hover_tof` policy with flow logged but NOT in the obs,
-  and let the logs set those four numbers — the same shape as the 2026-07-30 ToF
+  and let the logs set those numbers — the same shape as the 2026-07-30 ToF
   characterization, which found the nominal rate optimistic by 1.6×. No `hover_flow` policy has
-  been trained to a result or flown.
+  been flown.
+
+#### The obs-8 deploy path (2026-08-12)
+
+`hover_flow` policies now fly. The pieces, and the two hazards that shaped them:
+
+- **The dim is no longer a family key.** `base_obs_dim == 8` is *both* the `hover_flow` obs and the
+  acro-flip obs-8 one. Every gate — `check_policy_family`, `check_policy_family_acro`,
+  `export_json.py`'s probe naming, `sim_vs_real.py` — branches on `meta["task"]` and only then on
+  the dim, in both directions: an acro file is refused as a hover policy and a hover file is
+  refused as an acro one. `uses_tof` is **true** for `hover_flow` (channel 5 is still the ToF
+  height error) and `uses_vz` explicitly excludes it, or an 8-dim flow file would fall through the
+  `>= 6` fallback and be fed a climb-rate estimate.
+- **`Telemetry.flow_delta()` consumes its interval**, so there is exactly ONE caller per tick. The
+  logging path used to own it; the obs path **moved** it (into
+  `FlightController._advance_flow`) rather than adding a second — two differencers would each see
+  half the motion. Pinned by `tests/test_pilot_flow.py::test_flow_delta_is_consumed_exactly_once_per_tick`.
+- **Order matters:** flow is computed *before* the ToF advance, because `tasks/hover_flow.py`
+  advances the flow estimator first and reads the pre-refresh `h_meas`. Reading the fresh height
+  would scale the velocity by one the deploy path could not have had yet.
+- **The conversion lives in one function**, `pilot.policy.flow_to_velocity`, shared by the flight
+  engine and the props-off `check` display: `v = (counts/dt − ω) · rad_per_count · h`, with body-x
+  pairing to pitch rate `q` and body-y to `−p`. **The gyro term is not optional** — a pitching
+  drone sweeps the ground past the lens with no translation at all, and the sim models only the
+  *residual* of this compensation (`flow_gyro_residual`), i.e. it presumes it happens host-side.
+- **`--rad-per-count` has no default and a flow policy refuses to fly without it.** Unmeasured, it
+  is the gain of the only loop closing horizontal drift, and a zero would feed a permanently-zero
+  channel — the faded state the knockout probe measured as *worse* than never having it.
+- **Two aborts, and one of them starts late.** `flow_lost` (>1 s without a usable reading) mirrors
+  `tof_lost` and subsumes it by construction, since a flow reading needs a valid height — the ToF
+  check simply runs first so a dead rangefinder is named as the cause rather than as its symptom.
+  But the flow abort's clock starts at **free flight**, not at the override edge: the countdown,
+  the liftoff seek and the climb-out all happen under the sensor's 80 mm working range, so a
+  `t_start`-gated abort killed every take-off. Found on the fake bridge, which now models the
+  blind floor (and a flow-consistent count stream) honestly rather than emitting a fixed drift.
+- **Setup gates the sensor, not the surface.** The drone sits ~3 cm up during setup — below the
+  working range — where a collapsed `squal` is expected rather than diagnostic. A missing sensor
+  refuses; a poor surface warns and is caught by `flow_lost` a second into free flight.
+- **The CSV grew `vx`/`vy` (33 columns).** They are the channels *as the policy saw them* —
+  gyro-compensated, height-scaled, post-fade — the same discipline `h_err` has. The four raw
+  `flow_*` columns are pre-fusion and carry neither the height, the gyro, nor the fade state, so
+  without these two `sim_vs_real.py` cannot replay a flow flight at all.
 
 #### The 1.0 m setpoint was the wrong side of the sensor ceiling (2026-07-31)
 
