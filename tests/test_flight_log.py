@@ -127,7 +127,14 @@ def test_load_flight_accepts_legacy_schemas(tmp_path, width, label):
     log = load_flight(p)
     assert log.n == 4, label
     for missing in LOG_COLUMNS[width:]:
+        if missing == "phase":
+            # `phase` is TEXT, so it is not in the numeric arrays at all. On a legacy log it is
+            # absent entirely, and `log.phase` is the empty tuple — which is the signal every
+            # consumer must check before trusting it (sim_vs_real falls back to grading all rows).
+            assert missing not in log.data
+            continue
         assert np.isnan(log.data[missing]).all(), f"{missing} should be NaN on a {width}-col log"
+    assert log.phase == (), "a legacy log has no phase information"
     if width >= 25:
         assert (log.tof_m == 0.5).all()
     else:

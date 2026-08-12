@@ -118,6 +118,13 @@ LOG_COLUMNS = [
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
     "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
     "vx", "vy",
+    # The controller phase this row was emitted in (Phase enum value: waiting/countdown/
+    # seek/rise/hover/flip/land/released/aborted). Added 2026-08-12 because WITHOUT it a
+    # log cannot say who commanded the throttle on a given row, and sim_vs_real graded the
+    # land-out ramp — where the pilot overrides the policy by design — as policy
+    # divergence, reporting DIVERGENT on a byte-exact deploy path. Any consumer asking
+    # "did the policy fly this?" must filter on it rather than infer from throttle.
+    "phase",
 ]
 
 

@@ -1,6 +1,7 @@
 """Pure flight-log load + metrics — the characterization core, unit-testable without the sim.
 
-A ``scripts/pilot.py`` flight writes a 33-column CSV (:data:`LOG_COLUMNS`; the 31-column raw-flow,
+A ``scripts/pilot.py`` flight writes a 34-column CSV (:data:`LOG_COLUMNS`; the 33-column
+phase-less, 31-column raw-flow,
 27-column pre-flow, 26-, 25-column ToF-era and 24-column pre-ToF schemas still load) — one row per control
 step of a real tiny-whoop flight. This module parses that CSV into a :class:`FlightLog` (per-column
 numpy arrays, empty cells -> NaN) and derives :func:`flight_metrics`: the phase segmentation, hover
@@ -60,6 +61,13 @@ LOG_COLUMNS = [
     # so these are what makes an offline replay of a flow flight possible at all. Same relationship
     # h_err has to tof_m. Empty on ticks where no flow policy ran.
     "vx", "vy",
+    # The controller phase this row was emitted in (Phase enum value: waiting/countdown/
+    # seek/rise/hover/flip/land/released/aborted). Added 2026-08-12 because WITHOUT it a
+    # log cannot say who commanded the throttle on a given row, and sim_vs_real graded the
+    # land-out ramp — where the pilot overrides the policy by design — as policy
+    # divergence, reporting DIVERGENT on a byte-exact deploy path. Any consumer asking
+    # "did the policy fly this?" must filter on it rather than infer from throttle.
+    "phase",
 ]
 
 #: Older schemas :func:`load_flight` still accepts (missing tails pad with NaN): 31 columns
@@ -70,7 +78,11 @@ LOG_COLUMNS = [
 #: ``(LOG_COLUMNS[:-1], [:-2], [:-3])``, which silently redefines every legacy schema the moment a
 #: column is appended — adding the four flow columns would have made "legacy" mean 30/29/28 and
 #: broken loading for all 27-column flights, i.e. every real flight the project has ever recorded.
-_LEGACY_WIDTHS = (31, 27, 26, 25, 24)
+#: Columns that are TEXT, not floats — kept out of :class:`FlightLog`'s numeric arrays
+#: and exposed as :attr:`FlightLog.phase` instead.
+_TEXT_COLUMNS = frozenset({"phase"})
+
+_LEGACY_WIDTHS = (33, 31, 27, 26, 25, 24)
 _LEGACY_HEADERS = tuple(LOG_COLUMNS[:w] for w in _LEGACY_WIDTHS)
 
 #: The pilot's vertical-velocity estimate clamp (``scripts/pilot.py`` ``VZ_CLAMP``). A frame whose
@@ -99,6 +111,11 @@ class FlightLog:
 
     path: str
     data: dict[str, np.ndarray]
+    #: Per-row controller phase (``Phase`` enum values). Empty tuple for pre-2026-08-12 logs, which
+    #: have no ``phase`` column — check ``if log.phase`` before relying on it. It is the only way to
+    #: tell which rows the POLICY commanded (``hover``/``flip``) from the ones the pilot's own
+    #: profile did (``seek``/``rise``/``land``); throttle alone cannot distinguish them.
+    phase: tuple[str, ...] = ()
 
     @property
     def n(self) -> int:
@@ -192,15 +209,29 @@ def load_flight(path: str | Path) -> FlightLog:
                 f"{path}: unexpected flight-log schema.\n  expected {LOG_COLUMNS}\n  got      {header}"
             )
         cols: list[list[float]] = [[] for _ in LOG_COLUMNS]
+        phases: list[str] = []
         for row in reader:
             if not row:
                 continue
             # Pad short rows (defensive) so a truncated final line from a killed flight still loads.
             for i in range(len(LOG_COLUMNS)):
                 cell = row[i].strip() if i < len(row) else ""
+                if LOG_COLUMNS[i] in _TEXT_COLUMNS:
+                    # `phase` is the one non-numeric column (a Phase enum value). It is kept out of
+                    # the float array entirely rather than coerced — a NaN column would silently
+                    # discard exactly the information the column was added to carry. On a legacy
+                    # header the column does not exist, and `phase` must stay EMPTY rather than
+                    # become a tuple of "" (which reads as "phase information present, all blank"
+                    # to a consumer checking `if log.phase`).
+                    if i < len(header):
+                        phases.append(cell)
+                    cols[i].append(float("nan"))
+                    continue
                 cols[i].append(float(cell) if cell not in ("", "nan", "NaN") else float("nan"))
-    data = {name: np.asarray(vals, dtype=np.float64) for name, vals in zip(LOG_COLUMNS, cols)}
-    return FlightLog(path=str(path), data=data)
+    data = {name: np.asarray(vals, dtype=np.float64)
+            for name, vals in zip(LOG_COLUMNS, cols) if name not in _TEXT_COLUMNS}
+    return FlightLog(path=str(path), data=data,
+                     phase=tuple(phases) if phases else ())
 
 
 def _airborne_mask(log: FlightLog) -> np.ndarray:

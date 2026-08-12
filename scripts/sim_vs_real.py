@@ -65,7 +65,13 @@ def main() -> int:
         sys.exit(f"{args.flight}: no data rows")
     idle_us = min(_f(r["us_thr"]) for r in rows if r.get("us_thr", "").strip())
 
+    # Phases in which the POLICY commands the throttle. Everything else is the pilot's own
+    # profile (seek/rise/land) or not flying at all, and must not be graded as policy divergence.
+    _POLICY_PHASES = {"hover", "flip"}
+    _phase_col = "phase" in rows[0]
+
     hist: deque = deque(maxlen=pol.obs_stack)   # replay the pilot's in-flight stacking, in order
+    n_graded = 0
     abs_err = [[] for _ in _ACT_COLS]
     pred_thr_air: list[float] = []
     log_thr_air: list[float] = []
@@ -90,6 +96,17 @@ def main() -> int:
         obs = pilot.stack_frames(hist, base, pol.obs_stack)
         pred = pol(obs)
         logged = [_f(r[c]) for c in _ACT_COLS]
+        # Grade ONLY the rows the policy actually commanded. The pilot owns the throttle in every
+        # phase except HOVER/FLIP — SEEK ramps it to find liftoff, RISE holds the learned anchor,
+        # LAND ramps it down — so diffing those rows against the policy's prediction measures the
+        # pilot's takeoff/landing profile, not the deploy path's faithfulness. It reported
+        # DIVERGENT (worst |err| 0.71) on a flight whose rate channels matched to 2.5e-05 because
+        # the final 74 rows of 1063 were the ramp-down. The stack is still ADVANCED on every row
+        # (the policy's obs history includes the climb-out), only the comparison is filtered.
+        # Legacy logs have no phase column: fall back to grading everything, and say so.
+        if _phase_col and r.get("phase", "").strip() not in _POLICY_PHASES:
+            continue
+        n_graded += 1
         for k in range(pol.act_dim):
             abs_err[k].append(abs(pred[k] - logged[k]))
         airborne = _f(r["us_thr"]) > idle_us + args.airborne_us_over_idle
@@ -101,6 +118,16 @@ def main() -> int:
 
     print(f"sim-vs-real · {Path(args.flight).name} · {len(rows)} frames "
           f"(policy base {pol.base_obs_dim} × {pol.obs_stack} stack, act {pol.act_dim})")
+    if _phase_col:
+        print(f"  grading {n_graded} of {len(rows)} rows — the policy-commanded phases "
+              f"({'/'.join(sorted(_POLICY_PHASES))}); seek/rise/land are the PILOT's own throttle "
+              f"profile and are not the policy's to reproduce.")
+    else:
+        print(f"  no `phase` column (pre-2026-08-12 log): grading ALL {n_graded} rows, which "
+              f"INCLUDES the pilot-commanded takeoff ramp and land-out — expect a_thr to diverge "
+              f"there for reasons that are not the deploy path's.")
+    if not abs_err[0]:
+        sys.exit("  no policy-commanded rows in this log: nothing to compare.")
     print(f"  per-channel action MAE (predicted vs logged):")
     worst = 0.0
     for k in range(pol.act_dim):

@@ -929,6 +929,7 @@ class FlightController:
                       # into the record and make the log unable to answer its own question.
                       # Empty on ticks with no new sample — never 0, which reads as "not moving".
                       *(f"{v}" for v in (flow if flow is not None else ("", "", "", ""))),
+                      # PHASE goes last, after vx/vy. See the comment below for what it fixes.
                       # vx/vy: the velocity channels the POLICY OBSERVED — gyro-compensated,
                       # height-scaled and post-fade. The four raw columns above are PRE-FUSION and
                       # cannot reconstruct these (they carry neither h_est, nor the gyro, nor the
@@ -936,7 +937,15 @@ class FlightController:
                       # at all. Same discipline as h_err, and for the same reason. Blank on ticks
                       # where no flow policy ran.
                       f"{self.vx_obs:.4f}" if self.vx_obs is not None else "",
-                      f"{self.vy_obs:.4f}" if self.vy_obs is not None else ""])
+                      f"{self.vy_obs:.4f}" if self.vy_obs is not None else "",
+                      # phase: WHO COMMANDED THIS ROW. The policy owns the throttle only in HOVER
+                      # (and FLIP); SEEK ramps it, RISE holds the learned anchor, LAND ramps it
+                      # down. Without this column an offline replay cannot tell the difference and
+                      # grades the pilot's own land-out against the policy's prediction —
+                      # sim_vs_real reported DIVERGENT (worst |err| 0.71) on a deploy path whose
+                      # three rate channels matched to 2.5e-05, purely because the last 74 rows of
+                      # a 1063-row flight were the ramp-down. Cheap to log, impossible to recover.
+                      self._derive_phase().value])
         return self._make_frame()
 
     # ------------------------------------------------------------------ helpers

@@ -66,6 +66,13 @@ LOG_COLUMNS = [
     "rpm_rms", "us_corr", "tof_m", "h_err", "bridge_loop_max_ms",
     "flow_dx", "flow_dy", "flow_dt_s", "flow_squal",
     "vx", "vy",
+    # The controller phase this row was emitted in (Phase enum value: waiting/countdown/
+    # seek/rise/hover/flip/land/released/aborted). Added 2026-08-12 because WITHOUT it a
+    # log cannot say who commanded the throttle on a given row, and sim_vs_real graded the
+    # land-out ramp — where the pilot overrides the policy by design — as policy
+    # divergence, reporting DIVERGENT on a byte-exact deploy path. Any consumer asking
+    # "did the policy fly this?" must filter on it rather than infer from throttle.
+    "phase",
 ]
 
 #: Fields a browser ``params`` message may override on the WAITING controller.
@@ -403,6 +410,25 @@ class FlightManager:
 #: unit — a rehearsal has to pass this same value as ``--rad-per-count`` for the loop to close,
 #: and the real one comes from the ``flow_probe`` slide test.
 FAKE_RAD_PER_COUNT = 0.023891
+# The one throttle at which the fake airframe's weight is balanced. THREE things have to agree on
+# it or the rehearsal is not a rehearsal, and before 2026-08-12 none of them did:
+#
+#   1. the accelerometer model (MSP_RAW_IMU), which is what the liftoff seek learns the hover
+#      anchor from;
+#   2. the height integrator, which is what the ToF then reports back;
+#   3. `FlightParams.hover_us` (1410), which is the calibration the pilot's own thrust mapping
+#      assumes when it turns the policy's normalized thrust into microseconds.
+#
+# It used to be 1300 in (1) and a hard-coded 1450 in (2), so a hover_flow rehearsal ABORTED on
+# flow_lost: the drone never left 0.030 m, never reached the PMW3901's 0.08 m working range, and
+# the flight died 1 s into free flight. Fixing (1)=(2)=1300 flew, but 0.60 m against a 0.20 m
+# target — because (3) still disagreed, and the policy can only hold station where its own output
+# crosses the fake's hover point. Pinning all three at hover_us is what makes the fake settle AT
+# the setpoint, and it also makes the fake reproduce the sim's altitude sink for the right reason:
+# the policy commands ~1365 us with h_err at zero, 45 us under hover, which IS the 2.6 cm trim.
+#
+# Crude physics is fine in a rehearsal harness. INCONSISTENT physics silently invalidates it.
+FAKE_HOVER_US = 1410  # == FlightParams.hover_us (pilot/controller.py)
 
 
 def _truthy(v) -> bool:
@@ -465,7 +491,16 @@ class FakeFlightBridge(_MspEndpoint):
             yaw = self._wrap180(8.0 * math.sin(self._i * 0.013))
             self._resp(cmd, struct.pack("<hhh", int(roll * 10), int(pitch * 10), int(yaw)))
         elif cmd == MSP_RAW_IMU:
-            az = 2048 + max(0, (self._thr - 1300)) * 3   # acc-z rises with throttle -> liftoff
+            # Acc-z rises above the hover point. The GAIN is not free: the pilot's liftoff seek
+            # detects breakaway when its integrated vz passes LIFT_VZ and then subtracts a fixed
+            # LIFT_LAG_US to recover the true hover throttle, so the fake only learns its own hover
+            # point back if its acc response builds vz over about that much of the ramp. Detection
+            # lag goes as 1/sqrt(gain) (vz ~ gain*ramp*t^2/2), and gain 3 detected ~97 us late
+            # against a 60 us correction — a 37 us standing excess, which is a permanent climb. The
+            # policy then holds station wherever its output crosses the fake's hover instead of at
+            # the setpoint: the rehearsal flew 0.60 m when told 0.20 m. gain 8 puts the lag on the
+            # correction and the anchor lands on FAKE_HOVER_US.
+            az = 2048 + max(0, (self._thr - FAKE_HOVER_US)) * 8
             gx, gy, _gz = self._gyro                       # echoed commanded rate -> the flip spins
             self._resp(cmd, struct.pack("<9h", 0, 0, int(az), int(gx), int(gy), 0, 0, 0, 0))
         elif cmd == MSP_ANALOG:
@@ -530,7 +565,7 @@ class FakeFlightBridge(_MspEndpoint):
                 self._roll_rate_dps, self._pitch_rate_dps = roll_dps, pitch_dps
             # Height: climb/sink proportional to throttle above/below a nominal hover point,
             # integrated at the same fixed 50 Hz tick. Crude but monotone with the commands.
-            vz = max(-1.5, min(2.0, (self._thr - 1450) / 120.0))
+            vz = max(-1.5, min(2.0, (self._thr - FAKE_HOVER_US) / 120.0))
             self._z = max(0.0, min(3.0, self._z + vz * 0.02))
             # Horizontal: tilt accelerates, drag opposes. tau ~ 0.32 s is the real airframe's
             # (acc = -(D_xy/m)*v, D_xy ~ 0.10 on m ~ 0.032). Sign convention is the contract's —
