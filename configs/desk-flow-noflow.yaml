@@ -10,12 +10,12 @@
 # attributable. It is gate 6's other half.
 #
 # It is also the honest falsifier. If the flow arm does NOT beat this one, the channel did not
-# close the loop at 0.15 m and no amount of hardware calibration will change that — a result worth
+# close the loop at 0.20 m and no amount of hardware calibration will change that — a result worth
 # having before a single flight, which is why both arms train before the calibration flight rather
 # than after it.
 #
 # Everything below is desk-flow.yaml verbatim minus the PMW3901 block and the two flow obs-noise
-# entries. Read that file for the reasoning behind the 0.15 m setpoint, the arena, the wind DR and
+# entries. Read that file for the reasoning behind the 0.20 m setpoint, the arena, the wind DR and
 # the vxy_penalty 0 decision.
 
 run:
@@ -24,13 +24,13 @@ run:
 task:
   name: hover_tof
   episode_len: 1500
-  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.15 m ---
+  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.20 m ---
   # pos_sigma tracks the setpoint (Desk-Hover: 0.10 at 0.10 m), which is what keeps a vertical
   # bias costing a comparable FRACTION of the per-step reward at either scale. At pos_sigma 0.6
   # (the 1 m ladder's) a 5 cm bias costs 0.017/step against ~2.6/step — 0.65% — while a crash
   # costs ~1960 return, so the policy would learn to hover high and every reward number would
   # still look fine.
-  pos_sigma: 0.15
+  pos_sigma: 0.20
   pos_scale: 1.0
   dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
                                # Desk-Hover's (+-0.60 m), so this is Desk-Hover's value
@@ -41,22 +41,24 @@ task:
   alive_bonus: 0.1
   smoothness_penalty: 0.004
   crash_penalty: 10.0
-  hold_radius: 0.15            # == pos_sigma, the convention at every other scale
+  hold_radius: 0.20            # == pos_sigma, the convention at every other scale
   # --- the desk ---
   # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
   # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
   # box asymmetric about it. And the setpoint's xy is invisible to this obs anyway (the policy
   # sees velocity, not position), so sampling it is pure unlearnable noise.
   arena_radius: 0.0
-  z_min: 0.12
-  z_max: 0.18                  # narrow desk band around 0.15; the purehold twin pins 0.15
+  z_min: 0.17
+  z_max: 0.23                  # narrow desk band around 0.20; the purehold twin pins 0.20
   hold_fraction: 0.5
-  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+  spawn_offset: 0.20           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
                                # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
                                # ~0.20-0.25 m climbing at ~0.5 m/s. Those are MODULE CONSTANTS
                                # with no FlightParams override, so there is no per-flight knob for
                                # a sub-0.3 m target (docs/SIM2REAL.md) — the training distribution
-                               # is the only place that state gets covered.
+                               # is the only place that state gets covered. At THIS setpoint the
+                               # handover lands on target rather than above it, but the spawn
+                               # spread still has to cover the whole climb-out either way.
   spawn_vel: 0.6               # ~the handover climb rate. NOT flow-hover's 0.8: that was sized
                                # for a +-1.2 m box, and at +-0.6 m a 0.8 m/s draw crosses the
                                # whole arena in 0.75 s, which is unrecoverable by construction
@@ -67,8 +69,8 @@ task:
                                # above the whole band — and silently delete the pure-hold cohort
   bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
   bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
-  bound_z_max: 0.60
-  band_ceiling_m: 0.45         # METRIC ONLY (no reward, no termination): 3x the setpoint, as
+  bound_z_max: 0.80
+  band_ceiling_m: 0.60         # METRIC ONLY (no reward, no termination): 3x the setpoint, as
                                # Desk-Hover's 0.30 was at 0.10 m
   vxy_penalty: 0.0             # ARM 1, and deliberately so. On Desk-Hover this was the only lever
                                # PPO had against drift it could not see, and soft-breeze-8148
@@ -108,15 +110,20 @@ dr:
   rate_gain_frac: 0.15
   thrust_scale_frac: 0.05
   obs_noise_std: 0.0           # superseded by the per-channel list below
-  # 6 channels — Desk-Hover's MEASURED values, unchanged: h_err 0.010 (a 2.4 mm static sigma and
-  # an airborne trace monotone in ~10 mm steps — i.e. QUANTIZATION, which no Gaussian fixes; there
-  # is no quantization seam in randomization.py and that gap is real). Desk-Flow's two extra flow
-  # entries are exactly what this arm does not have.
+  # 8 channels. The first six are Desk-Hover's MEASURED values, unchanged: h_err 0.010 (a 2.4 mm
+  # static sigma and an airborne trace monotone in ~10 mm steps — i.e. QUANTIZATION, which no
+  # Gaussian fixes; there is no quantization seam in randomization.py and that gap is real).
+  # The two flow entries are flow-hover's 0.03 at 0.40 m rescaled by HEIGHT, since one count of
+  # jitter is worth counts/dt * rad_per_count * h: 0.03 * 0.20/0.40 = 0.015. Arithmetic on a
+  # placeholder is still a placeholder.
   #                        [roll,  pitch, p,     q,    r,    h_err]
   obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010]
   obs_noise_amp_range:    [0.5, 2.0]
   # The h_err BIAS stays 0.03: the +23.9 mm static ToF offset is real and uncalibrated, and at a
-  # 0.15 m setpoint it is still a first-order effect (16%).
+  # 0.20 m setpoint it is still a first-order effect (12%). Flow BIAS is deliberately 0 — a blind
+  # PMW3901 reports ZERO, not an offset (that is the fade path), and the real calibration error
+  # for this sensor is MULTIPLICATIVE, which an additive DR channel cannot express: it is drawn
+  # in-task as flow_scale_frac.
   obs_bias_channels:      [0.0,   0.0,   0.05,  0.05, 0.05, 0.03 ]
   action_latency_steps: 5
   # Desk-scale impulses: a 2.5 m/s shove crosses the whole +-0.6 m box in 0.24 s and is

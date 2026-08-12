@@ -2,7 +2,7 @@
 #
 # The M1-live twin restricted to the pure-hold cohort (hold_fraction 1.0: every drone spawns ON the
 # setpoint, level, at rest) with the setpoint band collapsed onto the single deploy altitude
-# (z_min == z_max == 0.15). The battery's first two gates — clean drift and mean height — are read
+# (z_min == z_max == 0.20). The battery's first two gates — clean drift and mean height — are read
 # from here, because the standard eval blends station-keeping with fly-in transients and a sampled
 # band blurs "hovered high" into the band width.
 #
@@ -26,13 +26,13 @@ run:
 task:
   name: hover_flow
   episode_len: 1500
-  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.15 m ---
+  # --- reward, on Desk-Hover's desk-scale rescale, re-aimed at 0.20 m ---
   # pos_sigma tracks the setpoint (Desk-Hover: 0.10 at 0.10 m), which is what keeps a vertical
   # bias costing a comparable FRACTION of the per-step reward at either scale. At pos_sigma 0.6
   # (the 1 m ladder's) a 5 cm bias costs 0.017/step against ~2.6/step — 0.65% — while a crash
   # costs ~1960 return, so the policy would learn to hover high and every reward number would
   # still look fine.
-  pos_sigma: 0.15
+  pos_sigma: 0.20
   pos_scale: 1.0
   dist_penalty: 2.0            # per-metre gain scales inversely with the arena; the arena is
                                # Desk-Hover's (+-0.60 m), so this is Desk-Hover's value
@@ -43,22 +43,24 @@ task:
   alive_bonus: 0.1
   smoothness_penalty: 0.004
   crash_penalty: 10.0
-  hold_radius: 0.15            # == pos_sigma, the convention at every other scale
+  hold_radius: 0.20            # == pos_sigma, the convention at every other scale
   # --- the desk ---
   # arena_radius 0 pins the setpoint at the desk centre. Also a CORRECTNESS fix at this scale:
   # is_crashed measures |x|,|y| from the ORIGIN (reward.py), so a sampled setpoint makes the crash
   # box asymmetric about it. And the setpoint's xy is invisible to this obs anyway (the policy
   # sees velocity, not position), so sampling it is pure unlearnable noise.
   arena_radius: 0.0
-  z_min: 0.15                  # <-- pinned: the single deploy altitude
-  z_max: 0.15                  # <-- pinned (training band: 0.12-0.18)
+  z_min: 0.20                  # <-- pinned: the single deploy altitude
+  z_max: 0.20                  # <-- pinned (training band: 0.17-0.23)
   hold_fraction: 1.0           # <-- pure station-keeping cohort only
-  spawn_offset: 0.15           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
+  spawn_offset: 0.20           # covers the pilot's takeoff handover: RISE_THRUST 1.06 for RISE_S
                                # 0.5 from LIFT_VZ 0.20 (pilot/config.py) hands to the policy at
                                # ~0.20-0.25 m climbing at ~0.5 m/s. Those are MODULE CONSTANTS
                                # with no FlightParams override, so there is no per-flight knob for
                                # a sub-0.3 m target (docs/SIM2REAL.md) — the training distribution
-                               # is the only place that state gets covered.
+                               # is the only place that state gets covered. At THIS setpoint the
+                               # handover lands on target rather than above it, but the spawn
+                               # spread still has to cover the whole climb-out either way.
   spawn_vel: 0.6               # ~the handover climb rate. NOT flow-hover's 0.8: that was sized
                                # for a +-1.2 m box, and at +-0.6 m a 0.8 m/s draw crosses the
                                # whole arena in 0.75 s, which is unrecoverable by construction
@@ -69,8 +71,8 @@ task:
                                # above the whole band — and silently delete the pure-hold cohort
   bound_xy: 0.60               # the desk: +/-0.6 m (square, so the corner is 0.85 m)
   bound_z_min: 0.010           # ~ WHOOP_REST_Z_M 0.0092 (contract.py): the airframe touched the desk
-  bound_z_max: 0.60
-  band_ceiling_m: 0.45         # METRIC ONLY (no reward, no termination): 3x the setpoint, as
+  bound_z_max: 0.80
+  band_ceiling_m: 0.60         # METRIC ONLY (no reward, no termination): 3x the setpoint, as
                                # Desk-Hover's 0.30 was at 0.10 m
   vxy_penalty: 0.0             # ARM 1, and deliberately so. On Desk-Hover this was the only lever
                                # PPO had against drift it could not see, and soft-breeze-8148
@@ -89,7 +91,7 @@ task:
                                # fresh interval (unlike the ToF, which holds). PLACEHOLDER: the
                                # ToF's 40 -> 25 lesson says the delivered rate must be measured.
   flow_min_m: 0.08             # datasheet working range. A HARD OPTICAL LIMIT, not a knob — and
-                               # the number the 0.15 m setpoint was chosen against.
+                               # the number the 0.20 m setpoint was chosen against.
   flow_tilt_limit_deg: 30.0    # tighter than the ToF's 45: tilt rotates the measured ground plane
                                # out from under the flat-floor assumption faster than it degrades
                                # a single ranging ray
@@ -114,11 +116,15 @@ task:
                                # the pilot's 1 s flow_lost abort window on purpose: the losses
                                # that end a flight have to be ones the policy has flown before.
   flow_scale_frac: 0.20        # per-episode multiplicative rad_per_count error, +-this. DERIVED,
-                               # not guessed: the +23.9 mm uncalibrated ToF offset is 16% of a
-                               # 0.15 m setpoint and enters the velocity scale one-for-one, and
+                               # not guessed: the +23.9 mm uncalibrated ToF offset is 12% of a
+                               # 0.20 m setpoint and enters the velocity scale one-for-one, and
                                # rad_per_count itself carries the slide test's own error on top.
-                               # (flow-hover's 0.10 was the bench-calibration error ALONE, at a
-                               # setpoint where the ToF offset was worth 6%.)
+                               # HELD at 0.20 rather than dropped to ~0.16 when the setpoint moved
+                               # up: the offset is the only term of the two that is quantified, so
+                               # the slack is headroom for the unmeasured one. Widening DR on an
+                               # unmeasured axis is cheap; a policy that has never seen the real
+                               # error is not. (flow-hover's 0.10 was the bench-calibration error
+                               # ALONE, at a setpoint where the ToF offset was worth 6%.)
   flow_gyro_residual: 0.05     # per-episode residual fraction of ROTATIONAL flow the host's gyro
                                # compensation fails to remove. PLACEHOLDER.
   flow_blind_grace_s: 0.2      # mirrors the deployed --tof-blind-grace/--tof-blind-fade guard:
@@ -145,7 +151,7 @@ dr:
   thrust_scale_frac: 0.0
   obs_noise_std: 0.0
   #                        [roll,  pitch, p,     q,    r,    h_err, vx,    vy   ]
-  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010, 0.011, 0.011]
+  obs_noise_std_channels: [0.02,  0.02,  1.25,  1.1,  0.75, 0.010, 0.015, 0.015]
   obs_bias_channels:      [0.0,   0.0,   0.0,   0.0,  0.0,  0.0,   0.0,   0.0  ]
   action_latency_steps: 0
   impulse_prob: 0.0

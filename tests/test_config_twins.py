@@ -93,12 +93,15 @@ def test_desk_flow_noflow_is_a_one_factor_control():
 
 
 def test_desk_flow_setpoint_clears_the_optical_floor():
-    """0.15 m is not a taste call — it is the number that keeps the PMW3901 seeing.
+    """0.20 m is not a taste call — it is the number that keeps the PMW3901 seeing.
 
     The sensor is blind below ``flow_min_m`` (80 mm, a hard optical limit). Desk-Hover's shipped
     policy sinks ~1.8 cm below its setpoint and the UNCALIBRATED ToF offset is another 2.39 cm, so
     the height the sensor actually sees is the setpoint minus ~4.2 cm. At Desk-Hover's 0.10 m that
-    lands at 0.058 m — blind, which the knockout probe measured as the worst state of all.
+    lands at 0.058 m — blind, which the knockout probe measured as the worst state of all. At
+    0.20 m it lands at 0.158 m, and the 5 cm bar below is what distinguishes this setpoint from
+    the 0.15 m first cut (which cleared the floor by only 2.8 cm — sufficient, but with nothing
+    left over for the fact that BOTH subtracted terms are themselves unmeasured on this airframe).
     """
     t = _cfg("desk-flow")["task"]
     setpoint = _cfg("desk-flow-purehold")["task"]["z_min"]   # the pinned DEPLOY altitude
@@ -107,10 +110,13 @@ def test_desk_flow_setpoint_clears_the_optical_floor():
     assert flown > t["flow_min_m"], (
         f"the deploy setpoint ({setpoint} m) puts the sensor at {flown:.3f} m, below its "
         f"{t['flow_min_m']} m working range")
-    assert flown - t["flow_min_m"] > 0.02, "under 2 cm of optical margin is not a margin"
+    assert flown - t["flow_min_m"] > 0.05, (
+        "under 5 cm of optical margin leaves nothing for the fact that the sink and the ToF "
+        "offset are both unmeasured on THIS airframe")
     # In sim there is no uncalibrated offset (the h_err BIAS DR models it), so what has to clear
-    # the floor across the whole TRAINING band is the band bottom plus the sink. It clears by
-    # 2.2 cm — deliberately not by much: the policy should meet the blind floor in training.
+    # the floor across the whole TRAINING band is the band bottom plus the sink — 7.2 cm. The
+    # policy still MEETS the blind floor in training, via the spawn spread and the blackout model,
+    # rather than via a band that grazes it.
     assert t["z_min"] - sink_m > t["flow_min_m"]
     # ...and the band's top plus the measured ~0.37 m climb overshoot stays inside the ToF ceiling.
     assert t["z_max"] + 0.37 < t["tof_max_m"]
