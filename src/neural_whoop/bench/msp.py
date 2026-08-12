@@ -45,6 +45,11 @@ MSP_SET_MOTOR = 214
 #: (no bridge in the path) the FC replies with an MSP error frame; treat that as "no ToF".
 MSP_BRIDGE_TOF = 192
 
+#: Bridge-local command: the xiao_bridge's PMW3901 optical-flow counts. Same interception rule
+#: as MSP_BRIDGE_TOF (answered locally, never forwarded, MSP error over USB = no bridge).
+#: Mirrored in ``firmware/xiao_bridge/src/main.cpp`` (``kMspBridgeFlow``).
+MSP_BRIDGE_FLOW = 193
+
 #: Betaflight rcData index order (see module docstring — verify on bench).
 RC_CHANNEL_ORDER = ("roll", "pitch", "yaw", "throttle", "aux1", "aux2", "aux3", "aux4")
 
@@ -205,6 +210,52 @@ def decode_bridge_tof(payload: bytes) -> dict:
     }
 
 
+def wrap_delta(new: int, old: int, bits: int) -> int:
+    """Difference two counters that wrap at ``bits``, returning the signed short-way delta.
+
+    The bridge's cumulative flow sums are int32 and its timestamp is a u32 millisecond clock;
+    both wrap (the clock every 49.7 days, the sums after ~60 hours of continuous motion). A
+    plain subtraction across a wrap yields a ~4e9 jump, which downstream becomes an absurd
+    velocity — cheap to get right here, impossible to notice later.
+    """
+    span = 1 << bits
+    return (new - old + span // 2) % span - span // 2
+
+
+def decode_bridge_flow(payload: bytes) -> dict:
+    """MSP_BRIDGE_FLOW: i32 sum_dx, i32 sum_dy, u32 t_ms, u16 n_frames, u8 squal, u8 motion,
+    u8 sensor_ok, u16 age_ms (65535 = never sampled).
+
+    The sums are **cumulative counts since the bridge booted**, not counts since the last read:
+    callers difference two replies to get ``(dx, dy, dt)``. See the firmware header for why —
+    a destructive read loses motion on any dropped packet and cannot tolerate a second client.
+
+    ``t_ms`` is the *bridge's* millisecond stamp of the newest sample, so a differenced ``dt``
+    is measured in the bridge's own clock and carries none of the host's polling jitter. That
+    matters: the count sum divided by a jittery dt is exactly how a clean flow signal becomes a
+    noisy velocity.
+
+    ``valid`` gates the way ``decode_bridge_tof`` does — sensor present, ever sampled, and the
+    sample fresh (age < 200 ms). It says nothing about whether the counts are *meaningful*:
+    that is ``squal`` (surface quality), which collapses over a featureless floor while the
+    frames keep arriving on time.
+    """
+    sum_dx, sum_dy, t_ms, n_frames, squal, motion, ok, age_ms = struct.unpack(
+        "<iiIHBBBH", payload[:19]
+    )
+    return {
+        "sum_dx": sum_dx,
+        "sum_dy": sum_dy,
+        "t_ms": t_ms,
+        "n_frames": n_frames,
+        "squal": squal,
+        "motion": bool(motion),
+        "sensor_ok": bool(ok),
+        "age_ms": age_ms,
+        "valid": bool(ok) and t_ms != 0 and age_ms < 200,
+    }
+
+
 def decode_fc_version(payload: bytes) -> str:
     major, minor, patch = struct.unpack("<BBB", payload[:3])
     return f"{major}.{minor}.{patch}"
@@ -339,6 +390,11 @@ class _MspEndpoint:
         """Latest bridge ToF reading (see :func:`decode_bridge_tof`). Bridge-answered — over
         USB the FC errors this id, which surfaces as :class:`MspError`."""
         return decode_bridge_tof(self.request(MSP_BRIDGE_TOF))
+
+    def bridge_flow(self) -> dict:
+        """Latest bridge optical-flow counters (see :func:`decode_bridge_flow`). Cumulative —
+        one call is a snapshot, motion needs two. Bridge-answered, like :meth:`bridge_tof`."""
+        return decode_bridge_flow(self.request(MSP_BRIDGE_FLOW))
 
     def set_motor(self, values: list[int]) -> None:
         if len(values) != 8:

@@ -43,7 +43,7 @@ from neural_whoop.bench import (  # noqa: E402
     MspTimeout,
     MspUdpClient,
 )
-from neural_whoop.bench.msp import MSP_BRIDGE_TOF  # noqa: E402
+from neural_whoop.bench.msp import MSP_BRIDGE_TOF, wrap_delta  # noqa: E402
 
 MOTOR_VALUE_HARD_CAP = 1200  # 1000=stop; keep bench spins gentle, no override flag offered
 # MSP_SET_RAW_RC frames are in WIRE order and the FC applies its channel map (AETR on our
@@ -401,6 +401,59 @@ def cmd_tof(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_flow(args: argparse.Namespace) -> int:
+    """Live-print the bridge's PMW3901 optical flow — the desk bring-up + calibration check.
+
+    The reply is cumulative, so this differences successive polls into per-interval counts. Two
+    numbers decide whether the sensor is usable and they fail independently: ``squal`` (surface
+    quality — collapses over a featureless floor while frames keep arriving) and the count rate
+    itself. A still sensor over good texture reads ~0 counts with a healthy squal; a blind one
+    reads ~0 counts with squal near 0. They look identical in the count column alone, which is
+    why squal is printed on every row.
+
+    With ``--height`` the derived velocity is shown too, using ``--rad-per-count``. That default
+    is a GEOMETRY PLACEHOLDER (Crazyflie's 0.71674 rad / 30 px), not a measurement of this unit
+    — replace it with the number the ``flow_probe`` slide test gives (README).
+    """
+    period = 1.0 / args.hz
+    print("bridge flow (ctrl-C to stop) — slide the sensor over TEXTURED surface")
+    print("  squal near 0 = blind (featureless floor / too dark / below the 80 mm minimum)")
+    hdr = "     dx      dy    dt      squal   rate"
+    print(hdr + ("      vx      vy" if args.height else ""))
+    prev = None
+    try:
+        with _client(args) as fc:
+            while True:
+                t0 = time.monotonic()
+                r = fc.bridge_flow()
+                if not r["sensor_ok"]:
+                    print("  sensor_ok=0 — bridge up but no PMW3901 found (check 3V3/SPI/CS, "
+                          "and that RST is tied HIGH)")
+                elif prev is not None:
+                    dx = wrap_delta(r["sum_dx"], prev["sum_dx"], 32)
+                    dy = wrap_delta(r["sum_dy"], prev["sum_dy"], 32)
+                    dt_ms = wrap_delta(r["t_ms"], prev["t_ms"], 32)
+                    n = wrap_delta(r["n_frames"], prev["n_frames"], 16)
+                    dt = dt_ms / 1000.0
+                    rate = n / dt if dt > 0 else 0.0
+                    line = (f"  {dx:6d}  {dy:6d}  {dt_ms:4d}ms  {r['squal']:5d}  {rate:5.1f}Hz")
+                    if args.height and dt > 0:
+                        k = args.rad_per_count * args.height / dt
+                        line += f"  {dx * k:7.3f} {dy * k:7.3f} m/s"
+                    print(line)
+                if r["sensor_ok"]:
+                    prev = r
+                time.sleep(max(0.0, period - (time.monotonic() - t0)))
+    except KeyboardInterrupt:
+        print("\nstopped.")
+    except MspError:
+        sys.exit("the FC rejected MSP_BRIDGE_FLOW: there is no xiao_bridge in this path.\n"
+                 "Run through the bridge — '--udp <bridge-ip>' over WiFi, or '--port <dongle>'\n"
+                 "through the ESP-NOW USB dongle (docs/ESPNOW.md). An older bridge build that\n"
+                 "predates the flow sensor also rejects it — reflash.")
+    return 0
+
+
 def cmd_motor_test(args: argparse.Namespace) -> int:
     _require_ack(args)
     value = min(int(args.value), MOTOR_VALUE_HARD_CAP)
@@ -455,6 +508,15 @@ def main() -> int:
                                    "desk bring-up)")
     p.add_argument("--hz", type=float, default=10.0)
 
+    p = sub.add_parser("flow", help="live bridge PMW3901 optical flow (needs the bridge in the "
+                                    "path; desk bring-up)")
+    p.add_argument("--hz", type=float, default=10.0)
+    p.add_argument("--height", type=float, default=None, metavar="M",
+                   help="sensor height above the surface (m); enables the derived velocity")
+    p.add_argument("--rad-per-count", type=float, default=0.023891,
+                   help="flow scale, rad per count. Default is a GEOMETRY PLACEHOLDER "
+                        "(0.71674 rad / 30 px); measure yours with the flow_probe slide test")
+
     p = sub.add_parser("motor-test", help="spin one motor, capped + props off")
     p.add_argument("--motor", type=int, required=True, help="motor index 0-3")
     p.add_argument("--value", type=int, default=1050, help=f"1000=stop, hard cap {MOTOR_VALUE_HARD_CAP}")
@@ -464,8 +526,8 @@ def main() -> int:
     args = ap.parse_args()
     try:
         return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
-                "rc-test": cmd_rc_test, "tof": cmd_tof, "motor-test": cmd_motor_test,
-                "checkup": cmd_checkup}[args.cmd](args)
+                "rc-test": cmd_rc_test, "tof": cmd_tof, "flow": cmd_flow,
+                "motor-test": cmd_motor_test, "checkup": cmd_checkup}[args.cmd](args)
     except MspTimeout as e:
         sys.exit(_link_hint(args, e))
     except MspError as e:

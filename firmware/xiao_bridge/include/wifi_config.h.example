@@ -23,3 +23,11 @@
 // Matrix 1S 5IN1 II). XIAO TX -> FC RX pad, XIAO RX -> FC TX pad, GND -> GND.
 #define FC_TX_PIN 1   // XIAO silkscreen D0 (GPIO1) -> FC R1 (rx1)
 #define FC_RX_PIN 2   // XIAO silkscreen D1 (GPIO2) -> FC T1 (tx1)
+
+// PMW3901 optical flow (SPI). These match the defaults in include/pmw3901.h, so a config
+// written before the flow sensor existed still builds — override only if you wired it
+// elsewhere. D8/D9/D10 are the hardware-SPI trio; CS is any free GPIO.
+#define FLOW_SCK_PIN  7   // XIAO silkscreen D8  -> CLK
+#define FLOW_MISO_PIN 8   // XIAO silkscreen D9  -> MIS
+#define FLOW_MOSI_PIN 9   // XIAO silkscreen D10 -> MOS
+#define FLOW_CS_PIN   4   // XIAO silkscreen D3  -> CS

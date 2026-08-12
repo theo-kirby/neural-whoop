@@ -17,6 +17,7 @@ import math
 from neural_whoop.bench.msp import (
     MSP_ANALOG,
     MSP_ATTITUDE,
+    MSP_BRIDGE_FLOW,
     MSP_BRIDGE_TOF,
     MSP_MOTOR_TELEMETRY,
     MSP_RAW_IMU,
@@ -25,11 +26,13 @@ from neural_whoop.bench.msp import (
     _MspEndpoint,
     decode_analog,
     decode_attitude,
+    decode_bridge_flow,
     decode_bridge_tof,
     decode_motor_telemetry,
     decode_raw_imu,
     decode_u16s,
     pack_rc_channels,
+    wrap_delta,
 )
 
 from .policy import obs_from_msp
@@ -51,15 +54,21 @@ class Telemetry:
         self.rc: tuple[int, ...] | None = None
         self.mt: list[dict] | None = None
         self.tof: dict | None = None
+        self.flow: dict | None = None
         self.t_att = 0.0
         self.t_imu = 0.0
         self.t_rc = 0.0
         self.t_mt = 0.0
         self.t_tof = 0.0         # arrival time of the newest ToF frame
         self.t_tof_sample = 0.0  # when that RANGE was taken (arrival - the bridge's own age stamp)
+        self.t_flow = 0.0        # arrival time of the newest flow frame
+        # Previous flow counters, for differencing the CUMULATIVE sums the bridge reports. Held
+        # here rather than recomputed by callers so there is exactly ONE consumer of the deltas:
+        # two independent differencers would each see half the motion.
+        self._flow_prev: dict | None = None
 
     def poll(self, now: float, want_analog: bool = False, want_rc: bool = False,
-             want_rpm: bool = False, want_tof: bool = False) -> None:
+             want_rpm: bool = False, want_tof: bool = False, want_flow: bool = False) -> None:
         self.fc.send(MSP_ATTITUDE)
         self.fc.send(MSP_RAW_IMU)
         if want_rpm:
@@ -70,6 +79,8 @@ class Telemetry:
             self.fc.send(MSP_RC)
         if want_tof:  # bridge-answered (never reaches the FC); errors harmlessly over USB
             self.fc.send(MSP_BRIDGE_TOF)
+        if want_flow:  # likewise bridge-answered
+            self.fc.send(MSP_BRIDGE_FLOW)
         frames = []
         for _ in range(32):  # drain the socket dry (non-blocking)
             got = self.fc._drain()
@@ -98,6 +109,43 @@ class Telemetry:
                 # height_sample() tells a NEW range from a re-served one.
                 if tof["range_m"] is not None:
                     self.t_tof_sample = now - tof["age_ms"] / 1000.0
+            elif frame.cmd == MSP_BRIDGE_FLOW and len(frame.payload) >= 19:
+                self.flow, self.t_flow = decode_bridge_flow(frame.payload), now
+
+    def flow_delta(self, now: float) -> tuple[int, int, float, int] | None:
+        """Motion since the previous call: ``(dx_counts, dy_counts, dt_s, squal)``.
+
+        **Stateful and destructive by contract** — each call consumes the interval, so exactly
+        one caller may use it per tick (the underlying MSP reply is non-destructive, so a
+        ``bench.py flow`` window running alongside a flight is still harmless; two callers
+        *inside* the pilot would not be).
+
+        ``dt_s`` comes from the BRIDGE's own sample stamps, not from host arrival times: the
+        counts were accumulated over that interval and dividing them by a host-jittered dt is
+        what would turn a clean flow signal into a noisy velocity. Returns ``None`` until a
+        second valid frame has arrived, and whenever the sensor is absent/stale — never a zero,
+        which a caller would read as "not moving" rather than "no data".
+
+        Counts are NOT velocity: ``v = dx/dt * rad_per_count * height``, where
+        ``rad_per_count`` is a MEASURED constant (firmware/xiao_bridge/README.md's slide test)
+        and ``height`` is the ToF's. Deliberately not done here — this layer reports what the
+        sensor said.
+        """
+        if self.flow is None or not self.flow["valid"] or now - self.t_flow > 0.2:
+            return None
+        cur = self.flow
+        prev, self._flow_prev = self._flow_prev, cur
+        if prev is None or prev["t_ms"] == cur["t_ms"]:
+            return None  # first frame, or the same sample re-served: no new interval
+        dt_ms = wrap_delta(cur["t_ms"], prev["t_ms"], 32)
+        if dt_ms <= 0:
+            return None  # bridge rebooted (its clock restarted); resync on the next frame
+        return (
+            wrap_delta(cur["sum_dx"], prev["sum_dx"], 32),
+            wrap_delta(cur["sum_dy"], prev["sum_dy"], 32),
+            dt_ms / 1000.0,
+            cur["squal"],
+        )
 
     def height_sample(self, now: float) -> tuple[float, float] | None:
         """Newest valid ToF range as ``(range_m, sample_time)``; None if absent/invalid/stale.

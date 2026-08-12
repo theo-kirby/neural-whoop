@@ -156,6 +156,42 @@ def test_decode_bridge_tof_gates_range_m():
     assert never["range_m"] is None and never["sensor_ok"] is False
 
 
+def test_decode_bridge_flow_is_cumulative_and_gated():
+    from neural_whoop.bench.msp import decode_bridge_flow
+
+    # i32 sum_dx, i32 sum_dy, u32 t_ms, u16 n_frames, u8 squal, u8 motion, u8 ok, u16 age_ms
+    p = struct.pack("<iiIHBBBH", 1200, -350, 90_000, 4500, 78, 1, 1, 12)
+    out = decode_bridge_flow(p)
+    assert out["sum_dx"] == 1200 and out["sum_dy"] == -350  # SIGNED: backwards motion is real
+    assert out["t_ms"] == 90_000 and out["squal"] == 78
+    assert out["motion"] is True and out["sensor_ok"] is True and out["valid"] is True
+
+    # Absent sensor, never-sampled, and stale all fail `valid` — but the counters still decode,
+    # so a caller can log them without branching.
+    assert decode_bridge_flow(struct.pack("<iiIHBBBH", 0, 0, 0, 0, 0, 0, 0, 0xFFFF))["valid"] is False
+    assert decode_bridge_flow(struct.pack("<iiIHBBBH", 5, 5, 0, 1, 60, 0, 1, 3))["valid"] is False
+    assert decode_bridge_flow(struct.pack("<iiIHBBBH", 5, 5, 900, 1, 60, 0, 1, 400))["valid"] is False
+
+    # A blind sensor over a featureless floor is FRESH and VALID with zero counts and low squal:
+    # freshness cannot detect it, which is why squal is decoded rather than folded into `valid`.
+    blind = decode_bridge_flow(struct.pack("<iiIHBBBH", 0, 0, 90_000, 4500, 2, 0, 1, 10))
+    assert blind["valid"] is True and blind["squal"] == 2
+
+
+def test_wrap_delta_survives_counter_rollover():
+    from neural_whoop.bench.msp import wrap_delta
+
+    assert wrap_delta(105, 100, 32) == 5
+    assert wrap_delta(95, 100, 32) == -5
+    # u32 millisecond clock rolling over (49.7 days of bridge uptime): the delta must stay small,
+    # not become ~4.3e9 — which downstream is a velocity divided by a 49-day interval.
+    assert wrap_delta(3, (1 << 32) - 2, 32) == 5
+    # i32 count sums wrapping at the positive rail.
+    assert wrap_delta(-(1 << 31) + 2, (1 << 31) - 3, 32) == 5
+    # u16 frame counter.
+    assert wrap_delta(2, 65534, 16) == 4
+
+
 # --- non-blocking reads: the flight-loop contract -------------------------------------------
 # `Telemetry` fires 3-5 queries per control tick and then drains until dry, against a 22 ms
 # budget at 45 Hz. A transport whose `_read()` waits for the NEXT byte burns most of that tick

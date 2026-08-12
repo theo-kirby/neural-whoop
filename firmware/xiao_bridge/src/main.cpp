@@ -17,13 +17,20 @@
 // the LED, the FC UART path — is byte-for-byte the same code in both builds. WiFi stays the
 // default so rollback is a reflash (`pio run -e xiao_bridge -t upload`).
 //
-// The one deliberate exception to transparency: the bridge owns a downward VL53L1X ToF
-// rangefinder (CJMCU-531 breakout on I2C, D5/SDA + D6/SCL as wired on our unit) and answers
-// MSP v1 cmd 192 (MSP_BRIDGE_TOF, our id — Betaflight never sees it) locally with the latest
-// range. Requests for that id are consumed, never forwarded; every other '$' packet passes
-// through untouched. With no sensor wired the bridge still boots and proxies; the reply just
-// carries ok=0. That interception is also what makes `bench.py latency` able to split the air
+// The one deliberate exception to transparency: the bridge owns its own DOWNWARD SENSORS and
+// answers two MSP ids of ours locally (Betaflight never sees either) —
+//   * cmd 192 MSP_BRIDGE_TOF  — VL53L1X rangefinder (CJMCU-531 on I2C, D5/SDA + D6/SCL): range.
+//   * cmd 193 MSP_BRIDGE_FLOW — PMW3901 optical flow (SPI, D8/D9/D10 + D3/CS): motion counts.
+// Requests for those ids are consumed, never forwarded; every other '$' packet passes through
+// untouched. With neither sensor wired the bridge still boots and proxies; the replies just
+// carry ok=0. That interception is also what makes `bench.py latency` able to split the air
 // path from the FC path, so it matters just as much on ESP-NOW.
+//
+// The flow reply is deliberately a CUMULATIVE, NON-DESTRUCTIVE read: it reports running count
+// sums and the bridge's own timestamp of the newest sample, and the host differences successive
+// replies. A "counts since you last asked" reply would have been smaller and wrong — it makes
+// every reply a destructive read, so a dropped packet silently eats motion, and a second client
+// (a `bench.py flow` window left open next to a flight) steals it. Differencing is idempotent.
 //
 // LED: solid while command packets are flowing (<250 ms old), slow blink when idle/linkless.
 
@@ -33,6 +40,7 @@
 #include <Wire.h>
 
 #include "wifi_config.h"  // FC UART pins/baud (+ the WiFi credentials in the UDP build)
+#include "pmw3901.h"      // optical flow (reads the FLOW_*_PIN defines wifi_config.h may set)
 
 #ifdef NW_LINK_ESPNOW
 #include <esp_now.h>
@@ -59,10 +67,22 @@ constexpr size_t kBufSize = 512;
 // The trailing loop_max_ms was appended 2026-07-30; older hosts slice the first 6 bytes and
 // ignore it, so the field is backwards-compatible in both directions.
 constexpr uint8_t kMspBridgeTof = 192;
+// Bridge-local MSP command: optical flow. Payload: i32 sum_dx, i32 sum_dy (cumulative counts
+// since boot), u32 t_ms (bridge millis() of the newest sample, 0 = never), u16 n_frames
+// (cumulative sample count, wraps), u8 squal, u8 motion, u8 sensor_ok, u16 age_ms (65535 =
+// never). Mirrored in neural_whoop/bench/msp.py (MSP_BRIDGE_FLOW / decode_bridge_flow) — change
+// both together. Cumulative by design (see the header note): the host differences two replies
+// to get (dx, dy, dt), so a lost packet costs resolution, never motion.
+constexpr uint8_t kMspBridgeFlow = 193;
 // dataReady() is a BLOCKING I2C read, so every poll is dead time for the proxy. The sensor
 // free-runs at 25 ms; 12 ms still catches every sample with one spare poll, at half the bus
 // traffic of the old 5 ms.
 constexpr uint32_t kTofPollMs = 12;
+// One readMotion() is five register reads at 200 us of mandated settling each — ~1 ms of
+// blocking SPI, a quarter of the ToF poll. The chip frames at up to 121 fps; 10 ms samples it
+// well inside the 50 Hz control loop while keeping the duty cycle at ~10%. Counts ACCUMULATE
+// between host reads, so a slower poll loses nothing but resolution.
+constexpr uint32_t kFlowPollMs = 10;
 // Cap on inbound packets serviced per loop() pass. The host fires 3-5 MSP queries per control
 // tick as a burst; draining one per pass made the burst take 3-5 loop iterations (and any
 // blocking call in between stretched the whole tick). Bounded so a flood can't starve the
@@ -71,6 +91,7 @@ constexpr int kMaxRxPerLoop = 8;
 
 HardwareSerial fc(1);
 VL53L1X tof;
+Pmw3901 flow;
 
 uint32_t last_cmd_ms = 0;
 
@@ -79,6 +100,15 @@ uint16_t tof_mm = 0xFFFF;   // latest range (mm)
 uint8_t tof_status = 0xFF;  // latest VL53L1X range_status (0 = valid)
 uint32_t tof_ms = 0;        // millis() of the latest sample (0 = never)
 uint32_t tof_poll_ms = 0;
+
+bool flow_ok = false;        // sensor found + initialised
+int32_t flow_dx = 0;         // cumulative motion counts since boot (host differences these)
+int32_t flow_dy = 0;
+uint32_t flow_ms = 0;        // millis() of the latest sample (0 = never)
+uint16_t flow_n = 0;         // cumulative sample count (wraps; diagnostic)
+uint8_t flow_squal = 0;      // latest surface quality (low = featureless floor)
+uint8_t flow_motion = 0;     // Motion register MOT bit on the latest sample
+uint32_t flow_poll_ms = 0;
 
 // Worst loop() duration in the current 5 s status window. This is the bridge's own account of
 // how long it went without servicing the link — the quantity that shows up host-side as a
@@ -92,6 +122,7 @@ uint32_t loop_max_us = 0;
 // separately and let the bridge name the guilty call instead of guessing again.
 // NOTE: sec_tof_reply is a SUBSET of sec_link_rx (the reply is sent inside the drain loop).
 uint32_t sec_link_rx = 0, sec_tof_reply = 0, sec_uart_tx = 0, sec_poll_tof = 0, sec_status = 0;
+uint32_t sec_poll_flow = 0;
 
 inline void bump(uint32_t& slot, uint32_t t0_us) {
   const uint32_t dt = micros() - t0_us;
@@ -337,6 +368,62 @@ void pollTof() {
   tof_ms = millis();
 }
 
+// Bring up the PMW3901. Absent sensor is fine — exactly like the ToF, flow_ok stays false and
+// the bridge proxies as before. Note this shares no bus with the ToF (SPI vs I2C), so a fault
+// in one cannot take the other down.
+void initFlow() {
+  if (!flow.begin()) {
+    Serial.printf("flow: no PMW3901 on SPI (sck=GPIO%d miso=GPIO%d mosi=GPIO%d cs=GPIO%d)"
+                  " — chip_id 0x%02X/0x%02X, want 0x49/0xB6\n",
+                  FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN, FLOW_CS_PIN, flow.chipId(),
+                  flow.chipIdInverse());
+    return;
+  }
+  flow_ok = true;
+  Serial.println("flow: PMW3901 up");
+}
+
+// Poll at a bounded cadence and ACCUMULATE. Unlike the ToF (where only the freshest range
+// matters) every count here is displacement — dropping a sample loses real motion — so the
+// running sums are what the reply carries.
+void pollFlow() {
+  if (!flow_ok || millis() - flow_poll_ms < kFlowPollMs) return;
+  flow_poll_ms = millis();
+  int16_t dx = 0, dy = 0;
+  uint8_t squal = 0;
+  bool motion = false;
+  flow.readMotion(&dx, &dy, &squal, &motion);
+  flow_dx += dx;
+  flow_dy += dy;
+  flow_squal = squal;
+  flow_motion = motion ? 1 : 0;
+  flow_n++;
+  flow_ms = millis();
+}
+
+// Answer an intercepted MSP_BRIDGE_FLOW request. Same '$M>' framing as the ToF reply.
+void sendFlowReply() {
+  const uint32_t age = flow_ms ? min<uint32_t>(millis() - flow_ms, 0xFFFE) : 0xFFFF;
+  uint8_t p[19];
+  memcpy(p + 0, &flow_dx, 4);
+  memcpy(p + 4, &flow_dy, 4);
+  memcpy(p + 8, &flow_ms, 4);
+  memcpy(p + 12, &flow_n, 2);
+  p[14] = flow_squal;
+  p[15] = flow_motion;
+  p[16] = flow_ok ? 1 : 0;
+  p[17] = static_cast<uint8_t>(age & 0xFF);
+  p[18] = static_cast<uint8_t>(age >> 8);
+  uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeFlow};
+  uint8_t ck = sizeof(p) ^ kMspBridgeFlow;
+  for (size_t i = 0; i < sizeof(p); i++) {
+    frame[5 + i] = p[i];
+    ck ^= p[i];
+  }
+  frame[5 + sizeof(p)] = ck;
+  linkReply(frame, sizeof(frame));
+}
+
 // Answer an intercepted MSP_BRIDGE_TOF request straight from the bridge ('$M>' framing so the
 // host's stock MSP parser reads it like any FC reply).
 void sendTofReply() {
@@ -363,6 +450,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   fc.begin(FC_BAUD, SERIAL_8N1, FC_RX_PIN, FC_TX_PIN);
   initTof();
+  initFlow();
   linkBegin();
 }
 
@@ -380,6 +468,10 @@ void loop() {
       const uint32_t t_tx_us = micros();
       sendTofReply();
       bump(sec_tof_reply, t_tx_us);
+    } else if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeFlow) {
+      const uint32_t t_tx_us = micros();
+      sendFlowReply();
+      bump(sec_tof_reply, t_tx_us);  // same "bridge-answered a local id" budget as the ToF
     } else if (rx_buf[0] == '$') {
 #ifndef NW_LINK_ESPNOW
       peer_ip = src_ip;
@@ -402,11 +494,15 @@ void loop() {
   }
   bump(sec_uart_tx, t_utx_us);
 
-  // Blocking I2C — deliberately LAST, so it can never sit between an inbound MSP request and
-  // its forward to the FC. A stalled bus now costs a dropped range sample, not a dropped tick.
+  // Blocking sensor buses — deliberately LAST, so neither can sit between an inbound MSP request
+  // and its forward to the FC. A stalled bus now costs a dropped sample, not a dropped tick.
   const uint32_t t_tof_us = micros();
   pollTof();
   bump(sec_poll_tof, t_tof_us);
+
+  const uint32_t t_flow_us = micros();
+  pollFlow();
+  bump(sec_poll_flow, t_flow_us);
 
   // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
@@ -422,12 +518,14 @@ void loop() {
     char link[128];
     linkStatus(link, sizeof(link));
     Serial.printf("status: %s  %s  loop_max %.1f ms"
-                  "  [link_rx %.1f (tof_reply %.1f)  uart_tx %.1f  poll_tof %.1f  status %.1f]\n",
+                  "  [link_rx %.1f (sensor_reply %.1f)  uart_tx %.1f  poll_tof %.1f"
+                  "  poll_flow %.1f  status %.1f]  flow %s squal %u\n",
                   link, fresh ? "commands flowing" : "idle", loop_max_us / 1000.0,
                   sec_link_rx / 1000.0, sec_tof_reply / 1000.0, sec_uart_tx / 1000.0,
-                  sec_poll_tof / 1000.0, sec_status / 1000.0);
+                  sec_poll_tof / 1000.0, sec_poll_flow / 1000.0, sec_status / 1000.0,
+                  flow_ok ? "ok" : "absent", flow_squal);
     // Worst case per 5 s window, not since boot.
-    loop_max_us = sec_link_rx = sec_tof_reply = sec_uart_tx = sec_poll_tof = 0;
+    loop_max_us = sec_link_rx = sec_tof_reply = sec_uart_tx = sec_poll_tof = sec_poll_flow = 0;
     // This print's own cost (USB CDC + the blocking WiFi.RSSI/BSSIDstr calls) seeds the new
     // window, so a slow heartbeat indicts itself rather than hiding in loop_max.
     sec_status = micros() - t_st_us;

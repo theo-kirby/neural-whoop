@@ -3,9 +3,11 @@
 Turns a Seeed XIAO ESP32-S3 wired to the Air65 II's free UART into the drone's radio:
 the host sends raw MSP frames over UDP, the bridge forwards them verbatim to the flight
 controller and ships the FC's replies back. Protocol-transparent by design — the whole
-`scripts/bench.py` toolkit works through it unchanged via `--udp`. One deliberate
-exception: the bridge owns a downward **VL53L1X ToF** (below) and answers MSP cmd **192**
-(`MSP_BRIDGE_TOF`) itself; that id is consumed, never forwarded to the FC.
+`scripts/bench.py` toolkit works through it unchanged via `--udp`. The deliberate
+exceptions: the bridge owns two **downward sensors** and answers their MSP ids itself —
+**192** (`MSP_BRIDGE_TOF`, VL53L1X range) and **193** (`MSP_BRIDGE_FLOW`, PMW3901 optical
+flow). Both ids are consumed, never forwarded to the FC. Either sensor may be absent; the
+bridge boots and proxies regardless and the reply carries `sensor_ok=0`.
 
 ## Wiring (Matrix 1S 5IN1 II)
 
@@ -57,6 +59,51 @@ Desk bring-up after wiring (before mounting anything):
 pio run -e xiao_bridge -t upload
 python3 scripts/bench.py --udp <bridge-ip> tof     # wave a hand over it; range should track
 ```
+
+## Optical-flow wiring (PMW3901 breakout, optional)
+
+| XIAO | PMW3901 | note |
+|---|---|---|
+| D8 (GPIO7) | CLK | hardware-SPI clock |
+| D9 (GPIO8) | MIS | MISO |
+| D10 (GPIO9) | MOS | MOSI |
+| D3 (GPIO4) | CS | any free GPIO; overridable as `FLOW_CS_PIN` |
+| 3V3 | 3V3 | **not 5V** — the bare breakout has no regulator input |
+| GND | GND | |
+| — | RST | tie **HIGH to 3V3**: active-low reset, floating = random resets |
+| — | MOT | leave unwired (motion interrupt; the bridge polls) |
+| — | VRE | leave unwired (internal regulator tap) |
+
+No pin conflicts with the rest of the bridge: the FC UART is on D0/D1, the ToF I²C on D5/D6,
+and SPI is its own bus — a fault on one sensor cannot take the other down.
+
+**Mount it facing down, next to the ToF.** Two physical constraints decide whether flow works
+at all, and neither is a firmware setting: the sensor's **working range starts at 80 mm** (a
+0.10 m Desk-Hover setpoint sits 2 cm above that floor — see `docs/SIM2REAL.md`), and it has
+**no illuminator**, so it needs ambient light and a *textured* surface. A bare white desk
+returns a near-zero `squal` and no counts. Keep the lens out of prop wash and clean.
+
+Bring-up — probe first, exactly like `i2c_scan` precedes the ToF:
+
+```bash
+pio run -e flow_probe -t upload && pio device monitor   # chip id 0x49/0xB6, then live counts
+python3 scripts/bench.py --udp <bridge-ip> flow         # after reflashing xiao_bridge
+```
+
+The probe is also the **calibration rig**, and running it is not optional before the sensor is
+used in a control loop. Counts are not velocity: `v = (counts/dt) · rad_per_count · height`,
+and `rad_per_count` is the one constant the datasheet does not hand you usably. Rest the sensor
+at a known height over a printed page, zero the sums (send any character), slide it exactly
+100 mm, read the total: `rad_per_count = distance / (height · counts)`. Repeat at a second
+height — the two must agree, or the standoff is wrong. That measured number is what the
+host-side flow integrator and `configs/flow-hover.yaml`'s `flow_scale_frac` DR are calibrated
+against.
+
+`MSP_BRIDGE_FLOW` (193) reports **cumulative** count sums plus the bridge's own millisecond
+stamp of the newest sample; the host differences two replies to get `(dx, dy, dt)`. That is
+deliberate — a "counts since you last asked" reply makes every read destructive, so one dropped
+packet silently eats real motion and a second client (a `bench.py flow` window left open beside
+a flight) steals it. Differencing is idempotent and safe to do from two places at once.
 
 Any free GPIO works as UART TX/RX via the ESP32-S3 matrix, so match `FC_TX_PIN`/`FC_RX_PIN` in
 `wifi_config.h` to wherever the FC's R1/T1 wires actually land. Pin history on this build: the
