@@ -35,10 +35,20 @@ from neural_whoop.experiment import build_env, load_config
 from neural_whoop.training.ppo import load_agent
 
 cfg_path, ckpt = sys.argv[1], sys.argv[2]
+# Optional third arg: base-frame obs channels to ZERO before the policy sees them, e.g.
+# `exit_probe.py cfg.yaml ckpt.pt 6,7`. Same instrument as scripts/knockout_probe.py, applied to
+# the survival battery rather than the clean eval — i.e. "does the survival advantage survive the
+# sensor dying mid-flight". For a velocity channel, zero IS the deploy value (hover_flow's
+# grace-then-fade), so this row is a real scenario and not only an attribution device.
+knock = [int(c) for c in sys.argv[3].split(",")] if len(sys.argv) > 3 else []
 cfg = load_config(cfg_path)
 cfg.setdefault("task", {})["hold_fraction"] = 1.0
 env = build_env(cfg, device="cuda", n_envs=2048, seed=12345, dr_enabled=True)
 agent = load_agent(ckpt, device="cuda")
+if knock:
+    from knockout_probe import ChannelKnockout
+
+    agent = ChannelKnockout(agent, knock, env.base_obs_dim, env.obs_stack)
 
 n = env.n_drones
 ever = torch.zeros(n, dtype=torch.bool, device=env.device)
@@ -78,7 +88,7 @@ with torch.no_grad():
 surv = (~ever).float().mean().item()
 final_pos = _stash["pos"]
 out = {
-    "config": cfg_path, "survival": surv,
+    "config": cfg_path, "channels_zeroed": knock, "survival": surv,
     "floor": int((kind == 1).sum()), "ceiling": int((kind == 2).sum()),
     "xy": int((kind == 3).sum()),
     "median_exit_s": (float(first_exit[first_exit >= 0].median()) if ever.any() else None),
