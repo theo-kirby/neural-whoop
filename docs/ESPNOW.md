@@ -197,11 +197,25 @@ that spec is opened. `pyserial` was added to the `studio` extra (it was already 
    `scripts/serve.py --bridge /dev/cu.usbmodemXXX` and a real flight on a charged pack.
 7. `flight_report.py`, then compare `obs_age_ms` p99 against the 122–232 ms baseline.
 
+## 7.5 OTA — the drone board's USB flash is a one-time event (2026-08-13)
+
+The new-airframe rebuild buried the drone XIAO's USB port, so the firmware grew an over-the-air
+escape hatch (ArduinoOTA; full story in `firmware/xiao_bridge/README.md` "OTA reflash"). The
+short version: `bench.py --port <dongle> ota` (bridge-local MSP id **194**, magic payload) makes
+the ESP-NOW bridge leave the link and serve OTA as `whoop-bridge.local` for ~3 min → `pio run -e
+xiao_bridge_espnow_ota -t upload`. A never-linked bridge (bad MACs/channel) opens the same
+window by itself ~2 min after boot, so a battery plug-in always suffices to reflash. Transport
+swaps (ESP-NOW ↔ WiFi) are just OTA uploads of the other build. The flow `rad_per_count`
+calibration also no longer needs the `flow_probe` flash: `bench.py flow-cal --height <m>` runs
+the slide test over the air. **Never flash a radio-less probe firmware onto the assembled drone
+board** — that is the one move that re-requires USB.
+
 ## 8. Rollback
 
-The WiFi build is untouched and stays default. If ESP-NOW disappoints, `pio run -e xiao_bridge -t
-upload` and nothing is lost — the host keeps `--udp`. Keep both paths until a full flight session
-passes.
+The WiFi build is untouched and stays default. If ESP-NOW disappoints, OTA the WiFi build back
+(`bench.py ota` → `pio run -e xiao_bridge_ota -t upload`; only reach for USB `pio run -e
+xiao_bridge -t upload` on a bench board) and nothing is lost — the host keeps `--udp`. Keep both
+paths until a full flight session passes.
 
 ## 9. Risks, honestly
 

@@ -50,6 +50,13 @@ MSP_BRIDGE_TOF = 192
 #: Mirrored in ``firmware/xiao_bridge/src/main.cpp`` (``kMspBridgeFlow``).
 MSP_BRIDGE_FLOW = 193
 
+#: Bridge-local command: open the bridge's over-the-air reflash window (docs/ESPNOW.md "OTA").
+#: The request payload must be :data:`OTA_MAGIC` — the command drops the flight link on the
+#: ESP-NOW build, so a bare id must never be enough. Reply: u8 accepted, u8 will_reboot.
+#: Mirrored in ``firmware/xiao_bridge/src/main.cpp`` (``kMspBridgeOta``).
+MSP_BRIDGE_OTA = 194
+OTA_MAGIC = b"NWOT"
+
 #: Betaflight rcData index order (see module docstring — verify on bench).
 RC_CHANNEL_ORDER = ("roll", "pitch", "yaw", "throttle", "aux1", "aux2", "aux3", "aux4")
 
@@ -395,6 +402,19 @@ class _MspEndpoint:
         """Latest bridge optical-flow counters (see :func:`decode_bridge_flow`). Cumulative —
         one call is a snapshot, motion needs two. Bridge-answered, like :meth:`bridge_tof`."""
         return decode_bridge_flow(self.request(MSP_BRIDGE_FLOW))
+
+    def bridge_ota(self) -> dict:
+        """Ask the bridge to open its OTA reflash window (see :data:`MSP_BRIDGE_OTA`).
+
+        Returns ``{"accepted": bool, "will_reboot": bool}``. ``will_reboot`` means the ESP-NOW
+        build acked and is now LEAVING the link to serve ArduinoOTA — expect it to be
+        unreachable here until the window closes. On the WiFi/UDP build OTA runs full-time, so
+        ``will_reboot`` is False and the link stays up. ``retries=0``: a retried magic packet
+        could land after the ack and be lost anyway, and the first send either worked or the
+        link is down."""
+        p = self.request(MSP_BRIDGE_OTA, OTA_MAGIC, retries=0)
+        return {"accepted": bool(p[0]) if len(p) >= 1 else False,
+                "will_reboot": bool(p[1]) if len(p) >= 2 else False}
 
     def set_motor(self, values: list[int]) -> None:
         if len(values) != 8:

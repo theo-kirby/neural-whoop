@@ -11,6 +11,12 @@ bridge boots and proxies regardless and the reply carries `sensor_ok=0`.
 
 ## Wiring (Matrix 1S 5IN1 II)
 
+**Every net below is a `#define` in `include/wifi_config.h`** (`FC_*`, `TOF_*`, `FLOW_*`) — the
+tables show the reference layout, but the config header is the truth for any given build, and
+`main.cpp` **static_asserts that no two nets share a GPIO**, so a config typo fails the build
+instead of surfacing as a mystery dead sensor after assembly (the 2026-08-08 config had FC_RX
+on the flow-CS default and nothing complained).
+
 | XIAO | FC |
 |---|---|
 | D0 (GPIO1) | UART1 RX pad (R1) |
@@ -90,14 +96,19 @@ pio run -e flow_probe -t upload && pio device monitor   # chip id 0x49/0xB6, the
 python3 scripts/bench.py --udp <bridge-ip> flow         # after reflashing xiao_bridge
 ```
 
-The probe is also the **calibration rig**, and running it is not optional before the sensor is
-used in a control loop. Counts are not velocity: `v = (counts/dt) · rad_per_count · height`,
-and `rad_per_count` is the one constant the datasheet does not hand you usably. Rest the sensor
-at a known height over a printed page, zero the sums (send any character), slide it exactly
-100 mm, read the total: `rad_per_count = distance / (height · counts)`. Repeat at a second
-height — the two must agree, or the standoff is wrong. That measured number is what the
+The probe is also the **calibration rig**, and running the calibration is not optional before
+the sensor is used in a control loop. Counts are not velocity: `v = (counts/dt) · rad_per_count
+· height`, and `rad_per_count` is the one constant the datasheet does not hand you usably. Rest
+the sensor at a known height over a printed page, zero the sums (send any character), slide it
+exactly 100 mm, read the total: `rad_per_count = distance / (height · counts)`. Repeat at a
+second height — the two must agree, or the standoff is wrong. That measured number is what the
 host-side flow integrator and `configs/flow-hover.yaml`'s `flow_scale_frac` DR are calibrated
 against.
+
+**No-USB alternative (2026-08-13):** the same slide test runs over the air against the main
+firmware's cumulative counters — `python3 scripts/bench.py --udp <ip>|--port <dongle> flow-cal
+--height 0.20` — so a board whose USB port is buried in the airframe never needs the
+`flow_probe` flash. Same two-height agreement rule.
 
 `MSP_BRIDGE_FLOW` (193) reports **cumulative** count sums plus the bridge's own millisecond
 stamp of the newest sample; the host differences two replies to get `(dx, dy, dt)`. That is
@@ -121,9 +132,37 @@ bridge (~3 g + wiring).
 ## Flash
 
 ```bash
-cp include/wifi_config.h.example include/wifi_config.h   # fill in SSID/pass
+cp include/wifi_config.h.example include/wifi_config.h   # fill in SSID/pass + the pin block
 pio run -t upload && pio device monitor                   # prints the bridge IP on boot
 ```
+
+## OTA reflash — USB is only needed once (2026-08-13)
+
+After final assembly the drone XIAO's USB port is a mechanical liability to reach, so the USB
+flash that installs the 2026-08-13+ firmware is designed to be the **last one**. Every later
+firmware change goes over the air (ArduinoOTA, port 3232, hostname `whoop-bridge.local`):
+
+- **WiFi/UDP build:** OTA runs full-time beside UDP. `pio run -e xiao_bridge_ota -t upload`
+  whenever the bridge is powered.
+- **ESP-NOW build, command path:** `python3 scripts/bench.py --port <dongle> ota` — the bridge
+  acks, leaves the flight link, joins the `wifi_config.h` network and serves OTA for ~3 min
+  (LED: fast ~10 Hz strobe). Then `pio run -e xiao_bridge_espnow_ota -t upload`. A finished
+  upload reboots into the new firmware; a timeout restarts back into normal ESP-NOW service.
+- **ESP-NOW build, rescue path:** if *no* link packet has **ever** arrived by ~2 min after boot
+  (wrong dongle MAC / wrong channel / dead dongle — the command path can't reach it either),
+  the bridge opens the same OTA window on its own, then restarts and listens again, forever. A
+  battery plug-in is therefore always enough to make the board flashable, even with a broken
+  `espnow_config.h`. Normal flights never see this: the host polls from session start, and the
+  first packet disarms the fallback for good. Typing `O` into the USB monitor also opens the
+  window, for bench use.
+
+Both boot logs print the board's own **STA MAC**, so a replacement XIAO can be identified for
+`espnow_config.h` during its one USB flash — no separate `mac_probe` flash needed.
+
+**Corollary: never flash a probe firmware (`i2c_scan`/`uart_scan`/`flow_probe`/`uart_probe`)
+onto the assembled drone board** — they have no radio and no OTA, so the only way back out is
+the USB port. Diagnose the assembled board over the air instead (`bench.py checkup/tof/flow`),
+edit pins in `wifi_config.h`, and OTA the fix.
 
 ## Betaflight config (once, over USB)
 

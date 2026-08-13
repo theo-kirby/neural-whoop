@@ -19,10 +19,20 @@
 // FC UART baud. Betaflight MSP ports default to 115200.
 #define FC_BAUD 115200
 
-// XIAO ESP32-S3 pins wired to the flight controller's free UART pads (UART1 on the
-// Matrix 1S 5IN1 II). XIAO TX -> FC RX pad, XIAO RX -> FC TX pad, GND -> GND.
+// ---- The wiring block: every solder joint on the board, one define per net. ----
+// main.cpp static_asserts that no two nets share a GPIO, so a typo here fails the BUILD
+// rather than surfacing as a mystery dead sensor after the airframe is closed up.
+// XIAO ESP32-S3 silkscreen -> GPIO: D0=1 D1=2 D2=3 D3=4 D4=5 D5=6 D6=43 D7=44 D8=7 D9=8 D10=9.
+// (Avoid D7/GPIO44 — see the pin history in README.md.)
+
+// Flight controller's free UART pads (UART1 on the Matrix 1S 5IN1 II).
+// XIAO TX -> FC RX pad (R1), XIAO RX -> FC TX pad (T1), GND -> GND.
 #define FC_TX_PIN 1   // XIAO silkscreen D0 (GPIO1) -> FC R1 (rx1)
 #define FC_RX_PIN 2   // XIAO silkscreen D1 (GPIO2) -> FC T1 (tx1)
+
+// VL53L1X ToF (CJMCU-531) I2C. Defaults (in main.cpp) are D5/D6 — override if wired elsewhere.
+#define TOF_SDA_PIN 6   // XIAO silkscreen D5  -> SDA
+#define TOF_SCL_PIN 43  // XIAO silkscreen D6  -> SCL
 
 // PMW3901 optical flow (SPI). These match the defaults in include/pmw3901.h, so a config
 // written before the flow sensor existed still builds — override only if you wired it

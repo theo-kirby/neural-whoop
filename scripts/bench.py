@@ -454,6 +454,74 @@ def cmd_flow(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ota(args: argparse.Namespace) -> int:
+    """Open the bridge's over-the-air reflash window (docs/ESPNOW.md "OTA").
+
+    The whole point: the drone XIAO's USB port is unreachable after final assembly, so firmware
+    changes ship over WiFi. On the ESP-NOW build the bridge acks, LEAVES the flight link, joins
+    the wifi_config.h network as whoop-bridge.local and serves ArduinoOTA for ~3 minutes; on the
+    WiFi/UDP build OTA already runs full-time and this just confirms it.
+    """
+    with _client(args) as fc:
+        r = fc.bridge_ota()
+    if not r["accepted"]:
+        sys.exit("bridge refused the OTA request (magic mismatch — firmware predates OTA? reflash"
+                 " over USB once with the 2026-08-13+ build).")
+    if r["will_reboot"]:
+        print("bridge acked and is LEAVING the link to serve OTA. Within ~20 s it joins WiFi as")
+        print("whoop-bridge.local and serves ArduinoOTA for ~3 min (LED: fast strobe). Flash with:")
+        print("  cd firmware/xiao_bridge && pio run -e xiao_bridge_espnow_ota -t upload")
+        print("(a finished upload reboots it into the new firmware; a timeout restarts it back")
+        print(" into normal ESP-NOW service — nothing is lost either way)")
+    else:
+        print("WiFi/UDP build: OTA is already being served full-time alongside UDP. Flash with:")
+        print("  cd firmware/xiao_bridge && pio run -e xiao_bridge_ota -t upload")
+    return 0
+
+
+def _flow_snapshot(fc) -> dict:
+    r = fc.bridge_flow()
+    if not r["sensor_ok"]:
+        sys.exit("sensor_ok=0 — bridge up but no PMW3901 found; fix the flow sensor first "
+                 "(bench.py flow)")
+    return r
+
+
+def cmd_flow_cal(args: argparse.Namespace) -> int:
+    """Measure rad_per_count over the air — the flow_probe slide test without the USB flash.
+
+    Same physics as the README rig: rest the sensor at a known height over a printed page,
+    slide it an exactly-known distance, and rad_per_count = distance / (height x counts). The
+    bridge's cumulative counters make this transport-free: snapshot, slide, snapshot, difference.
+    Run it TWICE at two different heights — the two must agree (a mismatch means the standoff
+    measurement is wrong, says the README).
+    """
+    print(f"flow calibration: height {args.height:.3f} m, slide distance {args.distance_mm:.0f} mm")
+    print("axis: the slide direction should be a single sensor axis; the dominant axis is used.")
+    with _client(args) as fc:
+        input("  1. Hold the drone STILL at the measured height over texture, then press Enter...")
+        a = _flow_snapshot(fc)
+        input(f"  2. Slide it exactly {args.distance_mm:.0f} mm along one axis, hold still, "
+              "press Enter...")
+        b = _flow_snapshot(fc)
+    dx = wrap_delta(b["sum_dx"], a["sum_dx"], 32)
+    dy = wrap_delta(b["sum_dy"], a["sum_dy"], 32)
+    counts = max(abs(dx), abs(dy))
+    axis = "x" if abs(dx) >= abs(dy) else "y"
+    cross = min(abs(dx), abs(dy))
+    if counts < 50:
+        sys.exit(f"only {counts} counts on the dominant axis — too few to calibrate. Check "
+                 "squal (bench.py flow), light, texture, and that the height is >= 80 mm.")
+    rad_per_count = (args.distance_mm / 1000.0) / (args.height * counts)
+    print(f"\n  moved {counts} counts on {axis} (cross-axis {cross}, "
+          f"{100.0 * cross / counts:.0f}% — high means a crooked slide)")
+    print(f"  rad_per_count = {args.distance_mm / 1000.0:.3f} / ({args.height:.3f} * {counts}) "
+          f"= {rad_per_count:.6f}")
+    print(f"\n  --rad-per-count {rad_per_count:.6f}")
+    print("  (repeat at a second height; the two numbers must agree)")
+    return 0
+
+
 def cmd_motor_test(args: argparse.Namespace) -> int:
     _require_ack(args)
     value = min(int(args.value), MOTOR_VALUE_HARD_CAP)
@@ -517,6 +585,15 @@ def main() -> int:
                    help="flow scale, rad per count. Default is a GEOMETRY PLACEHOLDER "
                         "(0.71674 rad / 30 px); measure yours with the flow_probe slide test")
 
+    sub.add_parser("ota", help="open the bridge's over-the-air reflash window (no USB needed)")
+
+    p = sub.add_parser("flow-cal", help="measure rad_per_count over the air (the slide test, "
+                                        "no flow_probe flash needed)")
+    p.add_argument("--height", type=float, required=True, metavar="M",
+                   help="sensor height above the surface during the slide (m), measured")
+    p.add_argument("--distance-mm", type=float, default=100.0,
+                   help="exact slide distance (default 100 mm)")
+
     p = sub.add_parser("motor-test", help="spin one motor, capped + props off")
     p.add_argument("--motor", type=int, required=True, help="motor index 0-3")
     p.add_argument("--value", type=int, default=1050, help=f"1000=stop, hard cap {MOTOR_VALUE_HARD_CAP}")
@@ -527,6 +604,7 @@ def main() -> int:
     try:
         return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
                 "rc-test": cmd_rc_test, "tof": cmd_tof, "flow": cmd_flow,
+                "ota": cmd_ota, "flow-cal": cmd_flow_cal,
                 "motor-test": cmd_motor_test, "checkup": cmd_checkup}[args.cmd](args)
     except MspTimeout as e:
         sys.exit(_link_hint(args, e))

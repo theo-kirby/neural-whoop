@@ -35,6 +35,8 @@
 // LED: solid while command packets are flowing (<250 ms old), slow blink when idle/linkless.
 
 #include <Arduino.h>
+#include <ArduinoOTA.h>
+#include <ESPmDNS.h>
 #include <VL53L1X.h>
 #include <WiFi.h>
 #include <Wire.h>
@@ -48,8 +50,17 @@
 
 #include "espnow_config.h"
 #else
-#include <ESPmDNS.h>
 #include <WiFiUdp.h>
+#endif
+
+// Downward-ToF I2C pins — overridable from wifi_config.h, same "solder joints live in the
+// config header" rule as FC_TX_PIN/FC_RX_PIN (they were hardcoded in initTof() until the
+// 2026-08-13 rebuild made every net configurable). Defaults = the original build.
+#ifndef TOF_SDA_PIN
+#define TOF_SDA_PIN 6  // XIAO silkscreen D5
+#endif
+#ifndef TOF_SCL_PIN
+#define TOF_SCL_PIN 43  // XIAO silkscreen D6
 #endif
 
 #ifndef MDNS_NAME
@@ -60,6 +71,22 @@ namespace {
 
 constexpr uint32_t kLinkFreshMs = 250;
 constexpr size_t kBufSize = 512;
+
+// Every net gets its own GPIO — a duplicate is a config typo that fails at runtime in the least
+// debuggable way (the default FLOW_CS_PIN collided with a rewired FC_RX_PIN in the 2026-08
+// configs and nothing complained). Fail the BUILD instead: the one guaranteed-cheap moment to
+// catch it is before the airframe closes up around the USB port. (C++11-safe recursion — the
+// Arduino core does not guarantee constexpr loops.)
+constexpr int kNetPins[] = {FC_TX_PIN,   FC_RX_PIN,    TOF_SDA_PIN,  TOF_SCL_PIN,
+                            FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN, FLOW_CS_PIN};
+constexpr bool pinsDistinct(const int* p, int n, int i = 0, int j = 1) {
+  return i >= n - 1 ? true
+         : j >= n   ? pinsDistinct(p, n, i + 1, i + 2)
+         : p[i] == p[j] ? false
+                        : pinsDistinct(p, n, i, j + 1);
+}
+static_assert(pinsDistinct(kNetPins, 8),
+              "pin collision: two nets in wifi_config.h share a GPIO (check FC_*, TOF_*, FLOW_*)");
 
 // Bridge-local MSP command: latest ToF range. Payload: u16 range_mm, u8 range_status
 // (VL53L1X, 0 = valid), u16 age_ms (65535 = never), u8 sensor_ok, u16 loop_max_ms. Mirrored in
@@ -74,6 +101,14 @@ constexpr uint8_t kMspBridgeTof = 192;
 // both together. Cumulative by design (see the header note): the host differences two replies
 // to get (dx, dy, dt), so a lost packet costs resolution, never motion.
 constexpr uint8_t kMspBridgeFlow = 193;
+// Bridge-local MSP command: open the over-the-air reflash window (see "OTA escape hatch"
+// below). Request payload MUST be the 4-byte magic "NWOT" — a bare id is too easy to emit by
+// accident for a command that drops the flight link. Reply: u8 accepted, u8 will_reboot
+// (1 = this build now leaves the link and serves ArduinoOTA; 0 = WiFi build, where OTA is
+// already running full-time and nothing changes). Mirrored in neural_whoop/bench/msp.py
+// (MSP_BRIDGE_OTA) — change both together.
+constexpr uint8_t kMspBridgeOta = 194;
+constexpr uint8_t kOtaMagic[4] = {'N', 'W', 'O', 'T'};
 // dataReady() is a BLOCKING I2C read, so every poll is dead time for the proxy. The sensor
 // free-runs at 25 ms; 12 ms still catches every sample with one spare poll, at half the bus
 // traffic of the old 5 ms.
@@ -205,10 +240,13 @@ void linkBegin() {
   peer.ifidx = WIFI_IF_STA;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) Serial.println("esp_now_add_peer FAILED");
-  Serial.printf("\nbridge up (ESP-NOW): dongle %02X:%02X:%02X:%02X:%02X:%02X ch %d"
+  // This board's own STA MAC is printed so a fresh/replacement XIAO can be identified during
+  // the one USB flash it will ever get — no separate mac_probe flash needed.
+  Serial.printf("\nbridge up (ESP-NOW): this board %s  dongle %02X:%02X:%02X:%02X:%02X:%02X ch %d"
                 " -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)\n",
-                kDongleMac[0], kDongleMac[1], kDongleMac[2], kDongleMac[3], kDongleMac[4],
-                kDongleMac[5], ESPNOW_CHANNEL, FC_BAUD, FC_TX_PIN, FC_RX_PIN);
+                WiFi.macAddress().c_str(), kDongleMac[0], kDongleMac[1], kDongleMac[2],
+                kDongleMac[3], kDongleMac[4], kDongleMac[5], ESPNOW_CHANNEL, FC_BAUD, FC_TX_PIN,
+                FC_RX_PIN);
 }
 
 int linkReceive(uint8_t* out, size_t cap) {
@@ -282,14 +320,20 @@ void connectWifi() {
   }
   // mDNS: reachable as whoop-bridge.local regardless of what DHCP handed out.
   MDNS.begin(MDNS_NAME);
-  Serial.printf("\nbridge up: %s (%s.local):%u -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)  RSSI %d dBm  BSSID %s\n",
-                WiFi.localIP().toString().c_str(), MDNS_NAME, UDP_PORT, FC_BAUD, FC_TX_PIN,
-                FC_RX_PIN, WiFi.RSSI(), WiFi.BSSIDstr().c_str());
+  Serial.printf("\nbridge up: %s (%s.local):%u  mac %s -> FC UART1 @%d (tx=GPIO%d rx=GPIO%d)"
+                "  RSSI %d dBm  BSSID %s\n",
+                WiFi.localIP().toString().c_str(), MDNS_NAME, UDP_PORT,
+                WiFi.macAddress().c_str(), FC_BAUD, FC_TX_PIN, FC_RX_PIN, WiFi.RSSI(),
+                WiFi.BSSIDstr().c_str());
 }
 
 void linkBegin() {
   connectWifi();
   udp.begin(UDP_PORT);
+  // OTA runs full-time in this build — the board is already on the LAN, so there is no window
+  // to open: `pio run -e xiao_bridge_ota -t upload` works whenever the bridge is powered.
+  ArduinoOTA.setHostname(MDNS_NAME);
+  ArduinoOTA.begin();
 }
 
 int linkReceive(uint8_t* out, size_t cap) {
@@ -318,6 +362,7 @@ void linkPublish(const uint8_t* data, size_t len) {
 
 void linkMaintain() {
   if (WiFi.status() != WL_CONNECTED) connectWifi();
+  ArduinoOTA.handle();  // non-blocking poll of the OTA socket
 }
 
 void linkStatus(char* out, size_t cap) {
@@ -328,11 +373,89 @@ void linkStatus(char* out, size_t cap) {
 #endif  // NW_LINK_ESPNOW
 // ============================ end transport seam ============================================
 
+// ============================ OTA escape hatch ==============================================
+// After final assembly the drone XIAO's USB port is a mechanical liability to reach
+// (2026-08-13 rebuild), so the USB flash that installs this firmware is designed to be the
+// LAST one — every later change arrives over the air:
+//   * WiFi/UDP build — ArduinoOTA simply runs beside UDP full-time (see linkBegin), no window
+//     needed. `pio run -e xiao_bridge_ota -t upload` whenever the bridge is powered.
+//   * ESP-NOW build, command path — the host sends bridge-local id 194 + magic "NWOT"
+//     (`bench.py ota` through the dongle). The bridge acks, drops the flight link, joins WiFi
+//     (wifi_config.h credentials), announces MDNS_NAME.local, and serves ArduinoOTA for
+//     kOtaWindowMs. `pio run -e xiao_bridge_espnow_ota -t upload`. A finished upload reboots
+//     into the new firmware; a timeout restarts back into normal service.
+//   * ESP-NOW build, rescue path — if NO link packet has EVER arrived kOtaBootFallbackMs after
+//     boot, the command path can't work either (wrong dongle MAC / wrong channel / dead
+//     dongle), so the bridge opens the same window on its own, then restarts and listens
+//     again, forever. A battery plug-in therefore always makes the board flashable, even with
+//     a completely broken espnow_config.h. Flights are unaffected: the host polls from session
+//     start, and the first packet disarms the fallback for good.
+// LED during the window: fast ~10 Hz strobe — visibly distinct from solid (commands flowing)
+// and the ~1 Hz idle blink. Typing 'O' into the USB monitor also opens the window (ESP-NOW
+// build), for bench use when the board happens to be on a cable anyway.
+
+#ifdef NW_LINK_ESPNOW
+
+constexpr uint32_t kOtaWindowMs = 180000;      // how long the window serves before giving up
+constexpr uint32_t kOtaBootFallbackMs = 120000;  // silence-after-boot before the rescue window
+bool ota_started = false;
+
+[[noreturn]] void otaWindow() {
+  esp_now_deinit();
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  Serial.printf("OTA window: joining %s\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(100);
+#ifdef WIFI_SSID2
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect(true);
+    Serial.printf("OTA window: joining %s\n", WIFI_SSID2);
+    WiFi.begin(WIFI_SSID2, WIFI_PASS2);
+    t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(100);
+  }
+#endif
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("OTA window: no WiFi -- restarting into normal service");
+    ESP.restart();
+  }
+  MDNS.begin(MDNS_NAME);
+  ArduinoOTA.setHostname(MDNS_NAME);
+  ArduinoOTA.onStart([]() {
+    ota_started = true;  // hold the window open past its deadline while an upload runs
+    Serial.println("OTA: receiving");
+  });
+  ArduinoOTA.onError([](ota_error_t e) {
+    // A failed transfer must not wedge the window open forever (ota_started stays true).
+    Serial.printf("OTA error %d -- restarting\n", static_cast<int>(e));
+    ESP.restart();
+  });
+  ArduinoOTA.begin();
+  Serial.printf("OTA window open %lus: %s (%s.local) -- pio run -e xiao_bridge_espnow_ota -t upload\n",
+                (unsigned long)(kOtaWindowMs / 1000), WiFi.localIP().toString().c_str(),
+                MDNS_NAME);
+  t0 = millis();
+  while (millis() - t0 < kOtaWindowMs || ota_started) {
+    ArduinoOTA.handle();  // a successful upload reboots from inside this call
+    digitalWrite(LED_BUILTIN, ((millis() / 50) & 1) ? LOW : HIGH);
+    delay(1);
+  }
+  Serial.println("OTA window closed -- restarting into normal service");
+  ESP.restart();
+  for (;;) {}  // unreachable; satisfies [[noreturn]]
+}
+
+#endif  // NW_LINK_ESPNOW
+// ============================ end OTA escape hatch ==========================================
+
 // Downward VL53L1X: short-distance mode (fastest, ambient-robust, ~1.3 m reach — plenty for
 // whoop hover heights), 20 ms timing budget, free-running at 25 ms (~40 Hz). Absent sensor is
 // fine: init() fails, tof_ok stays false, the bridge proxies as before.
 void initTof() {
-  Wire.begin(D5, D6);  // as wired on our unit: D5/GPIO6 = SDA, D6/GPIO43 = SCL
+  Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);  // pins live in wifi_config.h (defaults: D5/D6)
   // 100 kHz, not 400: after the 2026-07-29 rewire the sensor stopped ACKing at 400 kHz
   // (Wire error 263 = ESP_ERR_TIMEOUT) while i2c_scan reached it fine at 100 kHz on these
   // same pins — the longer harness' bus capacitance pushes rise time through the breakout's
@@ -347,7 +470,8 @@ void initTof() {
   // afford a 100 ms blind window to salvage one range sample; drop the sample instead.
   tof.setTimeout(10);
   if (!tof.init()) {
-    Serial.println("tof: no VL53L1X on I2C (D5=SDA D6=SCL) — ranging disabled");
+    Serial.printf("tof: no VL53L1X on I2C (sda=GPIO%d scl=GPIO%d) — ranging disabled\n",
+                  TOF_SDA_PIN, TOF_SCL_PIN);
     return;
   }
   tof.setDistanceMode(VL53L1X::Short);
@@ -424,6 +548,34 @@ void sendFlowReply() {
   linkReply(frame, sizeof(frame));
 }
 
+// Answer + act on an intercepted MSP_BRIDGE_OTA request. The magic payload is checked before
+// anything else: a command that drops the flight link must be impossible to send by accident.
+// May not return (ESP-NOW build: acks, then leaves for the OTA window and eventually reboots).
+void handleOtaRequest(const uint8_t* buf, int n) {
+  const bool magic_ok = n >= 10 && buf[3] >= 4 && memcmp(buf + 5, kOtaMagic, 4) == 0;
+#ifdef NW_LINK_ESPNOW
+  const uint8_t will_reboot = 1;
+#else
+  const uint8_t will_reboot = 0;  // WiFi build: OTA already runs full-time, nothing to do
+#endif
+  uint8_t p[2] = {static_cast<uint8_t>(magic_ok ? 1 : 0),
+                  static_cast<uint8_t>(magic_ok ? will_reboot : 0)};
+  uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeOta};
+  uint8_t ck = sizeof(p) ^ kMspBridgeOta;
+  for (size_t i = 0; i < sizeof(p); i++) {
+    frame[5 + i] = p[i];
+    ck ^= p[i];
+  }
+  frame[5 + sizeof(p)] = ck;
+  linkReply(frame, sizeof(frame));
+#ifdef NW_LINK_ESPNOW
+  if (magic_ok) {
+    delay(100);   // let the radio actually send the ack before esp_now_deinit()
+    otaWindow();  // never returns
+  }
+#endif
+}
+
 // Answer an intercepted MSP_BRIDGE_TOF request straight from the bridge ('$M>' framing so the
 // host's stock MSP parser reads it like any FC reply).
 void sendTofReply() {
@@ -472,6 +624,8 @@ void loop() {
       const uint32_t t_tx_us = micros();
       sendFlowReply();
       bump(sec_tof_reply, t_tx_us);  // same "bridge-answered a local id" budget as the ToF
+    } else if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeOta) {
+      handleOtaRequest(rx_buf, n);  // may not return (ESP-NOW build: reboots via OTA window)
     } else if (rx_buf[0] == '$') {
 #ifndef NW_LINK_ESPNOW
       peer_ip = src_ip;
@@ -532,6 +686,15 @@ void loop() {
   }
 
   linkMaintain();
+
+#ifdef NW_LINK_ESPNOW
+  // OTA rescue path: nothing has EVER arrived over ESP-NOW, so the command path can't reach us
+  // either — open the window unprompted (see the "OTA escape hatch" block). The first real
+  // packet of a session sets peer_ready and disarms this for good.
+  if (!linkPeerKnown() && millis() > kOtaBootFallbackMs) otaWindow();
+  // Bench convenience when the board happens to be on a USB cable anyway: 'O' in the monitor.
+  if (Serial.available() && Serial.read() == 'O') otaWindow();
+#endif
 
   const uint32_t dt_us = micros() - t_loop_us;
   if (dt_us > loop_max_us) loop_max_us = dt_us;

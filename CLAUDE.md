@@ -472,6 +472,11 @@ uv run python scripts/serve.py --bridge /dev/cu.usbmodemXXX          # Studio Re
 # bring-up in firmware/xiao_bridge/README.md; the seam is docs/SIM2REAL.md "Optical flow".
 cd firmware/xiao_bridge && pio run -e flow_probe -t upload   # handshake + the CALIBRATION rig
 python3 scripts/bench.py --udp <bridge-ip> flow --height 0.4  # live counts (+ derived velocity)
+# Assembled-drone workflow (2026-08-13): the drone XIAO's USB port is buried, so its USB flash
+# is a ONE-TIME event — later reflashes go over the air (`bench.py ota` -> `pio run -e
+# xiao_bridge_espnow_ota -t upload`), the slide calibration runs over the link (`bench.py
+# flow-cal --height <m>`), and radio-less probe firmwares must NEVER be flashed onto it.
+# All pins (FC_*/TOF_*/FLOW_*) live in include/wifi_config.h; a GPIO collision fails the build.
 uv run python scripts/train.py --config configs/flow-hover.yaml   # task hover_flow, obs 8
 # Desk-Flow: the 0.15 m operating point (the LOWEST setpoint where both bridge sensors work) plus
 # its one-factor control. desk-flow-noflow is hover_tof/obs-6 and byte-identical otherwise, so the

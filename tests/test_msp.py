@@ -210,6 +210,40 @@ def test_set_nonblocking_zeroes_the_udp_socket_timeout():
         assert fc._read() == b""  # nothing waiting -> returns immediately, no exception
 
 
+def test_bridge_ota_sends_magic_and_decodes_reply():
+    # The OTA request must carry the 4-byte magic in exactly the shape the firmware checks
+    # (handleOtaRequest: '$M<', size >= 4, payload "NWOT" at offset 5) — a command that drops
+    # the flight link must be impossible to emit bare. Reply: u8 accepted, u8 will_reboot.
+    from neural_whoop.bench.msp import MSP_BRIDGE_OTA, OTA_MAGIC, _MspEndpoint
+
+    def fw_reply(accepted: int, will_reboot: int) -> bytes:
+        p = bytes([accepted, will_reboot])
+        ck = len(p) ^ MSP_BRIDGE_OTA
+        for b in p:
+            ck ^= b
+        return b"$M>" + bytes([len(p), MSP_BRIDGE_OTA]) + p + bytes([ck])
+
+    class Fake(_MspEndpoint):
+        def __init__(self, reply: bytes) -> None:
+            super().__init__()
+            self.reply = reply
+            self.wrote = b""
+
+        def _write(self, raw: bytes) -> None:
+            self.wrote += raw
+
+        def _read(self) -> bytes:
+            r, self.reply = self.reply, b""
+            return r
+
+    fake = Fake(fw_reply(1, 1))
+    assert fake.bridge_ota() == {"accepted": True, "will_reboot": True}
+    assert fake.wrote == encode_msp_v1(MSP_BRIDGE_OTA, OTA_MAGIC)
+    assert fake.wrote[:3] == b"$M<" and fake.wrote[3] >= 4 and fake.wrote[5:9] == b"NWOT"
+    assert Fake(fw_reply(1, 0)).bridge_ota() == {"accepted": True, "will_reboot": False}
+    assert Fake(fw_reply(0, 0)).bridge_ota() == {"accepted": False, "will_reboot": False}
+
+
 def test_set_nonblocking_base_default_is_a_noop():
     # Transports that never block (the in-process fakes) inherit a no-op rather than needing a
     # dummy socket to satisfy the caller.
