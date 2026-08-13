@@ -677,7 +677,38 @@ void loop() {
     // chip ids — the actual diagnostic (0x00/0x00 = MISO stuck low: unpowered/CS/wrong wire;
     // 0xFF/0xFF = MISO floating; other garbage = SPI lines swapped). The probe costs a few ms
     // and runs ONLY while the sensor is absent, so a flow-equipped flight never pays it.
-    if (!flow_ok) initFlow();
+    //
+    // Each probe also CYCLES the six (sck, miso, mosi) assignments of the three data pins
+    // (2026-08-13 bring-up: power LED on, ids 0xFF/0xFF — either a dead joint or a label
+    // mix-up, and a mix-up finds itself here: the winning permutation is printed and the fix
+    // becomes a wifi_config.h edit + OTA, not soldering). A wrong permutation can drive
+    // against the sensor's MISO for the ~1 ms of the probe, once per 30 s — accepted on a
+    // grounded drone; the alternative is staying grounded.
+    if (!flow_ok) {
+      static const int fpins[3] = {FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN};
+      static const uint8_t perm[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2},
+                                         {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
+      static uint8_t perm_i = 0;
+      const int sck = fpins[perm[perm_i][0]], miso = fpins[perm[perm_i][1]],
+                mosi = fpins[perm[perm_i][2]];
+      SPI.end();  // release the previous attempt's pin routing before re-attaching
+      if (flow.begin(FLOW_CS_PIN, sck, miso, mosi)) {
+        flow_ok = true;
+        if (perm_i == 0) {
+          Serial.println("flow: PMW3901 up (configured pins)");
+        } else {
+          Serial.printf("flow: PMW3901 up on PERMUTED pins sck=GPIO%d miso=GPIO%d mosi=GPIO%d "
+                        "cs=GPIO%d — the solder disagrees with wifi_config.h; update the "
+                        "FLOW_* defines to THESE values and OTA to make it permanent\n",
+                        sck, miso, mosi, FLOW_CS_PIN);
+        }
+      } else {
+        Serial.printf("flow probe: sck=GPIO%d miso=GPIO%d mosi=GPIO%d cs=GPIO%d -> id "
+                      "0x%02X/0x%02X\n",
+                      sck, miso, mosi, FLOW_CS_PIN, flow.chipId(), flow.chipIdInverse());
+      }
+      perm_i = (perm_i + 1) % 6;
+    }
     char link[160];
     linkStatus(link, sizeof(link));
     char flowinfo[48];
