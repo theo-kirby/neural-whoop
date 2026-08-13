@@ -282,8 +282,11 @@ void linkPublish(const uint8_t* data, size_t len) { linkWrite(data, len); }
 void linkMaintain() {}
 
 void linkStatus(char* out, size_t cap) {
-  snprintf(out, cap, "ESP-NOW ch %d  tx %lu  send_fail %lu  ring_drop %lu", ESPNOW_CHANNEL,
-           (unsigned long)n_link_tx, (unsigned long)n_link_fail, (unsigned long)n_ring_drop);
+  // Own MAC on every heartbeat, not just at boot: the boot print routinely races USB CDC
+  // enumeration and is lost, and the MAC is what espnow_config.h verification needs.
+  snprintf(out, cap, "ESP-NOW ch %d  mac %s  tx %lu  send_fail %lu  ring_drop %lu",
+           ESPNOW_CHANNEL, WiFi.macAddress().c_str(), (unsigned long)n_link_tx,
+           (unsigned long)n_link_fail, (unsigned long)n_ring_drop);
 }
 
 #else  // ---------------------------------------- WiFi + UDP (default) ------------------------
@@ -669,15 +672,27 @@ void loop() {
   if (millis() - last_status_ms > 5000) {
     const uint32_t t_st_us = micros();
     last_status_ms = millis();
-    char link[128];
+    // An absent flow sensor is re-probed here, at heartbeat cadence: a fixed joint (or RST
+    // jumper) then shows up within 5 s with no power cycle, and each failed probe prints the
+    // chip ids — the actual diagnostic (0x00/0x00 = MISO stuck low: unpowered/CS/wrong wire;
+    // 0xFF/0xFF = MISO floating; other garbage = SPI lines swapped). The probe costs a few ms
+    // and runs ONLY while the sensor is absent, so a flow-equipped flight never pays it.
+    if (!flow_ok) initFlow();
+    char link[160];
     linkStatus(link, sizeof(link));
+    char flowinfo[48];
+    if (flow_ok) {
+      snprintf(flowinfo, sizeof(flowinfo), "flow ok squal %u", flow_squal);
+    } else {
+      snprintf(flowinfo, sizeof(flowinfo), "flow ABSENT id 0x%02X/0x%02X want 0x49/0xB6",
+               flow.chipId(), flow.chipIdInverse());
+    }
     Serial.printf("status: %s  %s  loop_max %.1f ms"
                   "  [link_rx %.1f (sensor_reply %.1f)  uart_tx %.1f  poll_tof %.1f"
-                  "  poll_flow %.1f  status %.1f]  flow %s squal %u\n",
+                  "  poll_flow %.1f  status %.1f]  %s\n",
                   link, fresh ? "commands flowing" : "idle", loop_max_us / 1000.0,
                   sec_link_rx / 1000.0, sec_tof_reply / 1000.0, sec_uart_tx / 1000.0,
-                  sec_poll_tof / 1000.0, sec_poll_flow / 1000.0, sec_status / 1000.0,
-                  flow_ok ? "ok" : "absent", flow_squal);
+                  sec_poll_tof / 1000.0, sec_poll_flow / 1000.0, sec_status / 1000.0, flowinfo);
     // Worst case per 5 s window, not since boot.
     loop_max_us = sec_link_rx = sec_tof_reply = sec_uart_tx = sec_poll_tof = sec_poll_flow = 0;
     // This print's own cost (USB CDC + the blocking WiFi.RSSI/BSSIDstr calls) seeds the new
