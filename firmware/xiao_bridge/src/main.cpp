@@ -408,19 +408,31 @@ bool ota_started = false;
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
-  Serial.printf("OTA window: joining %s\n", WIFI_SSID);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  uint32_t t0 = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(100);
+  // 45 s per network, two rounds: the first-ever rescue attempt (2026-08-13) failed to join
+  // inside a 20 s budget on the same AP the UDP build associates with — a slow/roamy 2.4 GHz
+  // join must not translate into "OTA is broken". The window only exists while flashing is
+  // wanted, so patience is free.
+  for (int round = 0; round < 2 && WiFi.status() != WL_CONNECTED; round++) {
+    Serial.printf("OTA window: joining %s\n", WIFI_SSID);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+    uint32_t t_join = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t_join < 45000) delay(100);
 #ifdef WIFI_SSID2
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect(true);
-    Serial.printf("OTA window: joining %s\n", WIFI_SSID2);
-    WiFi.begin(WIFI_SSID2, WIFI_PASS2);
-    t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 20000) delay(100);
-  }
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.disconnect(true);
+      delay(500);
+      Serial.printf("OTA window: joining %s\n", WIFI_SSID2);
+      WiFi.begin(WIFI_SSID2, WIFI_PASS2);
+      t_join = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - t_join < 45000) delay(100);
+    }
+    if (WiFi.status() != WL_CONNECTED) {
+      WiFi.disconnect(true);
+      delay(500);
+    }
 #endif
+  }
+  uint32_t t0;
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("OTA window: no WiFi -- restarting into normal service");
     ESP.restart();
