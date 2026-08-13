@@ -16,12 +16,14 @@ import math
 DEFAULT_WEIGHTS = "runs/hover_blind_air65_d50var_s8/policy_weights.json"
 
 # Sim action limits (contract.py ActionLimits) and the Betaflight ACTUAL-rates the drone must
-# be configured with (rates_type=ACTUAL, expo 0, roll/pitch 690 deg/s, yaw 345 deg/s).
+# be configured with (rates_type=ACTUAL, expo 0, roll/pitch 690 deg/s, yaw 350 deg/s — CLI srate
+# is stored in tens of deg/s, so the ideal 345 = 2×sim's 6 rad/s isn't representable; the FC
+# snaps to 350 and this constant matches the FC, not the ideal).
 MAX_THRUST_NORMED = 4.0
 SIM_MAX_RATE_RP = 12.0    # rad/s
 SIM_MAX_RATE_YAW = 6.0
 BF_MAX_RATE_RP = math.radians(690.0)
-BF_MAX_RATE_YAW = math.radians(345.0)
+BF_MAX_RATE_YAW = math.radians(350.0)
 
 # Betaflight permanent box ids (msp_box.c) — stable across versions, keyed by MSP_MODE_RANGES.
 BOX_ARM = 0
