@@ -136,7 +136,13 @@ class Pmw3901 {
   }
 
  private:
-  static constexpr uint32_t kSpiHz = 2000000;  // datasheet ceiling for this part
+// Datasheet ceiling for this part. Overridable at build time: long bench jumpers or a
+// timing-marginal clone may need slower (a chip that drives MISO but returns 0x00 at 2 MHz is
+// the tell — seen 2026-08-16).
+#ifndef FLOW_SPI_HZ
+#define FLOW_SPI_HZ 2000000
+#endif
+  static constexpr uint32_t kSpiHz = FLOW_SPI_HZ;
 
   // PixArt's undocumented power-up optimisation sequence. Copied verbatim; do not reorder, do
   // not deduplicate the repeated page selects (0x7F is the page register — the repeats ARE the
