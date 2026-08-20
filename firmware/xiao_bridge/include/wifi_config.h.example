@@ -30,13 +30,18 @@
 #define FC_TX_PIN 1   // XIAO silkscreen D0 (GPIO1) -> FC R1 (rx1)
 #define FC_RX_PIN 2   // XIAO silkscreen D1 (GPIO2) -> FC T1 (tx1)
 
-// VL53L1X ToF (CJMCU-531) I2C. Defaults (in main.cpp) are D5/D6 — override if wired elsewhere.
+// MicoAir MTF-02P — the ONE downward module (ToF + optical flow, MSP mode @115200). Power from
+// 5V + GND; two data wires (any free GPIOs — the ESP32-S3 matrix routes UARTs anywhere):
+//   sensor TX -> MTF_RX_PIN (the only wire the firmware reads)
+//   sensor RX -> MTF_TX_PIN (never driven — wired so the no-frames scan can listen on it and
+//                            catch a swapped harness; set to -1 if left unwired)
+#define MTF_RX_PIN 6   // XIAO silkscreen D5 (GPIO6)  <- sensor TX
+#define MTF_TX_PIN 43  // XIAO silkscreen D6 (GPIO43) -> sensor RX
+
+// ---- Retired nets (needed only by the probe builds: wire_test/i2c_scan/flow_probe/...) ----
+// VL53L1X ToF I2C + PMW3901 SPI — both replaced by the MTF-02P 2026-08-20.
 #define TOF_SDA_PIN 6   // XIAO silkscreen D5  -> SDA
 #define TOF_SCL_PIN 43  // XIAO silkscreen D6  -> SCL
-
-// PMW3901 optical flow (SPI). These match the defaults in include/pmw3901.h, so a config
-// written before the flow sensor existed still builds — override only if you wired it
-// elsewhere. D8/D9/D10 are the hardware-SPI trio; CS is any free GPIO.
 #define FLOW_SCK_PIN  7   // XIAO silkscreen D8  -> CLK
 #define FLOW_MISO_PIN 8   // XIAO silkscreen D9  -> MIS
 #define FLOW_MOSI_PIN 9   // XIAO silkscreen D10 -> MOS

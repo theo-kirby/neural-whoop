@@ -17,14 +17,18 @@
 // the LED, the FC UART path — is byte-for-byte the same code in both builds. WiFi stays the
 // default so rollback is a reflash (`pio run -e xiao_bridge -t upload`).
 //
-// The one deliberate exception to transparency: the bridge owns its own DOWNWARD SENSORS and
+// The one deliberate exception to transparency: the bridge owns its own DOWNWARD SENSING and
 // answers two MSP ids of ours locally (Betaflight never sees either) —
-//   * cmd 192 MSP_BRIDGE_TOF  — VL53L1X rangefinder (CJMCU-531 on I2C, D5/SDA + D6/SCL): range.
-//   * cmd 193 MSP_BRIDGE_FLOW — PMW3901 optical flow (SPI, D8/D9/D10 + D3/CS): motion counts.
-// Requests for those ids are consumed, never forwarded; every other '$' packet passes through
-// untouched. With neither sensor wired the bridge still boots and proxies; the replies just
-// carry ok=0. That interception is also what makes `bench.py latency` able to split the air
-// path from the FC path, so it matters just as much on ESP-NOW.
+//   * cmd 192 MSP_BRIDGE_TOF  — rangefinder: range.
+//   * cmd 193 MSP_BRIDGE_FLOW — optical flow: motion counts.
+// Since 2026-08-20 BOTH are served by ONE module: a MicoAir MTF-02P (ToF + optical flow fused,
+// MSP mode) streaming unsolicited MSP v2 sensor frames at 115200/50 Hz into a second UART —
+// see include/mtf02.h. It replaced the VL53L1X + PMW3901 pair (the PMW3901 breakout was
+// convicted dead 2026-08-19; the reply formats predate the swap and are UNCHANGED, so every
+// host tool keeps working). Requests for those ids are consumed, never forwarded; every other
+// '$' packet passes through untouched. With the module unwired the bridge still boots and
+// proxies; the replies just carry ok=0. That interception is also what makes `bench.py
+// latency` able to split the air path from the FC path, so it matters just as much on ESP-NOW.
 //
 // The flow reply is deliberately a CUMULATIVE, NON-DESTRUCTIVE read: it reports running count
 // sums and the bridge's own timestamp of the newest sample, and the host differences successive
@@ -37,12 +41,10 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
-#include <VL53L1X.h>
 #include <WiFi.h>
-#include <Wire.h>
 
 #include "wifi_config.h"  // FC UART pins/baud (+ the WiFi credentials in the UDP build)
-#include "pmw3901.h"      // optical flow (reads the FLOW_*_PIN defines wifi_config.h may set)
+#include "mtf02.h"        // MTF-02P downward module (ToF + optical flow over one UART)
 
 #ifdef NW_LINK_ESPNOW
 #include <esp_now.h>
@@ -53,14 +55,17 @@
 #include <WiFiUdp.h>
 #endif
 
-// Downward-ToF I2C pins — overridable from wifi_config.h, same "solder joints live in the
-// config header" rule as FC_TX_PIN/FC_RX_PIN (they were hardcoded in initTof() until the
-// 2026-08-13 rebuild made every net configurable). Defaults = the original build.
-#ifndef TOF_SDA_PIN
-#define TOF_SDA_PIN 6  // XIAO silkscreen D5
+// MTF-02P UART pins — overridable from wifi_config.h, same "solder joints live in the config
+// header" rule as FC_TX_PIN/FC_RX_PIN. Defaults = the old ToF's pads (D5/D6), the proven
+// harness route to the underside. The bridge is RX-ONLY on this UART — the sensor talks, we
+// never do — so MTF_TX_PIN names the wire soldered to the sensor's RX pad purely so the
+// pin-collision assert knows it exists (and so the no-frames scan below may LISTEN on it to
+// self-diagnose a swapped harness — listen, never drive). Set it to -1 if that wire is absent.
+#ifndef MTF_RX_PIN
+#define MTF_RX_PIN 6  // XIAO silkscreen D5 (GPIO6)  <- sensor TX
 #endif
-#ifndef TOF_SCL_PIN
-#define TOF_SCL_PIN 43  // XIAO silkscreen D6
+#ifndef MTF_TX_PIN
+#define MTF_TX_PIN 43  // XIAO silkscreen D6 (GPIO43) -> sensor RX (unused by firmware)
 #endif
 
 #ifndef MDNS_NAME
@@ -77,20 +82,24 @@ constexpr size_t kBufSize = 512;
 // configs and nothing complained). Fail the BUILD instead: the one guaranteed-cheap moment to
 // catch it is before the airframe closes up around the USB port. (C++11-safe recursion — the
 // Arduino core does not guarantee constexpr loops.)
-constexpr int kNetPins[] = {FC_TX_PIN,   FC_RX_PIN,    TOF_SDA_PIN,  TOF_SCL_PIN,
-                            FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN, FLOW_CS_PIN};
+constexpr int kNetPins[] = {FC_TX_PIN, FC_RX_PIN, MTF_RX_PIN,
+#if MTF_TX_PIN >= 0
+                            MTF_TX_PIN,
+#endif
+};
 constexpr bool pinsDistinct(const int* p, int n, int i = 0, int j = 1) {
   return i >= n - 1 ? true
          : j >= n   ? pinsDistinct(p, n, i + 1, i + 2)
          : p[i] == p[j] ? false
                         : pinsDistinct(p, n, i, j + 1);
 }
-static_assert(pinsDistinct(kNetPins, 8),
-              "pin collision: two nets in wifi_config.h share a GPIO (check FC_*, TOF_*, FLOW_*)");
+static_assert(pinsDistinct(kNetPins, sizeof(kNetPins) / sizeof(kNetPins[0])),
+              "pin collision: two nets in wifi_config.h share a GPIO (check FC_*, MTF_*)");
 
 // Bridge-local MSP command: latest ToF range. Payload: u16 range_mm, u8 range_status
-// (VL53L1X, 0 = valid), u16 age_ms (65535 = never), u8 sensor_ok, u16 loop_max_ms. Mirrored in
-// neural_whoop/bench/msp.py (MSP_BRIDGE_TOF / decode_bridge_tof) — change both together.
+// (0 = valid; 255 = the MTF-02P's own out-of-range flag, wearing the slot the VL53L1X's
+// range_status defined), u16 age_ms (65535 = never), u8 sensor_ok, u16 loop_max_ms. Mirrored
+// in neural_whoop/bench/msp.py (MSP_BRIDGE_TOF / decode_bridge_tof) — change both together.
 // The trailing loop_max_ms was appended 2026-07-30; older hosts slice the first 6 bytes and
 // ignore it, so the field is backwards-compatible in both directions.
 constexpr uint8_t kMspBridgeTof = 192;
@@ -109,15 +118,11 @@ constexpr uint8_t kMspBridgeFlow = 193;
 // (MSP_BRIDGE_OTA) — change both together.
 constexpr uint8_t kMspBridgeOta = 194;
 constexpr uint8_t kOtaMagic[4] = {'N', 'W', 'O', 'T'};
-// dataReady() is a BLOCKING I2C read, so every poll is dead time for the proxy. The sensor
-// free-runs at 25 ms; 12 ms still catches every sample with one spare poll, at half the bus
-// traffic of the old 5 ms.
-constexpr uint32_t kTofPollMs = 12;
-// One readMotion() is five register reads at 200 us of mandated settling each — ~1 ms of
-// blocking SPI, a quarter of the ToF poll. The chip frames at up to 121 fps; 10 ms samples it
-// well inside the 50 Hz control loop while keeping the duty cycle at ~10%. Counts ACCUMULATE
-// between host reads, so a slower poll loses nothing but resolution.
-constexpr uint32_t kFlowPollMs = 10;
+// How stale the newest MTF-02P frame may be before the replies report sensor_ok=0. The module
+// streams at 50 Hz; half a second of silence means it is unpowered, unwired, or in the wrong
+// protocol mode — and unlike the old I2C/SPI pair there is no init() to fail, so liveness IS
+// the presence check. (Host-side `valid` gates tighter still, at age < 200 ms.)
+constexpr uint32_t kMtfFreshMs = 500;
 // Cap on inbound packets serviced per loop() pass. The host fires 3-5 MSP queries per control
 // tick as a burst; draining one per pass made the burst take 3-5 loop iterations (and any
 // blocking call in between stretched the whole tick). Bounded so a flood can't starve the
@@ -125,25 +130,11 @@ constexpr uint32_t kFlowPollMs = 10;
 constexpr int kMaxRxPerLoop = 8;
 
 HardwareSerial fc(1);
-VL53L1X tof;
-Pmw3901 flow;
+HardwareSerial mtf_serial(2);  // the MTF-02P's UART (RX-only; the sensor free-runs at 50 Hz)
+Mtf02 mtf;
+int mtf_rx_active = MTF_RX_PIN;  // which pin the UART is listening on (see the swap scan)
 
 uint32_t last_cmd_ms = 0;
-
-bool tof_ok = false;        // sensor found + ranging
-uint16_t tof_mm = 0xFFFF;   // latest range (mm)
-uint8_t tof_status = 0xFF;  // latest VL53L1X range_status (0 = valid)
-uint32_t tof_ms = 0;        // millis() of the latest sample (0 = never)
-uint32_t tof_poll_ms = 0;
-
-bool flow_ok = false;        // sensor found + initialised
-int32_t flow_dx = 0;         // cumulative motion counts since boot (host differences these)
-int32_t flow_dy = 0;
-uint32_t flow_ms = 0;        // millis() of the latest sample (0 = never)
-uint16_t flow_n = 0;         // cumulative sample count (wraps; diagnostic)
-uint8_t flow_squal = 0;      // latest surface quality (low = featureless floor)
-uint8_t flow_motion = 0;     // Motion register MOT bit on the latest sample
-uint32_t flow_poll_ms = 0;
 
 // Worst loop() duration in the current 5 s status window. This is the bridge's own account of
 // how long it went without servicing the link — the quantity that shows up host-side as a
@@ -156,8 +147,7 @@ uint32_t loop_max_us = 0;
 // stall appears ONLY when the host polls — i.e. somewhere in the link path — so time each section
 // separately and let the bridge name the guilty call instead of guessing again.
 // NOTE: sec_tof_reply is a SUBSET of sec_link_rx (the reply is sent inside the drain loop).
-uint32_t sec_link_rx = 0, sec_tof_reply = 0, sec_uart_tx = 0, sec_poll_tof = 0, sec_status = 0;
-uint32_t sec_poll_flow = 0;
+uint32_t sec_link_rx = 0, sec_tof_reply = 0, sec_uart_tx = 0, sec_poll_mtf = 0, sec_status = 0;
 
 inline void bump(uint32_t& slot, uint32_t t0_us) {
   const uint32_t dt = micros() - t0_us;
@@ -466,91 +456,36 @@ bool ota_started = false;
 #endif  // NW_LINK_ESPNOW
 // ============================ end OTA escape hatch ==========================================
 
-// Downward VL53L1X: short-distance mode (fastest, ambient-robust, ~1.3 m reach — plenty for
-// whoop hover heights), 20 ms timing budget, free-running at 25 ms (~40 Hz). Absent sensor is
-// fine: init() fails, tof_ok stays false, the bridge proxies as before.
-void initTof() {
-  Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);  // pins live in wifi_config.h (defaults: D5/D6)
-  // 100 kHz, not 400: after the 2026-07-29 rewire the sensor stopped ACKing at 400 kHz
-  // (Wire error 263 = ESP_ERR_TIMEOUT) while i2c_scan reached it fine at 100 kHz on these
-  // same pins — the longer harness' bus capacitance pushes rise time through the breakout's
-  // ~10k pull-ups past the 400 kHz budget. Costs ~2 ms per poll instead of ~0.6 ms; that is
-  // inside the 25 ms poll period, but it is blocking, so watch `bench.py latency` if the MSP
-  // RTT budget ever gets tight.
-  Wire.setClock(100000);
-  // 10 ms, not 100: setTimeout bounds how long a BLOCKING I2C transaction may stall loop(),
-  // and loop() is the whole MSP proxy. The 2026-07-30 flights show host-side obs_age spiking
-  // to ~200 ms on ~5% of control ticks with the entire telemetry frame frozen — the signature
-  // of one or two I2C reads timing out at the old 100 ms budget. A whoop control loop cannot
-  // afford a 100 ms blind window to salvage one range sample; drop the sample instead.
-  tof.setTimeout(10);
-  if (!tof.init()) {
-    Serial.printf("tof: no VL53L1X on I2C (sda=GPIO%d scl=GPIO%d) — ranging disabled\n",
-                  TOF_SDA_PIN, TOF_SCL_PIN);
-    return;
-  }
-  tof.setDistanceMode(VL53L1X::Short);
-  tof.setMeasurementTimingBudget(20000);
-  tof.startContinuous(25);
-  tof_ok = true;
-  Serial.println("tof: VL53L1X up (short mode, 40 Hz)");
+// Bring up the MTF-02P's UART, RX-only (tx = -1: the pin routed to the sensor's RX pad is
+// never driven — the sensor is configured on the bench over USB-TTL, not from here). There is
+// nothing to probe at init: the module free-runs at 50 Hz, so presence IS frames arriving,
+// checked continuously by mtf.alive() rather than once at boot. An unwired module costs
+// nothing — the FIFO stays empty and the replies carry ok=0.
+void initMtf() {
+  mtf_serial.setRxBufferSize(1024);  // ~85 ms of headroom at 115200 before anything drops
+  mtf_serial.begin(115200, SERIAL_8N1, mtf_rx_active, /*txPin=*/-1);
+  Serial.printf("mtf: listening for MTF-02P on rx=GPIO%d (MSP mode, 115200)\n", mtf_rx_active);
 }
 
-// Poll the sensor at a bounded cadence; keep only the freshest sample.
-void pollTof() {
-  if (!tof_ok || millis() - tof_poll_ms < kTofPollMs) return;
-  tof_poll_ms = millis();
-  if (!tof.dataReady()) return;
-  tof.read(false);  // non-blocking: data is ready
-  tof_mm = tof.ranging_data.range_mm;
-  tof_status = static_cast<uint8_t>(tof.ranging_data.range_status);
-  tof_ms = millis();
-}
+// Drain the UART FIFO through the parser. Non-blocking (unlike the old I2C/SPI polls, which
+// earned their bounded cadences); every valid flow frame ACCUMULATES into the running sums —
+// dropping a sample would lose real displacement — and every range frame keeps the freshest.
+void pollMtf() { mtf.poll(mtf_serial); }
 
-// Bring up the PMW3901. Absent sensor is fine — exactly like the ToF, flow_ok stays false and
-// the bridge proxies as before. Note this shares no bus with the ToF (SPI vs I2C), so a fault
-// in one cannot take the other down.
-void initFlow() {
-  if (!flow.begin()) {
-    Serial.printf("flow: no PMW3901 on SPI (sck=GPIO%d miso=GPIO%d mosi=GPIO%d cs=GPIO%d)"
-                  " — chip_id 0x%02X/0x%02X, want 0x49/0xB6\n",
-                  FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN, FLOW_CS_PIN, flow.chipId(),
-                  flow.chipIdInverse());
-    return;
-  }
-  flow_ok = true;
-  Serial.println("flow: PMW3901 up");
-}
-
-// Poll at a bounded cadence and ACCUMULATE. Unlike the ToF (where only the freshest range
-// matters) every count here is displacement — dropping a sample loses real motion — so the
-// running sums are what the reply carries.
-void pollFlow() {
-  if (!flow_ok || millis() - flow_poll_ms < kFlowPollMs) return;
-  flow_poll_ms = millis();
-  int16_t dx = 0, dy = 0;
-  uint8_t squal = 0;
-  bool motion = false;
-  flow.readMotion(&dx, &dy, &squal, &motion);
-  flow_dx += dx;
-  flow_dy += dy;
-  flow_squal = squal;
-  flow_motion = motion ? 1 : 0;
-  flow_n++;
-  flow_ms = millis();
-}
-
-// Answer an intercepted MSP_BRIDGE_FLOW request. Same '$M>' framing as the ToF reply.
+// Answer an intercepted MSP_BRIDGE_FLOW request. Same '$M>' framing as the ToF reply, and the
+// exact payload the PMW3901 build sent — squal is now the MTF-02P's own flow quality (same
+// semantics: low = featureless floor), sensor_ok is frame liveness.
 void sendFlowReply() {
-  const uint32_t age = flow_ms ? min<uint32_t>(millis() - flow_ms, 0xFFFE) : 0xFFFF;
+  const uint32_t age = mtf.flow_ms ? min<uint32_t>(millis() - mtf.flow_ms, 0xFFFE) : 0xFFFF;
+  const uint8_t ok = mtf.alive(millis(), kMtfFreshMs) ? 1 : 0;
   uint8_t p[19];
-  memcpy(p + 0, &flow_dx, 4);
-  memcpy(p + 4, &flow_dy, 4);
-  memcpy(p + 8, &flow_ms, 4);
-  memcpy(p + 12, &flow_n, 2);
-  p[14] = flow_squal;
-  p[15] = flow_motion;
-  p[16] = flow_ok ? 1 : 0;
+  memcpy(p + 0, &mtf.sum_dx, 4);
+  memcpy(p + 4, &mtf.sum_dy, 4);
+  memcpy(p + 8, &mtf.flow_ms, 4);
+  memcpy(p + 12, &mtf.n_frames, 2);
+  p[14] = mtf.flow_quality;
+  p[15] = mtf.flow_motion;
+  p[16] = ok;
   p[17] = static_cast<uint8_t>(age & 0xFF);
   p[18] = static_cast<uint8_t>(age >> 8);
   uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeFlow};
@@ -592,13 +527,16 @@ void handleOtaRequest(const uint8_t* buf, int n) {
 }
 
 // Answer an intercepted MSP_BRIDGE_TOF request straight from the bridge ('$M>' framing so the
-// host's stock MSP parser reads it like any FC reply).
+// host's stock MSP parser reads it like any FC reply). Status keeps the old contract's shape:
+// 0 = valid, nonzero = discard (255 = the MTF-02P said out-of-range).
 void sendTofReply() {
-  const uint32_t age = tof_ms ? min<uint32_t>(millis() - tof_ms, 0xFFFE) : 0xFFFF;
+  const uint32_t age = mtf.range_ms ? min<uint32_t>(millis() - mtf.range_ms, 0xFFFE) : 0xFFFF;
   const uint32_t lmax = min<uint32_t>(loop_max_us / 1000, 0xFFFF);
-  uint8_t p[8] = {static_cast<uint8_t>(tof_mm & 0xFF), static_cast<uint8_t>(tof_mm >> 8),
-                  tof_status, static_cast<uint8_t>(age & 0xFF), static_cast<uint8_t>(age >> 8),
-                  static_cast<uint8_t>(tof_ok ? 1 : 0),
+  const uint8_t status = mtf.range_ok ? 0 : 255;
+  const uint8_t ok = mtf.alive(millis(), kMtfFreshMs) ? 1 : 0;
+  uint8_t p[8] = {static_cast<uint8_t>(mtf.range_mm & 0xFF),
+                  static_cast<uint8_t>(mtf.range_mm >> 8),
+                  status, static_cast<uint8_t>(age & 0xFF), static_cast<uint8_t>(age >> 8), ok,
                   static_cast<uint8_t>(lmax & 0xFF), static_cast<uint8_t>(lmax >> 8)};
   uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeTof};
   uint8_t ck = sizeof(p) ^ kMspBridgeTof;
@@ -616,8 +554,7 @@ void setup() {
   Serial.begin(115200);  // USB CDC debug (the drone bridge's Serial is NOT a data path)
   pinMode(LED_BUILTIN, OUTPUT);
   fc.begin(FC_BAUD, SERIAL_8N1, FC_RX_PIN, FC_TX_PIN);
-  initTof();
-  initFlow();
+  initMtf();
   linkBegin();
 }
 
@@ -663,15 +600,12 @@ void loop() {
   }
   bump(sec_uart_tx, t_utx_us);
 
-  // Blocking sensor buses — deliberately LAST, so neither can sit between an inbound MSP request
-  // and its forward to the FC. A stalled bus now costs a dropped sample, not a dropped tick.
-  const uint32_t t_tof_us = micros();
-  pollTof();
-  bump(sec_poll_tof, t_tof_us);
-
-  const uint32_t t_flow_us = micros();
-  pollFlow();
-  bump(sec_poll_flow, t_flow_us);
+  // Sensor poll — kept LAST out of the same discipline the blocking I2C/SPI polls earned, even
+  // though draining a UART FIFO through the parser cannot stall: it never sits between an
+  // inbound MSP request and its forward to the FC.
+  const uint32_t t_mtf_us = micros();
+  pollMtf();
+  bump(sec_poll_mtf, t_mtf_us);
 
   // XIAO ESP32-S3 user LED is active-LOW: LOW = lit.
   const bool fresh = (millis() - last_cmd_ms) < kLinkFreshMs && last_cmd_ms != 0;
@@ -684,60 +618,57 @@ void loop() {
   if (millis() - last_status_ms > 5000) {
     const uint32_t t_st_us = micros();
     last_status_ms = millis();
-    // An absent flow sensor is re-probed here, at heartbeat cadence: a fixed joint (or RST
-    // jumper) then shows up within 5 s with no power cycle, and each failed probe prints the
-    // chip ids — the actual diagnostic (0x00/0x00 = MISO stuck low: unpowered/CS/wrong wire;
-    // 0xFF/0xFF = MISO floating; other garbage = SPI lines swapped). The probe costs a few ms
-    // and runs ONLY while the sensor is absent, so a flow-equipped flight never pays it.
-    //
-    // Each probe also CYCLES the six (sck, miso, mosi) assignments of the three data pins
-    // (2026-08-13 bring-up: power LED on, ids 0xFF/0xFF — either a dead joint or a label
-    // mix-up, and a mix-up finds itself here: the winning permutation is printed and the fix
-    // becomes a wifi_config.h edit + OTA, not soldering). A wrong permutation can drive
-    // against the sensor's MISO for the ~1 ms of the probe, once per 30 s — accepted on a
-    // grounded drone; the alternative is staying grounded.
-    if (!flow_ok) {
-      static const int fpins[3] = {FLOW_SCK_PIN, FLOW_MISO_PIN, FLOW_MOSI_PIN};
-      static const uint8_t perm[6][3] = {{0, 1, 2}, {0, 2, 1}, {1, 0, 2},
-                                         {1, 2, 0}, {2, 0, 1}, {2, 1, 0}};
-      static uint8_t perm_i = 0;
-      const int sck = fpins[perm[perm_i][0]], miso = fpins[perm[perm_i][1]],
-                mosi = fpins[perm[perm_i][2]];
-      SPI.end();  // release the previous attempt's pin routing before re-attaching
-      if (flow.begin(FLOW_CS_PIN, sck, miso, mosi)) {
-        flow_ok = true;
-        if (perm_i == 0) {
-          Serial.println("flow: PMW3901 up (configured pins)");
-        } else {
-          Serial.printf("flow: PMW3901 up on PERMUTED pins sck=GPIO%d miso=GPIO%d mosi=GPIO%d "
-                        "cs=GPIO%d — the solder disagrees with wifi_config.h; update the "
-                        "FLOW_* defines to THESE values and OTA to make it permanent\n",
-                        sck, miso, mosi, FLOW_CS_PIN);
-        }
-      } else {
-        Serial.printf("flow probe: sck=GPIO%d miso=GPIO%d mosi=GPIO%d cs=GPIO%d -> id "
-                      "0x%02X/0x%02X\n",
-                      sck, miso, mosi, FLOW_CS_PIN, flow.chipId(), flow.chipIdInverse());
-      }
-      perm_i = (perm_i + 1) % 6;
+    // An absent MTF-02P diagnoses itself here, at heartbeat cadence, from two counters — the
+    // successor to the old SPI permutation probe, in the safest form a UART allows (we only
+    // ever LISTEN):
+    //   * bytes_rx == 0  — nothing on the wire. Either unpowered/unwired, or the harness has
+    //     TX and RX swapped (our RX sits on the sensor's silent RX line). If the second wire
+    //     exists (MTF_TX_PIN >= 0), alternate which pin the UART listens on each heartbeat;
+    //     a swapped harness then finds itself within 10 s and the fix becomes a wifi_config.h
+    //     edit + OTA, not soldering.
+    //   * bytes arriving but no valid frames — wiring is GOOD, the sensor is in the wrong
+    //     protocol mode: 0xFD/0xFE header bytes are MAVLink, 0xEF is MicoLink. Both mean "move
+    //     the jumper / MicoAssistant setting to MSP", printed as exactly that.
+    if (!mtf.everFrame() && mtf.bytes_rx == 0 && MTF_TX_PIN >= 0) {
+      mtf_rx_active = (mtf_rx_active == MTF_RX_PIN) ? MTF_TX_PIN : MTF_RX_PIN;
+      mtf_serial.end();
+      mtf_serial.begin(115200, SERIAL_8N1, mtf_rx_active, /*txPin=*/-1);
+    }
+    if (mtf.bytes_rx > 0 && mtf_rx_active != MTF_RX_PIN) {
+      // Standing advisory, not one-shot: the sensor WORKS from here on (the scan stays put once
+      // bytes arrive), but the config header now lies about the harness — nag until fixed.
+      Serial.printf("mtf: live wire is GPIO%d, not the configured GPIO%d — harness TX/RX are "
+                    "SWAPPED vs wifi_config.h; swap MTF_RX_PIN/MTF_TX_PIN and OTA to make it "
+                    "permanent\n",
+                    mtf_rx_active, MTF_RX_PIN);
     }
     char link[160];
     linkStatus(link, sizeof(link));
-    char flowinfo[48];
-    if (flow_ok) {
-      snprintf(flowinfo, sizeof(flowinfo), "flow ok squal %u", flow_squal);
+    char mtfinfo[96];
+    if (mtf.alive(millis(), kMtfFreshMs)) {
+      snprintf(mtfinfo, sizeof(mtfinfo), "mtf ok rx=GPIO%d range %u mm q %u  flow q %u n %u",
+               mtf_rx_active, mtf.range_mm, mtf.range_quality, mtf.flow_quality,
+               (unsigned)mtf.n_frames);
+    } else if (mtf.mav_like > 10 || mtf.mico_like > 10) {
+      snprintf(mtfinfo, sizeof(mtfinfo),
+               "mtf WRONG MODE (%s bytes seen): set the sensor to MSP via its jumper or "
+               "MicoAssistant",
+               mtf.mav_like >= mtf.mico_like ? "MAVLink" : "MicoLink");
     } else {
-      snprintf(flowinfo, sizeof(flowinfo), "flow ABSENT id 0x%02X/0x%02X want 0x49/0xB6",
-               flow.chipId(), flow.chipIdInverse());
+      snprintf(mtfinfo, sizeof(mtfinfo),
+               "mtf ABSENT rx=GPIO%d bytes %lu frames %lu/%lu/%lu crc_fail %lu",
+               mtf_rx_active, (unsigned long)mtf.bytes_rx, (unsigned long)mtf.frames_range,
+               (unsigned long)mtf.frames_flow, (unsigned long)mtf.frames_other,
+               (unsigned long)mtf.crc_fail);
     }
     Serial.printf("status: %s  %s  loop_max %.1f ms"
-                  "  [link_rx %.1f (sensor_reply %.1f)  uart_tx %.1f  poll_tof %.1f"
-                  "  poll_flow %.1f  status %.1f]  %s\n",
+                  "  [link_rx %.1f (sensor_reply %.1f)  uart_tx %.1f  poll_mtf %.1f"
+                  "  status %.1f]  %s\n",
                   link, fresh ? "commands flowing" : "idle", loop_max_us / 1000.0,
                   sec_link_rx / 1000.0, sec_tof_reply / 1000.0, sec_uart_tx / 1000.0,
-                  sec_poll_tof / 1000.0, sec_poll_flow / 1000.0, sec_status / 1000.0, flowinfo);
+                  sec_poll_mtf / 1000.0, sec_status / 1000.0, mtfinfo);
     // Worst case per 5 s window, not since boot.
-    loop_max_us = sec_link_rx = sec_tof_reply = sec_uart_tx = sec_poll_tof = sec_poll_flow = 0;
+    loop_max_us = sec_link_rx = sec_tof_reply = sec_uart_tx = sec_poll_mtf = 0;
     // This print's own cost (USB CDC + the blocking WiFi.RSSI/BSSIDstr calls) seeds the new
     // window, so a slow heartbeat indicts itself rather than hiding in loop_max.
     sec_status = micros() - t_st_us;

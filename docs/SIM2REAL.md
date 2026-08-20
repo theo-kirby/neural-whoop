@@ -721,6 +721,34 @@ clean pure-hold drift 0.069 m (`w128u15`) vs 0.787 m (`w128u15_r25`) over 30 s, 
 noise alone** both arms drift 0.55–0.77 m. On a ±0.6 m desk that is the whole box. **Fly at
 `--target-height 0.10` only after `pilot.py selftest` parity and a full fake-bridge flight.**
 
+### Downward sensing consolidated — MicoAir MTF-02P replaces both sensors (2026-08-20)
+
+The PMW3901 breakout was convicted dead on 2026-08-19 (init failed identically under our
+driver, a bit-banged reimplementation, and the canonical Bitcraze library — three independent
+implementations, plus wire-proven continuity), and its replacement consolidates: the
+**MicoAir MTF-02P** is ToF + optical flow **fused in one module over one UART** (MSP mode:
+unsolicited MSP v2 `MSP2_SENSOR_RANGEFINDER`/`MSP2_SENSOR_OPTIC_FLOW` frames at 115200/50 Hz,
+the INAV sensor convention — the bridge impersonates an INAV FC and just listens). The
+VL53L1X comes off with it; both old buses (I²C + SPI) are gone and the module takes the old
+ToF pads as a two-wire UART harness, powered from **5 V**.
+
+What carries over unchanged — this was the point of the bridge-local seam: **both reply
+formats** (cmd 192/193, byte-identical), so `bench.py tof/flow/flow-cal/checkup`,
+`Telemetry.flow_delta`, `flow_to_velocity`, the pilot and the Studio Real tab are all
+oblivious; the cumulative-counts contract; the `v = (counts/dt) · rad_per_count · height`
+fusion and everything in the obs-8 deploy path above.
+
+What does NOT carry over: **every measured constant.** `rad_per_count` is per-optics — the
+slide calibration (`bench.py flow-cal`, or `pio run -e mtf_probe` on the bench) must be re-run
+before any flow flight, and the pilot still refuses without it. The ToF zero offset, noise
+floor and effective rate (the VL53L1X's 23.9 mm / 2.4 mm / ~25 Hz) are unmeasured on this
+module, as are the flow DR placeholders. And one standing constraint may fall: the MTF-02P's
+ToF specs to **6 m** where the VL53L1X trusted ~1.3 m — the ceiling behind the 0.7 m
+deploy-height cap and the 0.40 m flow operating point. **Spec is not measurement**: re-run the
+height characterization before moving either number. Flow physics is unchanged where it
+matters — working distance >8 cm (same blind-floor handling), needs light (>60 lux) and
+texture, quality byte on the wire as before.
+
 ### Stage 2 — Closed-loop `hover` / position-hold
 Simplest closed-loop flight; validates the full latency budget end-to-end. Reuses the `hover` task + Studio Live disturbance seam (`add_velocity`/`add_body_rate`).
 

@@ -1,13 +1,16 @@
 # xiao_bridge — WiFi↔UART MSP proxy (sim2real branch B)
 
-Turns a Seeed XIAO ESP32-S3 wired to the Air65 II's free UART into the drone's radio:
+Turns a Seeed XIAO ESP32-S3 wired to the Air65's free UART into the drone's radio:
 the host sends raw MSP frames over UDP, the bridge forwards them verbatim to the flight
 controller and ships the FC's replies back. Protocol-transparent by design — the whole
 `scripts/bench.py` toolkit works through it unchanged via `--udp`. The deliberate
-exceptions: the bridge owns two **downward sensors** and answers their MSP ids itself —
-**192** (`MSP_BRIDGE_TOF`, VL53L1X range) and **193** (`MSP_BRIDGE_FLOW`, PMW3901 optical
-flow). Both ids are consumed, never forwarded to the FC. Either sensor may be absent; the
-bridge boots and proxies regardless and the reply carries `sensor_ok=0`.
+exceptions: the bridge owns the **downward sensing** and answers two MSP ids itself —
+**192** (`MSP_BRIDGE_TOF`, range) and **193** (`MSP_BRIDGE_FLOW`, optical-flow counts).
+Since **2026-08-20 both are served by ONE module**: a MicoAir **MTF-02P** (ToF rangefinder +
+optical flow, fused, over a single UART), which replaced the VL53L1X + PMW3901 pair — the
+reply formats are unchanged, so every host tool is oblivious to the swap. Both ids are
+consumed, never forwarded to the FC. The module may be absent; the bridge boots and proxies
+regardless and the replies carry `sensor_ok=0`.
 
 ## Wiring (Matrix 1S 5IN1 II)
 
@@ -24,91 +27,64 @@ on the flow-CS default and nothing complained).
 | GND | GND |
 | 5V | 5V pad (FC BEC) |
 
-## ToF wiring (CJMCU-531 / VL53L1X, optional)
+## Downward sensing — MicoAir MTF-02P (ToF + optical flow, one UART)
 
-| XIAO | CJMCU-531 |
-|---|---|
-| D5 (GPIO6) | SDA |
-| D6 (GPIO43) | SCL |
-| 3V3 | VIN |
-| GND | GND |
+Replaced the VL53L1X (I²C) + PMW3901 (SPI) pair on 2026-08-20 — the PMW3901 breakout was
+convicted dead on 2026-08-19 (init failed identically under three independent
+implementations), and the MTF-02P's ToF specs out to **6 m** where the VL53L1X trusted
+~1.3 m, which is exactly the ceiling that forced the 0.7 m deploy-height cap. One module, one
+harness, two sensors gone.
 
-(The XIAO's stock I²C pins are D4/SDA + D5/SCL; our unit is wired one pin over — D5/SDA +
-D6/SCL — and `initTof()` passes those to `Wire.begin(D5, D6)` explicitly. Note D6/GPIO43 is
-also U0TXD: the ROM bootloader chirps boot logs on it for a moment at power-up, which the
-sensor ignores, but keep it in mind if SCL ever looks noisy at boot.)
-
-Mount the sensor **facing down** (it is the measured-height channel: `tof_m` in the pilot
-flight CSV, real z in the flight-report replay). Firmware runs it in short-distance mode at
-~40 Hz (ambient-robust to ~1.3 m — the whoop's hover band; switch to `Medium` in `initTof()`
-for higher ceilings at a slower rate). Measured on hardware 2026-07-30: **~25 Hz of genuinely
-fresh ranges reach the pilot**, and the static noise floor is 23.9 mm ± 2.4 mm. Leave
-XSHUT/GPIO1 unwired. The sensor is fully optional: with nothing on the I²C the bridge boots and
-proxies exactly as before, and `MSP_BRIDGE_TOF` replies carry `sensor_ok=0`.
-
-**The I²C reads are blocking, and `loop()` is the whole MSP proxy.** `tof.setTimeout(10)` bounds
-how long one stalled transaction can freeze telemetry — the old 100 ms budget matched the ~200 ms
-`obs_age_ms` spikes seen on 5% of control ticks in the 2026-07-30 flights. `pollTof()` runs last
-in `loop()` so it can never delay forwarding an inbound MSP request. To watch it: the USB
-heartbeat prints `loop_max <ms>` (worst `loop()` in the last 5 s), and the same number rides the
-`MSP_BRIDGE_TOF` reply as a trailing `u16 loop_max_ms`, printed by:
-
-```bash
-python3 scripts/bench.py --udp <bridge-ip> tof     # ... age N ms  loop_max M ms
-```
-
-**Anything over ~20 ms is a blind window in the proxy.**
-
-Desk bring-up after wiring (before mounting anything):
-
-```bash
-pio run -e xiao_bridge -t upload
-python3 scripts/bench.py --udp <bridge-ip> tof     # wave a hand over it; range should track
-```
-
-## Optical-flow wiring (PMW3901 breakout, optional)
-
-| XIAO | PMW3901 | note |
+| XIAO | MTF-02P | note |
 |---|---|---|
-| D8 (GPIO7) | CLK | hardware-SPI clock |
-| D9 (GPIO8) | MIS | MISO |
-| D10 (GPIO9) | MOS | MOSI |
-| D3 (GPIO4) | CS | any free GPIO; overridable as `FLOW_CS_PIN` |
-| 3V3 | 3V3 | **not 5V** — the bare breakout has no regulator input |
+| D5 (GPIO6) | TX | the data wire — `MTF_RX_PIN`; **the firmware only ever listens** |
+| D6 (GPIO43) | RX | `MTF_TX_PIN`, never driven; wired so the swap scan can listen on it |
+| 5V | 5V | **5 V, not 3V3** (unlike both old sensors); logic is 3.3 V LVTTL |
 | GND | GND | |
-| — | RST | tie **HIGH to 3V3**: active-low reset, floating = random resets |
-| — | MOT | leave unwired (motion interrupt; the bridge polls) |
-| — | VRE | leave unwired (internal regulator tap) |
 
-No pin conflicts with the rest of the bridge: the FC UART is on D0/D1, the ToF I²C on D5/D6,
-and SPI is its own bus — a fault on one sensor cannot take the other down.
+The module is a UART **talker**, not a polled peripheral: in **MSP mode** it free-runs at
+**115200 8N1, 50 Hz**, pushing MSP v2 sensor frames (`MSP2_SENSOR_RANGEFINDER` 0x1F01,
+`MSP2_SENSOR_OPTIC_FLOW` 0x1F02 — the INAV convention; the bridge impersonates an INAV FC).
+`include/mtf02.h` parses the stream non-blocking; there is no init handshake, so **presence =
+frames arriving**, re-checked continuously. The old blocking-I²C worries are gone with the
+bus: draining a UART FIFO cannot stall `loop()`.
 
-**Mount it facing down, next to the ToF.** Two physical constraints decide whether flow works
-at all, and neither is a firmware setting: the sensor's **working range starts at 80 mm** (a
-0.10 m Desk-Hover setpoint sits 2 cm above that floor — see `docs/SIM2REAL.md`), and it has
-**no illuminator**, so it needs ambient light and a *textured* surface. A bare white desk
-returns a near-zero `squal` and no counts. Keep the lens out of prop wash and clean.
+**Set the sensor to MSP mode once, on the bench** (MicoAssistant over a USB-TTL adapter, or
+the solder jumper on the back — the jumper wins over software config). A module left in
+MAVLink or MicoLink mode is detected and named by the heartbeat/probe (the header bytes
+differ), so a wrong mode reads as a printed instruction, not a dead sensor.
 
-Bring-up — probe first, exactly like `i2c_scan` precedes the ToF:
+Mount **facing down**, lens clean and out of prop wash. Physical constraints that are not
+firmware settings: flow needs **>8 cm of height** (working distance), **>60 lux**, and a
+*textured* surface — a bare white desk collapses the flow quality byte while frames keep
+arriving. ToF dead zone is 2 cm.
+
+Desk bring-up (bench XIAO — **never** flash a probe onto the assembled drone board):
 
 ```bash
-pio run -e flow_probe -t upload && pio device monitor   # chip id 0x49/0xB6, then live counts
-python3 scripts/bench.py --udp <bridge-ip> flow         # after reflashing xiao_bridge
+pio run -e mtf_probe -t upload && pio device monitor   # bytes/s -> frames/s -> live range+counts
 ```
+
+The probe answers, in order: anything on the wire? (0 B/s = power/harness — it alternates its
+listen pin every 5 s, so a TX/RX-swapped harness names itself); right protocol mode? (MAVLink/
+MicoLink signatures are called out); and do range + flow behave (wave a hand, slide a page).
+The main firmware's 5 s heartbeat carries the same diagnostics for the assembled, OTA-only
+drone board, and `bench.py checkup/tof/flow` read the same ids as ever.
 
 The probe is also the **calibration rig**, and running the calibration is not optional before
-the sensor is used in a control loop. Counts are not velocity: `v = (counts/dt) · rad_per_count
-· height`, and `rad_per_count` is the one constant the datasheet does not hand you usably. Rest
-the sensor at a known height over a printed page, zero the sums (send any character), slide it
-exactly 100 mm, read the total: `rad_per_count = distance / (height · counts)`. Repeat at a
-second height — the two must agree, or the standoff is wrong. That measured number is what the
-host-side flow integrator and `configs/flow-hover.yaml`'s `flow_scale_frac` DR are calibrated
-against.
+the sensor closes a control loop. Counts are not velocity: `v = (counts/dt) · rad_per_count ·
+height`, and `rad_per_count` is deliberately absent from the MSP sensor protocol (INAV
+calibrates it as `opflow_scale`; we measure it). Rest the sensor at a known height over a
+printed page, zero the sums (send any character), slide exactly 100 mm, read the total:
+`rad_per_count = distance / (height · counts)`. Repeat at a second height — the two must
+agree, or the standoff is wrong. That measured number is the pilot's **required**
+`--rad-per-count` flag and what `configs/desk-flow.yaml`'s `flow_scale_frac` DR absorbs. The
+PMW3901's old number (if one was ever measured) does **not** carry over — different optics,
+different counts.
 
-**No-USB alternative (2026-08-13):** the same slide test runs over the air against the main
-firmware's cumulative counters — `python3 scripts/bench.py --udp <ip>|--port <dongle> flow-cal
---height 0.20` — so a board whose USB port is buried in the airframe never needs the
-`flow_probe` flash. Same two-height agreement rule.
+**No-USB alternative:** the same slide test runs over the air against the main firmware's
+cumulative counters — `python3 scripts/bench.py --udp <ip>|--port <dongle> flow-cal
+--height 0.20` — so the assembled board never needs a probe flash. Same two-height rule.
 
 `MSP_BRIDGE_FLOW` (193) reports **cumulative** count sums plus the bridge's own millisecond
 stamp of the newest sample; the host differences two replies to get `(dx, dy, dt)`. That is
@@ -159,8 +135,8 @@ firmware change goes over the air (ArduinoOTA, port 3232, hostname `whoop-bridge
 Both boot logs print the board's own **STA MAC**, so a replacement XIAO can be identified for
 `espnow_config.h` during its one USB flash — no separate `mac_probe` flash needed.
 
-**Corollary: never flash a probe firmware (`i2c_scan`/`uart_scan`/`flow_probe`/`uart_probe`)
-onto the assembled drone board** — they have no radio and no OTA, so the only way back out is
+**Corollary: never flash a probe firmware (`mtf_probe`/`i2c_scan`/`uart_scan`/`flow_probe`/
+`uart_probe`) onto the assembled drone board** — they have no radio and no OTA, so the only way back out is
 the USB port. Diagnose the assembled board over the air instead (`bench.py checkup/tof/flow`),
 edit pins in `wifi_config.h`, and OTA the fix.
 
@@ -187,8 +163,15 @@ p99 24 ms over 500 requests — far inside Betaflight's 300 ms MSP-RC freshness 
 
 ## Debugging the link
 
-When `initTof()` reports `no VL53L1X on I2C`, run the bus probe — no WiFi, no FC, no battery,
-USB power alone:
+When the heartbeat reports `mtf ABSENT`, read its counters before reaching for an iron: they
+already discriminate the failure classes (0 bytes = power/harness, and the swap scan has
+tried both data pins by then; bytes-but-no-frames = wrong protocol mode or wrong baud, with
+MAVLink/MicoLink named outright). On the bench, `pio run -e mtf_probe -t upload` gives the
+same view at 1 Hz. The probes below predate the MTF-02P and are kept for their trail — and
+`i2c_scan`/`wire_test` remain genuinely useful continuity tools for any harness.
+
+When `initTof()` reported `no VL53L1X on I2C` (retired VL53L1X-era note), the bus probe ran —
+no WiFi, no FC, no battery, USB power alone:
 
 ```bash
 pio run -e i2c_scan -t upload && pio device monitor
