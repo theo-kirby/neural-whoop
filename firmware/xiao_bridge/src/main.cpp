@@ -118,6 +118,16 @@ constexpr uint8_t kMspBridgeFlow = 193;
 // (MSP_BRIDGE_OTA) — change both together.
 constexpr uint8_t kMspBridgeOta = 194;
 constexpr uint8_t kOtaMagic[4] = {'N', 'W', 'O', 'T'};
+// Bridge-local MSP command: the MTF-02P link diagnostics that used to live only on the USB
+// heartbeat — added 2026-08-22 when a silent sensor had to be triaged on the assembled drone,
+// whose USB port is buried. Payload: u32 bytes_rx, u32 frames_range, u32 frames_flow,
+// u32 frames_other, u32 crc_fail, u32 mav_like, u32 mico_like, u32 last_frame_age_ms
+// (0xFFFFFFFF = never), u8 rx_active_gpio, u8 rx_configured_gpio. The counter PAIRINGS are the
+// triage: bytes 0 = power/joint (and the swap scan has covered both pins by then); bytes>0 +
+// frames 0 + mav/mico climbing = wrong protocol mode; + crc_fail climbing = baud/noise;
+// rx_active != rx_configured = harness TX/RX swapped. Mirrored in neural_whoop/bench/msp.py
+// (MSP_BRIDGE_MTF_DIAG / decode_bridge_mtf_diag) — change both together.
+constexpr uint8_t kMspBridgeMtfDiag = 195;
 // How stale the newest MTF-02P frame may be before the replies report sensor_ok=0. The module
 // streams at 50 Hz; half a second of silence means it is unpowered, unwired, or in the wrong
 // protocol mode — and unlike the old I2C/SPI pair there is no init() to fail, so liveness IS
@@ -498,6 +508,26 @@ void sendFlowReply() {
   linkReply(frame, sizeof(frame));
 }
 
+// Answer an intercepted MSP_BRIDGE_MTF_DIAG request: the sensor-link counters, over the air.
+void sendMtfDiagReply() {
+  const uint32_t last = mtf.lastFrameMs();
+  const uint32_t age = last ? millis() - last : 0xFFFFFFFF;
+  uint8_t p[34];
+  const uint32_t u32s[8] = {mtf.bytes_rx, mtf.frames_range, mtf.frames_flow, mtf.frames_other,
+                            mtf.crc_fail, mtf.mav_like, mtf.mico_like, age};
+  memcpy(p, u32s, 32);
+  p[32] = static_cast<uint8_t>(mtf_rx_active);
+  p[33] = static_cast<uint8_t>(MTF_RX_PIN);
+  uint8_t frame[3 + 2 + sizeof(p) + 1] = {'$', 'M', '>', sizeof(p), kMspBridgeMtfDiag};
+  uint8_t ck = sizeof(p) ^ kMspBridgeMtfDiag;
+  for (size_t i = 0; i < sizeof(p); i++) {
+    frame[5 + i] = p[i];
+    ck ^= p[i];
+  }
+  frame[5 + sizeof(p)] = ck;
+  linkReply(frame, sizeof(frame));
+}
+
 // Answer + act on an intercepted MSP_BRIDGE_OTA request. The magic payload is checked before
 // anything else: a command that drops the flight link must be impossible to send by accident.
 // May not return (ESP-NOW build: acks, then leaves for the OTA window and eventually reboots).
@@ -576,6 +606,10 @@ void loop() {
       const uint32_t t_tx_us = micros();
       sendFlowReply();
       bump(sec_tof_reply, t_tx_us);  // same "bridge-answered a local id" budget as the ToF
+    } else if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeMtfDiag) {
+      const uint32_t t_tx_us = micros();
+      sendMtfDiagReply();
+      bump(sec_tof_reply, t_tx_us);  // same "bridge-answered a local id" budget
     } else if (n >= 6 && rx_buf[0] == '$' && rx_buf[2] == '<' && rx_buf[4] == kMspBridgeOta) {
       handleOtaRequest(rx_buf, n);  // may not return (ESP-NOW build: reboots via OTA window)
     } else if (rx_buf[0] == '$') {

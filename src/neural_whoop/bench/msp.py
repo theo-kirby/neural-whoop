@@ -57,6 +57,12 @@ MSP_BRIDGE_FLOW = 193
 MSP_BRIDGE_OTA = 194
 OTA_MAGIC = b"NWOT"
 
+#: Bridge-local command: the MTF-02P sensor-link diagnostics (the counters that otherwise live
+#: only on the USB heartbeat — the assembled drone's USB port is buried, so triaging a silent
+#: sensor needs them over the air). Same interception rule as the other 19x ids. Mirrored in
+#: ``firmware/xiao_bridge/src/main.cpp`` (``kMspBridgeMtfDiag``) — change both together.
+MSP_BRIDGE_MTF_DIAG = 195
+
 #: Betaflight rcData index order (see module docstring — verify on bench).
 RC_CHANNEL_ORDER = ("roll", "pitch", "yaw", "throttle", "aux1", "aux2", "aux3", "aux4")
 
@@ -217,6 +223,36 @@ def decode_bridge_tof(payload: bytes) -> dict:
     }
 
 
+def decode_bridge_mtf_diag(payload: bytes) -> dict:
+    """MSP_BRIDGE_MTF_DIAG: 8×u32 — bytes_rx, frames_range, frames_flow, frames_other,
+    crc_fail, mav_like, mico_like, last_frame_age_ms (0xFFFFFFFF = never) — then u8
+    rx_active_gpio, u8 rx_configured_gpio.
+
+    All counters are cumulative since bridge boot; rates need two snapshots. The pairings are
+    the triage (see the firmware comment): ``bytes_rx == 0`` means nothing on the wire at all
+    — power or a dead sensor-TX joint, since the firmware's swap scan has already listened on
+    both harness pins by the time anyone runs this. Bytes without frames means the wire is
+    live but the sensor is in the wrong protocol mode (``mav_like``/``mico_like`` name it) or
+    the baud is off (``crc_fail`` climbs). ``rx_active_gpio != rx_configured_gpio`` means the
+    harness TX/RX are swapped relative to wifi_config.h — working, but fix the config.
+    """
+    (bytes_rx, frames_range, frames_flow, frames_other, crc_fail, mav_like, mico_like,
+     age_ms) = struct.unpack("<8I", payload[:32])
+    rx_active, rx_configured = struct.unpack("<BB", payload[32:34])
+    return {
+        "bytes_rx": bytes_rx,
+        "frames_range": frames_range,
+        "frames_flow": frames_flow,
+        "frames_other": frames_other,
+        "crc_fail": crc_fail,
+        "mav_like": mav_like,
+        "mico_like": mico_like,
+        "age_ms": None if age_ms == 0xFFFFFFFF else age_ms,
+        "rx_active_gpio": rx_active,
+        "rx_configured_gpio": rx_configured,
+    }
+
+
 def wrap_delta(new: int, old: int, bits: int) -> int:
     """Difference two counters that wrap at ``bits``, returning the signed short-way delta.
 
@@ -345,7 +381,17 @@ class _MspEndpoint:
         self._write(encode_msp_v1(cmd, payload))
 
     def request(self, cmd: int, payload: bytes = b"", *, retries: int = 2) -> bytes:
-        """Send and wait for the matching response frame; returns its payload."""
+        """Send and wait for the matching response frame; returns its payload.
+
+        Anything already buffered is discarded first: a reply must POSTDATE its request. A
+        retried request leaves its own late reply queued in the transport, and without the
+        flush the *next* same-cmd call returns that stale duplicate as if fresh — cumulative
+        counters silently time-travel (found 2026-08-22: ``bench.py mtf`` reported a 0 B/s
+        "stalled" sensor because its second snapshot was the first one's ghost; the 412 ms
+        first-packet warmup on a mesh WiFi path made the first call retry every session).
+        """
+        while self._drain():
+            pass
         for attempt in range(retries + 1):
             self.send(cmd, payload)
             deadline = time.monotonic() + self.timeout_s
@@ -402,6 +448,12 @@ class _MspEndpoint:
         """Latest bridge optical-flow counters (see :func:`decode_bridge_flow`). Cumulative —
         one call is a snapshot, motion needs two. Bridge-answered, like :meth:`bridge_tof`."""
         return decode_bridge_flow(self.request(MSP_BRIDGE_FLOW))
+
+    def bridge_mtf_diag(self) -> dict:
+        """MTF-02P sensor-link diagnostics (see :func:`decode_bridge_mtf_diag`). Cumulative —
+        rates need two calls. Bridge-answered, like :meth:`bridge_tof`; a bridge build older
+        than 2026-08-22 rejects the id."""
+        return decode_bridge_mtf_diag(self.request(MSP_BRIDGE_MTF_DIAG))
 
     def bridge_ota(self) -> dict:
         """Ask the bridge to open its OTA reflash window (see :data:`MSP_BRIDGE_OTA`).

@@ -487,6 +487,56 @@ def _flow_snapshot(fc) -> dict:
     return r
 
 
+def cmd_mtf(args: argparse.Namespace) -> int:
+    """Triage the MTF-02P's UART link over the air (MSP_BRIDGE_MTF_DIAG, firmware 2026-08-22+).
+
+    Two snapshots a couple of seconds apart turn the bridge's cumulative counters into rates,
+    and the counter PAIRINGS name the fault — the same diagnosis the USB heartbeat prints, for
+    a drone whose USB port is buried:
+
+    * bytes/s == 0        -> nothing on the wire: 5 V power, or the sensor-TX joint. (The
+      firmware's swap scan has already listened on BOTH harness pins by now, so "swapped
+      wires" is excluded when the total byte count is still zero.)
+    * bytes but no frames -> wire live, sensor in the wrong protocol mode (MAVLink/MicoLink
+      named from their header bytes) or wrong baud (crc_fail climbing).
+    * frames at ~50 Hz    -> healthy; anything else is partial and worth reading closely.
+    """
+    with _client(args) as fc:
+        a = fc.bridge_mtf_diag()
+        time.sleep(args.seconds)
+        b = fc.bridge_mtf_diag()
+    dt = args.seconds
+    bps = (b["bytes_rx"] - a["bytes_rx"]) / dt
+    range_hz = (b["frames_range"] - a["frames_range"]) / dt
+    flow_hz = (b["frames_flow"] - a["frames_flow"]) / dt
+    print(f"MTF-02P link: {bps:.0f} B/s  range {range_hz:.1f} Hz  flow {flow_hz:.1f} Hz  "
+          f"crc_fail {b['crc_fail']}  other-frames {b['frames_other']}")
+    print(f"  totals since boot: bytes {b['bytes_rx']}  mavlink-like {b['mav_like']}  "
+          f"micolink-like {b['mico_like']}  last frame "
+          + ("never" if b["age_ms"] is None else f"{b['age_ms']} ms ago"))
+    print(f"  listening on GPIO{b['rx_active_gpio']} (configured GPIO{b['rx_configured_gpio']})")
+    if b["rx_active_gpio"] != b["rx_configured_gpio"] and b["bytes_rx"] > 0:
+        print("  => harness TX/RX SWAPPED vs wifi_config.h — working, but swap "
+              "MTF_RX_PIN/MTF_TX_PIN and OTA so the config matches the iron")
+    if b["bytes_rx"] == 0:
+        print("  => WIRE SILENT on both pins: check the sensor's 5V feed first (3V3 is not "
+              "enough for the MTF-02P), then the sensor-TX solder joint")
+    elif range_hz < 1 and flow_hz < 1:
+        if b["mav_like"] > 10 or b["mico_like"] > 10:
+            mode = "MAVLink" if b["mav_like"] >= b["mico_like"] else "MicoLink"
+            print(f"  => WRONG MODE: the sensor is talking {mode} — set it to MSP "
+                  "(jumper on the module's back / MicoAssistant)")
+        elif b["crc_fail"] > 10:
+            print("  => frames arriving but failing checksum: wrong baud or a noisy line")
+        else:
+            print("  => bytes without valid MSP frames: garbled line — check baud (115200) "
+                  "and the harness")
+    else:
+        print("  => healthy" if range_hz > 30 and flow_hz > 30 else
+              "  => partial — frames arriving below the nominal 50 Hz, read the counters above")
+    return 0
+
+
 def cmd_flow_cal(args: argparse.Namespace) -> int:
     """Measure rad_per_count over the air — the flow_probe slide test without the USB flash.
 
@@ -587,6 +637,11 @@ def main() -> int:
 
     sub.add_parser("ota", help="open the bridge's over-the-air reflash window (no USB needed)")
 
+    p = sub.add_parser("mtf", help="triage the MTF-02P sensor link over the air (bytes/frames/"
+                                   "mode counters; names the fault)")
+    p.add_argument("--seconds", type=float, default=3.0,
+                   help="sampling window between the two counter snapshots")
+
     p = sub.add_parser("flow-cal", help="measure rad_per_count over the air (the slide test, "
                                         "no flow_probe flash needed)")
     p.add_argument("--height", type=float, required=True, metavar="M",
@@ -604,7 +659,7 @@ def main() -> int:
     try:
         return {"info": cmd_info, "monitor": cmd_monitor, "latency": cmd_latency,
                 "rc-test": cmd_rc_test, "tof": cmd_tof, "flow": cmd_flow,
-                "ota": cmd_ota, "flow-cal": cmd_flow_cal,
+                "ota": cmd_ota, "flow-cal": cmd_flow_cal, "mtf": cmd_mtf,
                 "motor-test": cmd_motor_test, "checkup": cmd_checkup}[args.cmd](args)
     except MspTimeout as e:
         sys.exit(_link_hint(args, e))

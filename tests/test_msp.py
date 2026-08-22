@@ -233,6 +233,8 @@ def test_bridge_ota_sends_magic_and_decodes_reply():
             self.wrote += raw
 
         def _read(self) -> bytes:
+            if not self.wrote:
+                return b""  # a reply cannot predate its request (request() flushes pre-send)
             r, self.reply = self.reply, b""
             return r
 
@@ -322,3 +324,21 @@ def test_telemetry_makes_its_transport_nonblocking():
     fc = Fake()
     Telemetry(fc)
     assert fc.nonblocking
+
+
+def test_decode_bridge_mtf_diag_counters_and_never_sentinel():
+    from neural_whoop.bench.msp import decode_bridge_mtf_diag
+
+    # 8 x u32 counters, then u8 rx_active_gpio, u8 rx_configured_gpio (firmware sendMtfDiagReply)
+    p = struct.pack("<8I2B", 76800, 2400, 2400, 0, 3, 0, 0, 21, 6, 6)
+    out = decode_bridge_mtf_diag(p)
+    assert out["bytes_rx"] == 76800 and out["frames_range"] == 2400
+    assert out["crc_fail"] == 3 and out["age_ms"] == 21
+    assert out["rx_active_gpio"] == out["rx_configured_gpio"] == 6
+
+    # 0xFFFFFFFF age = never heard a frame -> None, and a swapped-harness scan shows a
+    # different active pin than the configured one.
+    p = struct.pack("<8I2B", 0, 0, 0, 0, 0, 0, 0, 0xFFFFFFFF, 43, 6)
+    out = decode_bridge_mtf_diag(p)
+    assert out["age_ms"] is None
+    assert out["rx_active_gpio"] == 43 and out["rx_configured_gpio"] == 6
